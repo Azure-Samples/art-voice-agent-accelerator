@@ -1,0 +1,95 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "disableLocalAuth": {
+        "value": "${DISABLE_LOCAL_AUTH=false}"
+      },
+      "domainFqdn": {
+        "value": "${AZURE_DOMAIN_FQDN}"
+      },
+      "sslCertificateKeyVaultSecretId": {
+        "value": "${AZURE_SSL_KEY_VAULT_SECRET_ID}"
+      },
+      "sslCertificatePassword": {
+        "value": "${AZURE_SSL_CERTIFICATE_PASSWORD}"
+      },
+      "jumphostVmPassword" :{
+        "value": "${AZURE_JUMPHOST_VM_PASSWORD}"
+      },
+      "keyVaultSecretUserIdentity": {
+        "value": "${AZURE_KEY_VAULT_SECRET_USER_IDENTITY}"
+      },
+      "entraGroupId": {
+        "value": "${AZURE_ENTRA_GROUP_ID}"
+      },
+      "environmentName": {
+        "value": "${AZURE_ENV_NAME}"
+      },
+      "location": {
+        "value": "${AZURE_LOCATION}"
+      },
+      "rtaudioClientExists": {
+        "value": "${SERVICE_RTAUDIO_CLIENT_RESOURCE_EXISTS=false}"
+      },
+      "rtaudioServerExists": {
+        "value": "${SERVICE_RTAUDIO_SERVER_RESOURCE_EXISTS=false}"
+      },
+      "acsSourcePhoneNumber": {
+        "value": "${ACS_SOURCE_PHONE_NUMBER}"
+      },
+      "enableEasyAuth": {
+        "value": "${ENABLE_EASY_AUTH=false}"
+      },
+      "enableAppGateway": {
+        "value": "${ENABLE_APP_GATEWAY=false}"
+      },
+      "principalId": {
+        "value": "${AZURE_PRINCIPAL_ID}"
+      },
+      "azureOpenAIBackendConfig": {
+        "value": [
+          {
+            "name": "openai-primary-${AZURE_LOCATION}-backend",
+            "location": "${AZURE_LOCATION}",
+            "priority": 1,
+            "models": [
+              {
+              "sku": "GlobalStandard",
+              "capacity": 50,
+              "name": "gpt-4o",
+              "version": "2024-11-20"
+              }
+            ]
+          },
+          {
+            "name": "openai-secondary-eastus-backend",
+            "location": "eastus",
+            "priority": 2,
+            "models": [
+              {
+                "sku": "Standard",
+                "capacity": 25,
+                "name": "gpt-4o",
+                "version": "2024-11-20"
+              }
+            ]
+          },
+          {
+            "name": "openai-secondary-westus3-backend",
+            "location": "westus3",
+            "priority": 2,
+            "models": [
+              {
+                "sku": "Standard",
+                "capacity": 25,
+                "name": "gpt-4o",
+                "version": "2024-11-20"
+              }
+            ]
+          }
+        ]
+      }
+
+    }
+}

@@ -1,0 +1,83 @@
+#root {
+  --primary-color: #0a66c2;
+  --secondary-color: #ffffff;
+  --accent-color: #e1ecf4;
+  --text-color: #333;
+  --button-hover: #084d9e;
+  --font-family: 'Segoe UI', Roboto, sans-serif;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: var(--font-family);
+  background: url('./assets/abstract.jpg') no-repeat center center fixed;
+  background-size: cover;
+  color: var(--text-color);
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.85);
+  z-index: -1;
+}
+
+#root {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 2rem;
+  text-align: center;
+}
+
+h1, h2 {
+  color: var(--primary-color);
+  margin-bottom: 0.5rem;
+}
+
+button {
+  padding: 0.75em 1.5em;
+  font-size: 1rem;
+  border-radius: 6px;
+  border: none;
+  background-color: var(--primary-color);
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+
+button:hover {
+  background-color: var(--button-hover);
+}
+
+.status {
+  font-style: italic;
+  margin-top: 1rem;
+  color: #666;
+}
+
+.card, .sidebar, .container {
+  background-color: var(--accent-color);
+  padding: 1.5rem;
+  border-radius: 10px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+  margin: 1rem auto;
+  max-width: 800px;
+}
+
+select {
+  padding: 0.5em;
+  border-radius: 6px;
+  border: 1px solid #ccc;
+}
+
+pre {
+  background: #f4f4f4;
+  padding: 1rem;
+  border-radius: 6px;
+  text-align: left;
+  overflow-x: auto;
+}

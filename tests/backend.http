@@ -1,0 +1,139 @@
+### Set backend endpoint from environment variable
+@backend_url = {{$dotenv BASE_URL}}
+@tenant_id = {{$dotenv AZURE_TENANT_ID}}
+@client_id = {{$dotenv AZURE_CLIENT_ID}}
+@client_secret = {{$dotenv AZURE_CLIENT_SECRET}}
+@target_number = {{$dotenv TARGET_NUMBER}}
+
+@scope = {{$dotenv APP_SCOPE}}
+
+### Acquire Azure AD token for app registration
+# This uses the OAuth 2.0 client credentials flow to get a token for the app
+# @name getToken
+POST https://login.microsoftonline.com/{{tenant_id}}/oauth2/v2.0/token
+Content-Type: application/x-www-form-urlencoded
+
+client_id={{client_id}}&
+client_secret={{client_secret}}&
+scope={{scope}}&
+grant_type=client_credentials
+
+###############################################################################
+# LEGACY ENDPOINTS (For Compatibility)
+###############################################################################
+
+### Readiness probe (legacy)
+GET {{backend_url}}/readiness
+Content-Type: application/json
+Authorization: Bearer {{getToken.response.body.access_token}}
+
+### Start a phone call /api/call (legacy)
+POST {{backend_url}}/api/call/initiate
+Content-Type: application/json
+Authorization: Bearer {{getToken.response.body.access_token}}
+
+{
+    "target_number": "{{target_number}}"
+}
+
+### POST /call/callbacks with example CloudEvent payload (legacy)
+POST {{backend_url}}/call/callbacks
+Content-Type: application/cloudevents+json
+Authorization: Bearer {{getToken.response.body.access_token}}
+
+{
+    "specversion": "1.0",
+    "type": "Microsoft.Communication.CallConnected",
+    "source": "/acs/calls/1234567890",
+    "id": "abcdef1234567890",
+    "time": "2024-06-01T12:34:56.789Z",
+    "datacontenttype": "application/json",
+    "data": {
+        "callConnectionId": "1234567890",
+        "serverCallId": "server-abc-123",
+        "participants": [
+            {
+                "identifier": {
+                    "rawId": "+18001231234",
+                    "communicationUser": {
+                        "id": "8:acs:abcdefg"
+                    }
+                }
+            }
+        ],
+        "correlationId": "correlation-xyz-789"
+    }
+}
+
+###############################################################################
+# NEW API V1 ENDPOINTS (Enterprise Structure)
+###############################################################################
+
+### V1 Basic Health Check (Liveness Probe)
+GET {{backend_url}}/api/v1/health/
+Content-Type: application/json
+Authorization: Bearer {{getToken.response.body.access_token}}
+
+### V1 Comprehensive Readiness Check
+GET {{backend_url}}/api/v1/health/readiness
+Content-Type: application/json
+Authorization: Bearer {{getToken.response.body.access_token}}
+
+### V1 Initiate Call
+# @name initiateCall
+POST {{backend_url}}/api/v1/calls/initiate
+Content-Type: application/json
+Authorization: Bearer {{getToken.response.body.access_token}}
+
+{
+    "target_number": "{{target_number}}",
+    "caller_id": "+1234567890",
+    "context": {
+        "customer_id": "cust_12345",
+        "department": "support",
+        "priority": "high",
+        "session_metadata": {
+            "initiated_by": "api_test",
+            "test_scenario": "backend_http_test"
+        }
+    }
+}
+
+### V1 Callbacks
+POST {{backend_url}}/api/v1/calls/callbacks
+Content-Type: application/cloudevents+json
+Authorization: Bearer {{getToken.response.body.access_token}}
+
+{
+    "specversion": "1.0",
+    "type": "Microsoft.Communication.CallConnected",
+    "source": "/acs/calls/1234567890",
+    "id": "abcdef1234567890",
+    "time": "2024-06-01T12:34:56.789Z",
+    "datacontenttype": "application/json",
+    "data": {
+        "callConnectionId": "1234567890",
+        "serverCallId": "server-abc-123",
+        "participants": [
+            {
+                "identifier": {
+                    "rawId": "+18001231234",
+                    "communicationUser": {
+                        "id": "8:acs:abcdefg"
+                    }
+                }
+            }
+        ],
+        "correlationId": "correlation-xyz-789"
+    }
+}
+# 1. With EasyAuth enabled:
+#.  - Ensure the easy auth has the api (api://<client_id>) scope
+#.  - Ensure the Additional Checks on the easy auth config on the app service is the following:
+#.      - Additional checks: Client application requirement
+#.          - Allow Requests from specific client applications: [ principal IDs of the ACS managed identity, your user principal id for debugging, and event grid ]
+# 2. Try it out locally:
+#.  - Be sure to add the Microsoft CLI client id (04b07795-8ddb-461a-bbee-02f9e1bf7b46) to the "Allow Requests from specific client applications" list
+#.  - az login --scope api://<client_id>
+
+#.  - Ensure the easy auth has the user_impersonation scope 

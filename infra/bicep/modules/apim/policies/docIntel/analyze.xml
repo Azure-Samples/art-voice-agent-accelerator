@@ -1,0 +1,37 @@
+<!-- Outbound policies for POST - /documentintelligence/documentModels/prebuilt-read:analyze -->
+<!--
+    - Policies are applied in the order they appear.
+    - Position <base/> inside a section to inherit policies from the outer scope.
+    - Comments within policies are not preserved.
+-->
+<!-- Add policies as children to the <inbound>, <outbound>, <backend>, and <on-error> elements -->
+<policies>
+    <!-- Throttle, authorize, validate, cache, or transform the requests -->
+    <inbound>
+        <base />
+    </inbound>
+    <!-- Control if and how the requests are forwarded to services  -->
+    <backend>
+        <base />
+    </backend>
+    <!-- Customize the responses -->
+    <outbound>
+        <base />
+        <set-header name="operation-location" exists-action="override">
+            <value>@{
+            // Original operation-location from backend
+            var originalOpLoc = context.Response.Headers.GetValueOrDefault("operation-location", "");
+            // Encode original URL to pass as query parameter
+            var encoded = System.Net.WebUtility.UrlEncode(originalOpLoc);
+            // Construct APIM URL pointing to poller endpoint with backendUrl
+            var apimBaseUrl = context.Variables.GetValueOrDefault("apimUrl", "");
+            var apimUrl = $"{apimBaseUrl}/documentintelligence/poller?backendUrl={encoded}";
+            return apimUrl;
+        }</value>
+        </set-header>
+    </outbound>
+    <!-- Handle exceptions and customize error responses  -->
+    <on-error>
+        <base />
+    </on-error>
+</policies>

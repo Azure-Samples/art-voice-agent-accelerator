@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+name: gbb-ai-audio-agent
+metadata:
+  template: azd-init@1.15.1
+
+infra:
+  provider: terraform
+  path: ./infra/terraform
+
+services:
+  rtaudio-client:
+    project: apps/rtagent/frontend
+    host: containerapp
+    language: js
+    docker:
+      path: ./Dockerfile
+      context: .
+      platform: linux/amd64
+      
+  rtaudio-server:
+    project: .
+    host: containerapp
+    language: docker
+    docker:
+      path: ./apps/rtagent/backend/Dockerfile
+      context: .
+      platform: linux/amd64
+
+
+hooks:
+  preprovision:
+    shell: sh
+    run: devops/scripts/azd/preprovision.sh terraform
+    interactive: true
+    continueOnError: false
+
+  postprovision:
+    shell: sh
+    run: devops/scripts/azd/postprovision.sh
+    interactive: true
+    continueOnError: false

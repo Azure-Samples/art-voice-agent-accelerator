@@ -1,0 +1,173 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gbb-ai-audio-agent"
+version = "0.0.0"
+description = "Real-time voice app: FastAPI + Azure ACS/Speech/OpenAI"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Contributors" }]
+# Read dependencies from requirements.txt
+dynamic = ["dependencies"]
+
+[project.optional-dependencies]
+dev = [
+  # Code quality and tooling
+  "isort==5.9.3",
+  "black[jupyter]==25.1.0",
+  "flake8==3.9.2",
+  "interrogate==1.4.0",
+  "pre-commit==2.14.0",
+  "types-requests",
+  "ruff",
+  "bandit",
+  "pylint",
+  "pytest",
+  "pytest-cov",
+  "types-PyYAML",
+  "uvicorn"
+]
+
+[project.scripts]
+# Define entry points for uv run
+rtagent-server = "apps.rtagent.backend.main:main"
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+[tool.uv]
+# UV-specific configuration
+dev-dependencies = [
+  "uvicorn[standard]>=0.24.0",
+]
+
+[tool.uv.sources]
+# Optional: specify custom package sources if needed
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+include = '\\.pyi?$'
+exclude = '''
+/(
+  \.git
+  | \.venv
+  | venv
+  | \.mypy_cache
+  | \.pytest_cache
+  | build
+  | dist
+  | __pycache__
+  | node_modules
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 100
+py_version = 311
+multi_line_output = 3
+# Treat these as first-party to help import sorting
+known_first_party = ["src", "apps"]
+skip = ["venv", ".venv", "build", "dist", "__pycache__", "node_modules"]
+
+[tool.ruff]
+# Linter + import sorter (kept alongside isort to support both workflows)
+line-length = 100
+target-version = "py311"
+src = ["src", "apps"]
+exclude = [
+  ".git", ".venv", "venv", "build", "dist", "__pycache__", "node_modules"
+]
+
+[tool.ruff.lint]
+# Core rule sets; rely on Black for line length
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.pylint.main]
+py-version = "3.11"
+jobs = 0
+load-plugins = []
+
+[tool.pylint.messages_control]
+# Trim noise and allow pragmatic iteration in services code
+disable = [
+  "C0114", # missing-module-docstring
+  "C0115", # missing-class-docstring
+  "C0116", # missing-function-docstring
+  "R0903", # too-few-public-methods
+  "R0801", # duplicate-code (allow initially)
+  "W0511"  # fixme
+]
+
+[tool.pylint.format]
+max-line-length = 100
+
+[tool.flake8]
+max-line-length = 100
+extend-ignore = [
+  "E203", # whitespace before ':' per Black
+  "W503"  # line break before binary operator per Black
+]
+exclude = [
+  ".git", "__pycache__", "build", "dist", ".venv", "venv", "node_modules"
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q -ra"
+filterwarnings = [
+  "ignore::DeprecationWarning",
+  "ignore::UserWarning"
+]
+
+[tool.coverage.run]
+branch = true
+source = ["src", "apps"]
+omit = [
+  "tests/*",
+  "*/__init__.py",
+  "*/__main__.py"
+]
+
+[tool.coverage.report]
+skip_empty = true
+show_missing = true
+fail_under = 80
+exclude_lines = [
+  "pragma: no cover",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:"
+]
+
+[tool.bandit]
+# Security scanner settings
+skips = ["B101"]
+targets = ["src"]
+exclude = ["tests", "venv", ".venv", "build", "dist"]
+
+[tool.interrogate]
+# Docstring coverage for public interfaces
+ignore-init-method = true
+ignore-init-module = true
+ignore-module = true
+ignore-nested-functions = true
+ignore-private = true
+ignore-property-decorators = true
+fail-under = 70
+exclude = ["setup.py", "tests", "venv", ".venv", "build", "dist"]
+verbosity = 0
+color = true
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "apps*", "utils*"]
+

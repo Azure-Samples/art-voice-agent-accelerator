@@ -1,0 +1,23 @@
+agent:
+  creator: Tutorial User
+  description: Handles customer support inquiries including product questions, order
+    status, returns, and basic troubleshooting. Escalates complex issues to human
+    agents when needed.
+  name: CustomerSupportAgent
+  organization: Demo Corp
+model:
+  deployment_id: o3-mini
+  max_tokens: 2048
+  temperature: 0.7
+  top_p: 0.9
+prompts:
+  path: customer_support_agent.jinja
+tools:
+- search_product_catalog
+- check_order_status
+- create_return_request
+- escalate_to_human
+voice:
+  name: en-US-Ava:DragonHDLatestNeural
+  rate: +3%
+  style: chat

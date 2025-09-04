@@ -1,0 +1,15 @@
+<validate-azure-ad-token tenant-id="{{TenantId}}" audience="https://cognitiveservices.azure.com/" failed-validation-httpcode="401" failed-validation-error-message="Unauthorized" failed-validation-error-body="Invalid token.">
+    <client-application-ids>
+        <application-id>{{LocalAccountApp}}</application-id>
+        <application-id>{{AutoAuthApp}}</application-id>
+    </client-application-ids>
+    <required-claims>
+        <claim name="scp" match="any">
+            <value>api://{{LocalAccountApp}}/access_as_user</value>
+            <value>api://{{AutoAuthApp}}/access_as_user</value>
+        </claim>
+        <claim name="groups" match="any">
+            <value>{{AutoAuthEntraGroup}}</value>
+        </claim>
+    </required-claims>
+</validate-azure-ad-token>

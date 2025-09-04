@@ -1,0 +1,35 @@
+{
+  "public": "dist",
+  "rewrites": [
+    { "source": "**", "destination": "/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "**/*.@(jpg|jpeg|png|gif|svg|ico|webp)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "**/*.@(js|css)",
+      "headers": [
+        {
+          "key": "Cache-Control", 
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "**/*.@(html|json)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=0, must-revalidate"
+        }
+      ]
+    }
+  ]
+}

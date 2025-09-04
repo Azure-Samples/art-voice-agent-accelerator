@@ -1,0 +1,30 @@
+# ---------------------------------------------------------------------
+# ARTAgent – Authentication Task Agent
+# ---------------------------------------------------------------------
+agent:
+  name: AuthAgent
+  creator: Pablo Salvador
+  organization: GBB AI
+  description: |
+    Handles caller authentication, then hands off to the correct specialist
+    agent—or a live human—based on intent and context.
+
+model:
+  deployment_id: gpt-4.1-mini
+  temperature: 1 # Temperature setting for response variability
+  top_p: 0.9 # Top-p setting for response variability
+  # max_tokens: 2040 # Maximum number of tokens in response
+  max_completion_tokens: 2040
+
+voice:
+  name: en-US-Ava:DragonHDLatestNeural # Voice for TTS output
+  style: chat # Voice style (chat, professional, friendly)
+  rate: "+5%" # Speech rate (slower for authentication)
+
+prompts:
+  path: voice_agent_authentication.jinja # imput prompt
+
+tools:
+  - authenticate_caller
+  - escalate_emergency         # ← 911-type escalation
+  - escalate_human             # ← non-emergency live-agent transfer

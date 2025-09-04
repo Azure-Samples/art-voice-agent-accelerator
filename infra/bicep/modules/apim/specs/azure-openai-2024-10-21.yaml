@@ -1,0 +1,386 @@
+openapi: 3.0.1
+info:
+  title: Azure OpenAI Service API
+  description: Azure OpenAI APIs for completions and chat
+  version: "2025-01-01-preview"
+  contact:
+    name: Azure OpenAI Service
+    url: https://azure.microsoft.com/services/cognitive-services/openai-service/
+
+servers:
+  - url: https://{endpoint}/openai
+    variables:
+      endpoint:
+        default: your-resource-name.openai.azure.com
+        description: Azure OpenAI resource endpoint
+
+security:
+  - apiKey: []
+
+paths:
+  /deployments/{deployment-id}/chat/completions:
+    post:
+      summary: Creates a completion for the chat message
+      operationId: ChatCompletions_Create
+      parameters:
+        - in: path
+          name: deployment-id
+          required: true
+          schema:
+            type: string
+          description: Deployment ID of the model
+        - in: query
+          name: api-version
+          required: true
+          schema:
+            type: string
+            default: "2025-01-01-preview"
+          description: API version
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatCompletionRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatCompletionResponse'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+        '429':
+          description: Too Many Requests
+          headers:
+            Retry-After:
+              description: The number of seconds to wait before retrying
+              schema:
+                type: integer
+
+  /deployments/{deployment-id}/completions:
+    post:
+      summary: Creates a completion for the provided prompt
+      operationId: Completions_Create
+      parameters:
+        - in: path
+          name: deployment-id
+          required: true
+          schema:
+            type: string
+          description: Deployment ID of the model
+        - in: query
+          name: api-version
+          required: true
+          schema:
+            type: string
+            default: "2024-10-21"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompletionRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompletionResponse'
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '429':
+          description: Too Many Requests
+
+  /deployments/{deployment-id}/embeddings:
+    post:
+      summary: Creates embeddings for the provided input
+      operationId: Embeddings_Create
+      parameters:
+        - in: path
+          name: deployment-id
+          required: true
+          schema:
+            type: string
+          description: Deployment ID of the model
+        - in: query
+          name: api-version
+          required: true
+          schema:
+            type: string
+            default: "2024-10-21"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmbeddingRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingResponse'
+
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: api-key
+      description: API key for Azure OpenAI
+
+  schemas:
+    ChatCompletionRequest:
+      type: object
+      required:
+        - messages
+      properties:
+        messages:
+          type: array
+          description: The messages to generate chat completions for
+          items:
+            $ref: '#/components/schemas/ChatMessage'
+        temperature:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 2
+          default: 1
+          description: Sampling temperature
+        top_p:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          default: 1
+          description: Nucleus sampling parameter
+        n:
+          type: integer
+          minimum: 1
+          maximum: 128
+          default: 1
+          description: Number of completions to generate
+        stream:
+          type: boolean
+          default: false
+          description: Whether to stream back partial progress
+        max_tokens:
+          type: integer
+          minimum: 1
+          description: Maximum number of tokens to generate
+        presence_penalty:
+          type: number
+          format: float
+          minimum: -2
+          maximum: 2
+          default: 0
+          description: Presence penalty
+        frequency_penalty:
+          type: number
+          format: float
+          minimum: -2
+          maximum: 2
+          default: 0
+          description: Frequency penalty
+        user:
+          type: string
+          description: Unique identifier representing end-user
+
+    ChatMessage:
+      type: object
+      required:
+        - role
+        - content
+      properties:
+        role:
+          type: string
+          enum: [system, user, assistant]
+          description: The role of the message author
+        content:
+          type: string
+          description: The content of the message
+
+    ChatCompletionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique identifier for the completion
+        object:
+          type: string
+          description: Object type
+        created:
+          type: integer
+          description: Unix timestamp of creation
+        model:
+          type: string
+          description: Model used
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+              message:
+                $ref: '#/components/schemas/ChatMessage'
+              finish_reason:
+                type: string
+                enum: [stop, length, content_filter, null]
+        usage:
+          $ref: '#/components/schemas/Usage'
+
+    CompletionRequest:
+      type: object
+      required:
+        - prompt
+      properties:
+        prompt:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+          description: The prompt(s) to generate completions for
+        max_tokens:
+          type: integer
+          minimum: 1
+          default: 16
+          description: Maximum number of tokens to generate
+        temperature:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 2
+          default: 1
+        top_p:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          default: 1
+        n:
+          type: integer
+          minimum: 1
+          maximum: 128
+          default: 1
+        stream:
+          type: boolean
+          default: false
+        logprobs:
+          type: integer
+          minimum: 0
+          maximum: 5
+        echo:
+          type: boolean
+          default: false
+        stop:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+              maxItems: 4
+
+    CompletionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+        created:
+          type: integer
+        model:
+          type: string
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              text:
+                type: string
+              index:
+                type: integer
+              logprobs:
+                type: object
+              finish_reason:
+                type: string
+        usage:
+          $ref: '#/components/schemas/Usage'
+
+    EmbeddingRequest:
+      type: object
+      required:
+        - input
+      properties:
+        input:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+          description: Input text to get embeddings for
+
+    EmbeddingResponse:
+      type: object
+      properties:
+        object:
+          type: string
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              object:
+                type: string
+              embedding:
+                type: array
+                items:
+                  type: number
+              index:
+                type: integer
+        model:
+          type: string
+        usage:
+          $ref: '#/components/schemas/Usage'
+
+    Usage:
+      type: object
+      properties:
+        prompt_tokens:
+          type: integer
+          description: Number of tokens in the prompt
+        completion_tokens:
+          type: integer
+          description: Number of tokens in the completion
+        total_tokens:
+          type: integer
+          description: Total number of tokens used
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            message:
+              type: string
+            type:
+              type: string
+            param:
+              type: string
+            code:
+              type: string

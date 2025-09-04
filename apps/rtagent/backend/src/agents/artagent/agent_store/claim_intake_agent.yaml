@@ -1,0 +1,34 @@
+# ---------------------------------------------------------------------
+# ARTAgent – Claim Intake Agent
+# ---------------------------------------------------------------------
+
+agent:
+  name: FNOLIntakeAgent
+  creator: Pablo Salvador
+  organization: GBB AI
+  description: |
+    Voice agent specializing in first-notice-of-loss (FNOL) and claim intake for XYMZ Insurance.
+    Collects all required claim details from authenticated callers, confirms information, and files new claims.
+    Strictly uses tool-calling—never provides claim advice or answers outside its function scope.
+
+model:
+  deployment_id: gpt-4.1-mini
+  temperature: 0.60
+  top_p: 0.9
+  # max_tokens: 2024
+  max_completion_tokens: 2040
+
+voice:
+  name: en-US-Andrew2:DragonHDLatestNeural # Voice for TTS output
+  style: chat # Voice style (chat, professional, friendly)
+  rate: "+10%" # Speech rate (slightly faster for claim intake)
+
+prompts:
+  path: fnol_intake_agent.jinja
+
+tools:
+  - record_fnol            # Create / store a FNOL claim
+  - authenticate_caller    # Verify caller identity
+  - escalate_emergency     # Immediate medical / fire escalation
+  - handoff_general_agent  # Route to “General Insurance Questions” AI agent
+  - escalate_human         # Non-emergency human hand-off (fraud, loops, abuse)

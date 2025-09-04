@@ -1,0 +1,43 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        { // Added React Debug Configuration
+            "name": "[RT Agent] React App: Browser Debug",
+            "type": "msedge", // or "chrome"
+            "request": "launch",
+            "url": "http://localhost:5173", // Ensure this matches your Vite dev server port
+            "webRoot": "${workspaceFolder}/rtagents/RTAgent/frontend",
+            "sourceMaps": true,
+            "sourceMapPathOverrides": {
+            "webpack:///src/*": "${webRoot}/src/*",
+            "webpack:///*": "${webRoot}/*"
+            }
+        },
+
+        {
+            "name": "[RT Agent] Python Debugger: FastAPI",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+            "apps.rtagent.backend.main:app",
+            // Watch only the app backend directory for reloads so changes under tests/ won't trigger reloads
+            "--reload",
+            "--reload-dir",
+            "${workspaceFolder}/apps/rtagent/backend",
+            "--port",
+            "8010"
+            // "--log-level",
+            // "debug"
+            ],
+            "jinja": true,
+            "env": {
+            "PYTHONPATH": "${workspaceFolder}"
+            },
+            "envFile": "${workspaceFolder}/.env"
+        },
+    ]
+}

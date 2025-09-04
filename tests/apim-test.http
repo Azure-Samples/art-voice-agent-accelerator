@@ -1,0 +1,29 @@
+### Variables from .env file
+@clientId = {{$dotenv AZURE_CLIENT_ID}}
+@clientSecret = {{$dotenv AZURE_CLIENT_SECRET}}
+@tenantId = {{$dotenv AZURE_TENANT_ID}}
+@apimUrl = {{$dotenv APIM_URL}}
+@deploymentName = gpt-4o
+@api-version = 2025-01-01-preview
+@api-key = {{$dotenv API_KEY}}
+
+### Get JWT Token for Service Principal
+POST https://login.microsoftonline.com/{{tenantId}}/oauth2/v2.0/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=client_credentials
+&client_id={{clientId}}
+&client_secret={{clientSecret}}
+# &scope=https://cognitiveservices.azure.com/.default # <-- Gives group membership data
+# &scope=https://graph.microsoft.com/.default 
+&scope={{$dotenv AZURE_SCOPE}}
+
+### Store token for subsequent requests
+@token = {{$response.body.access_token}}
+
+### Test completion endpoint with the token
+POST {{apimUrl}}/openai/deployments/{{deploymentName}}/chat/completions?api-version={{api-version}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"temperature":1,"top_p":1,"stream":false,"stop":"","max_tokens":4096,"presence_penalty":0,"frequency_penalty":0,"logit_bias":{},"user":"user-1234","messages":[{"role":"system", "content": "hello"}]}
