@@ -20,7 +20,7 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "reactflow": "^11.11.4",
-    "serve": "^14.2.4",
+    "serve": "^14.2.5",
     "styled-components": "^6.1.19",
     "vite": "^6.3.5"
   },
