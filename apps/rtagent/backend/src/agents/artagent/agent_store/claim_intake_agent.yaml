@@ -12,7 +12,7 @@ agent:
     Strictly uses tool-calling—never provides claim advice or answers outside its function scope.
 
 model:
-  deployment_id: gpt-4.1-mini
+  deployment_id: gpt-4o
   temperature: 0.60
   top_p: 0.9
   # max_tokens: 2024

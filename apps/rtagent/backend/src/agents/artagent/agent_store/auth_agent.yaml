@@ -10,7 +10,7 @@ agent:
     agent—or a live human—based on intent and context.
 
 model:
-  deployment_id: gpt-4.1-mini
+  deployment_id: gpt-4o
   temperature: 1 # Temperature setting for response variability
   top_p: 0.9 # Top-p setting for response variability
   # max_tokens: 2040 # Maximum number of tokens in response
