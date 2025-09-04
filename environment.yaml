@@ -1,0 +1,16 @@
+name: audioagent
+channels:
+  - conda-forge
+  - defaults
+  - jupyter
+dependencies:
+  - python=3.11
+  - pip
+  - ipykernel
+  - pip:
+    - -r requirements.txt
+    - -r requirements-codequality.txt
+
+  # - pip:
+  #   # Install the local project in editable mode with dev extras
+  #   - -e .[dev]

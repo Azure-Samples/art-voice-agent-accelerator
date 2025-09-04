@@ -1,0 +1,144 @@
+<!--
+    IMPORTANT:
+    - Policy elements can appear only within the <inbound>, <outbound>, <backend> section elements.
+    - To apply a policy to the incoming request (before it is forwarded to the backend service), place a corresponding policy element within the <inbound> section element.
+    - To apply a policy to the outgoing response (before it is sent back to the caller), place a corresponding policy element within the <outbound> section element.
+    - To add a policy, place the cursor at the desired insertion point and select a policy from the sidebar.
+    - To remove a policy, delete the corresponding policy statement from the policy document.
+    - Position the <base> element within a section element to inherit all policies from the corresponding section element in the enclosing scope.
+    - Remove the <base> element to prevent inheriting policies from the corresponding section element in the enclosing scope.
+    - Policies are applied in the order of their appearance, from the top down.
+    - Comments within policy elements are not supported and may disappear. Place your comments between policy elements or at a higher level scope.
+-->
+<policies>
+	<inbound>
+		<base />
+		<!--OpenAI Policies-->
+		<!--<set-header name="api-key" exists-action="override">
+            <value>{{AzureOpenAIKey}}</value>
+        </set-header>-->
+		<authentication-managed-identity resource="https://cognitiveservices.azure.com" output-token-variable-name="managed-id-access-token" ignore-error="false" />
+		<!--There are pre-reqs to this policy that you must do in order to get this to show up in AppInsights-->
+		<!--1. An OpenAI api must be added to APIM Instance-->
+		<!--2. APIM instance must be integrated with AppInsights-->
+		<!--3. AppInsights logging must be enabled for the api you want to log-->
+		<!--4. Enable customer metrics with dimensions in AppInsights-->
+		<azure-openai-emit-token-metric namespace="AzureOpenAI">
+			<dimension name="Client IP" value="@(context.Request.IpAddress)" />
+			<dimension name="Subscription ID" />
+			<dimension name="API ID" />
+		</azure-openai-emit-token-metric>
+		<azure-openai-token-limit counter-key="@(context.Subscription.Id)" tokens-per-minute="5000" estimate-prompt-tokens="false" />
+		<!--Load Balancing-->
+		<!-- Extract deployment-id from the request URL and set it as a variable -->
+		<set-variable name="deploymentId" value="@(context.Request.MatchedParameters["deployment-id"])" />
+		<!-- Route based on the deployment-id value -->
+		<choose>
+			<when condition="@(context.Variables.GetValueOrDefault<String>("deploymentId") == "gpt4o-model")">
+                <set-backend-service backend-id="chat-backendpool" />
+			</when>
+			<when condition="@(context.Variables.GetValueOrDefault<String>("deploymentId") == "embedding")">
+				<set-backend-service backend-id="embedding-backendpool" />
+			</when>
+			<when condition="@(context.Variables.GetValueOrDefault<String>("deploymentId") == "o1-model")">
+                <set-backend-service backend-id="reasoning-backendpool" />
+			</when>
+		</choose>
+		<!--OpenAI Policies-->
+		<set-header name="Authorization" exists-action="override">
+			<value>@("Bearer " + (string)context.Variables["managed-id-access-token"])</value>
+		</set-header>
+		<set-variable name="requestBody" value="@(context.Request.Body.As<string>(preserveContent: true))" />
+		<!--Semantic cache lookup-->
+		<!--<azure-openai-semantic-cache-lookup embeddings-backend-auth="system-assigned" embeddings-backend-id="embeddings-backend" score-threshold="0.05">
+            <vary-by>@(context.Subscription.Id)</vary-by>
+        </azure-openai-semantic-cache-lookup>-->
+	</inbound>
+	<backend>
+		<retry condition="@(context.Response.StatusCode == 429 || context.Response.StatusCode == 503)" count="2" interval="0" first-fast-retry="true">
+			<!-- Force an evaluation of available backends rather than retrying the failing one. -->
+			<!-- Route based on the deployment-id value -->
+			<choose>
+                <when condition="@(context.Variables.GetValueOrDefault<String>("deploymentId") == "4o-model")">
+                    <set-backend-service backend-id="chat-backendpool" />
+                </when>
+                <when condition="@(context.Variables.GetValueOrDefault<String>("deploymentId") == "embedding")">
+                    <set-backend-service backend-id="embedding-backendpool" />
+                </when>
+                <when condition="@(context.Variables.GetValueOrDefault<String>("deploymentId") == "o1-model")">
+                    <set-backend-service backend-id="reasoning-backendpool" />
+                </when>
+			</choose>
+			<forward-request buffer-request-body="true" />
+		</retry>
+	</backend>
+	<outbound>
+		<base />
+		<!--Semantic cache store-->
+		<azure-openai-semantic-cache-store duration="60" />
+		<!-- Add the actual backend URL to the response header -->
+		<set-header name="X-Backend-URL" exists-action="override">
+			<value>@(context.Request.Url.ToString())</value>
+		</set-header>
+		<choose>
+			<when condition="@(context.Response.StatusCode >= 200 && context.Response.StatusCode < 300)">
+				<log-to-eventhub logger-id="EventHubLogger1">@{
+                        var responseBody = context.Response.Body?.As<string>(true);
+                        var requestBody = (string)context.Variables["requestBody"];
+
+                        JObject responseJson = null;
+                        JObject usageData = null;
+
+                        if (!string.IsNullOrEmpty(responseBody))
+                        {
+                            try
+                            {
+                                // Split the streamed response into individual lines
+                                var lines = responseBody.Split(new[] { "\ndata: " }, StringSplitOptions.RemoveEmptyEntries);
+
+                                foreach (var line in lines)
+                                {
+                                    // Check for the [DONE] marker
+                                    if (line.Trim().Equals("[DONE]", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        break;
+                                    }
+
+                                    // Remove the leading 'data: ' and parse the JSON fragment
+                                    var cleanLine = line.TrimStart();
+                                    if (!cleanLine.StartsWith("{"))
+                                    {
+                                        continue; // Skip invalid lines
+                                    }
+
+                                    var jsonFragment = JObject.Parse(cleanLine);
+
+                                    // Check for the "usage" property
+                                    if (jsonFragment.ContainsKey("usage"))
+                                    {
+                                        usageData = (JObject)jsonFragment["usage"];
+                                        break; // Stop searching once found
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                // Optional logging for debugging
+                                //context.Logger.LogError($"Error processing streamed response: {ex.Message}");
+                            }
+                        }
+                        return new JObject(
+                            new JProperty("eventTime", DateTime.UtcNow),
+                            new JProperty("apiOperation", context.Variables.ContainsKey("apiOperation") ? (string)context.Variables["apiOperation"] : string.Empty),
+                            new JProperty("appSubscriptionKey", context.Request.Headers.GetValueOrDefault("Ocp-Apim-Subscription-Key",string.Empty)),
+                            new JProperty("request", requestBody),
+                            new JProperty("responseUsage",usageData )
+                        ).ToString();
+                    }</log-to-eventhub>
+			</when>
+		</choose>
+	</outbound>
+	<on-error>
+		<base />
+	</on-error>
+</policies>

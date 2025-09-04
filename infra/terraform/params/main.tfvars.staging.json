@@ -1,0 +1,35 @@
+{
+  "name": "rtaudioagent",
+  "location": "eastus",
+  "openai_location": null,
+  "cosmosdb_location": null,
+  "backend_api_public_url": null,
+  "acs_source_phone_number": null,
+  "acs_data_location": "United States",
+  "disable_local_auth": true,
+  "enable_redis_ha": false,
+  "redis_sku": "MemoryOptimized_M10",
+  "redis_port": 10000,
+  "openai_models": [
+    {
+      "name": "o3-mini",
+      "version": "2025-01-31",
+      "sku_name": "GlobalStandard",
+      "capacity": 3000
+    },
+    {
+      "name": "gpt-4o",
+      "version": "2024-11-20",
+      "sku_name": "GlobalStandard",
+      "capacity": 300
+    },
+    {
+      "name": "gpt-4.1-mini",
+      "version": "2025-04-14",
+      "sku_name": "GlobalStandard",
+      "capacity": 500
+    }
+  ],
+  "mongo_database_name": "audioagentdb-stg",
+  "mongo_collection_name": "audioagentcollection"
+}

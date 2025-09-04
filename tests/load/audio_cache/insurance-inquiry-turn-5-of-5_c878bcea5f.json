@@ -1,0 +1,16 @@
+{
+  "filename": "insurance-inquiry-turn-5-of-5_c878bcea5f.pcm",
+  "path": "tests/load/audio_cache/insurance-inquiry-turn-5-of-5_c878bcea5f.pcm",
+  "text": "Thank you for all the information, that's very helpful",
+  "voice": "en-US-JennyMultilingualNeural",
+  "sample_rate": 16000,
+  "style": "chat",
+  "rate": "+0%",
+  "duration_seconds": 2.88,
+  "label": "insurance_inquiry-turn-5-of-5",
+  "scenario": "insurance_inquiry",
+  "turn_index": 5,
+  "turn_count": 5,
+  "created_at": "2025-09-01T22:08:00.593523Z",
+  "hash": "c878bcea5f"
+}

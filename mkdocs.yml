@@ -1,0 +1,91 @@
+site_name: Real-Time Voice Agent Documentation
+site_description: Azure-powered real-time voice agent with text-to-speech and speech recognition capabilities
+site_url: https://pablosalvador10.github.io/gbb-ai-audio-agent/
+repo_url: https://github.com/pablosalvador10/gbb-ai-audio-agent
+repo_name: pablosalvador10/gbb-ai-audio-agent
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+  palette:
+    - scheme: default
+      primary: blue
+      accent: light blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: blue
+      accent: light blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google
+            show_source: true
+            show_signature_annotations: true
+            signature_crossrefs: true
+            separate_signature: true
+            merge_init_into_class: true
+            docstring_section_style: table
+            members_order: source
+            group_by_category: true
+            show_category_heading: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quickstart.md
+    - Configuration: getting-started/configuration.md
+  - API Reference:
+    - Overview: api/overview.md
+    - Speech Synthesis: api/speech-synthesis.md
+    - Speech Recognition: api/speech-recognition.md
+    - Utilities: api/utilities.md
+  - Architecture:
+    - Overview: architecture/overview.md
+    - Azure Integration: architecture/azure-integration.md
+    - Observability: architecture/observability.md
+  - Examples:
+    - Basic Usage: examples/basic-usage.md
+    - Advanced Scenarios: examples/advanced-scenarios.md
+    - Production Deployment: examples/production.md
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - pymdownx.critic
+  - pymdownx.caret
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.tilde
+  - attr_list
+  - md_in_html
+  - tables
+  - footnotes

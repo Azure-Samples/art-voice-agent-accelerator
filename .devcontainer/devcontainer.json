@@ -1,0 +1,94 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/python
+{
+	"name": "RTAudio DevContainer",
+	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
+	"image": "mcr.microsoft.com/devcontainers/python:0-3.11",
+	// Features to add to the dev container. More info: https://containers.dev/features.
+	"features": {
+		// Enable Docker (via Docker-in-Docker)
+		"ghcr.io/devcontainers/features/docker-in-docker:2": {},
+		"ghcr.io/devcontainers/features/common-utils:2": {
+			"installZsh": true,
+			"configureZshAsDefaultShell": true,
+			"installOhMyZsh": true,
+			"upgradePackages": true,
+			"username": "vscode",
+			"remoteUser": "vscode",
+			"userUid": "automatic",
+			"userGid": "automatic"
+		},
+		"ghcr.io/devcontainers-extra/features/zsh-plugins:0": {
+			"plugins": "ssh-agent zsh-syntax-highlighting zsh-autosuggestions",
+			"omzPlugins": "https://github.com/zsh-users/zsh-autosuggestions https://github.com/zsh-users/zsh-syntax-highlighting",
+			"username": "vscode"
+		},
+		"ghcr.io/stuartleeks/dev-container-features/shell-history:0": {},
+		// Node.js for React/Vite frontend toolchain
+		"ghcr.io/devcontainers/features/node:1": {
+			"version": "22",
+			"nodeGypDependencies": true
+		},
+		"ghcr.io/va-h/devcontainers-features/uv:1": {},
+		// Azure CLI
+		"ghcr.io/devcontainers/features/azure-cli:1": {
+			"version": "latest"
+		},
+		// Terraform
+		"ghcr.io/devcontainers/features/terraform:1": {
+			"version": "latest"
+		},
+		// Azure Developer CLI (azd)
+		"ghcr.io/azure/azure-dev/azd:0": {
+			"version": "latest"
+		}
+	},
+	// Configure tool-specific properties.
+	"customizations": {
+		// Configure properties specific to VS Code.
+		"vscode": {
+			"settings": {},
+			"extensions": [
+				"GitHub.copilot",
+				"timonwong.shellcheck",
+				"ms-python.python",
+				"kevinrose.vsc-python-indent",
+				"visualstudioexptteam.vscodeintellicode",
+				"shd101wyy.markdown-preview-enhanced",
+				"github.copilot-chat",
+				"darkriszty.markdown-table-prettify",
+				"DavidAnson.vscode-markdownlint",
+				"yzhang.markdown-all-in-one",
+				"esbenp.prettier-vscode",
+				"ms-vscode-remote.vscode-remote-extensionpack",
+				"shardulm94.trailing-spaces",
+				"streetsidesoftware.code-spell-checker",
+				"ms-azuretools.azure-dev",
+				"ms-azuretools.vscode-azureterraform",
+				"ms-vscode.azurecli",
+				"ms-azureaispeech.azure-ai-speech-toolkit",
+				"github.vscode-github-actions",
+				"ms-python.debugpy",
+				"GitHub.copilot-chat"
+			]
+		}
+	},
+	// Use 'forwardPorts' to make a list of ports inside the container available locally.
+	"forwardPorts": [8010],
+	// Use 'portsAttributes' to set default properties for specific forwarded ports. 
+	// More info: https://containers.dev/implementors/json_reference/#port-attributes
+	"portsAttributes": {
+		"8010": {
+			"label": "Hello Remote World",
+			"onAutoForward": "notify"
+		}
+	},
+	// Use 'postCreateCommand' to run commands after the container is created.
+	"postCreateCommand": "bash .devcontainer/post_create.sh",
+	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
+	"remoteUser": "vscode",
+	"mounts": [
+		// map host ssh to container
+		"source=${env:HOME}${env:USERPROFILE}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached"
+	  ]
+}

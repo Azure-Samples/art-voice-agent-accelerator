@@ -1,0 +1,49 @@
+# Example terraform.tfvars file
+# Copy this to terraform.tfvars and customize for your deployment
+
+# Environment configuration
+environment_name = "dev"
+name            = "rtaudioagent"
+location        = "eastus"
+
+# Principal configuration (replace with your user ID)
+# Get your principal ID with: az ad signed-in-user show --query id -o tsv
+principal_id   = "your-user-principal-id-here"
+principal_type = "User"
+
+# Azure Communication Services data location
+acs_data_location = "United States"
+
+# Authentication settings
+disable_local_auth = true
+
+# Redis Enterprise SKU (adjust based on your needs and regional availability)
+redis_sku = "MemoryOptimized_M10"
+
+# OpenAI model deployments
+openai_models = [
+    {
+      name     = "gpt-4o"
+      version  = "2024-11-20"
+      sku_name = "DataZoneStandard"
+      capacity = 50
+    },
+    {
+      name     = "gpt-4o-mini"
+      version  = "2024-07-18"
+      sku_name = "DataZoneStandard"
+      capacity = 50
+    },
+    {
+      name     = "gpt-4.1-mini"
+      version  = "2025-04-14"
+      sku_name = "DataZoneStandard"
+      capacity = 50
+    },
+    {
+      name     = "gpt-4.1"
+      version  = "2025-04-14"
+      sku_name = "DataZoneStandard"
+      capacity = 50
+    }
+  ]

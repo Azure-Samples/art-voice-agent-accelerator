@@ -1,0 +1,16 @@
+{
+  "filename": "insurance-inquiry-turn-2-of-2_f8b46292a4.pcm",
+  "path": "tests/load/audio_cache/insurance-inquiry-turn-2-of-2_f8b46292a4.pcm",
+  "text": "I'm calling about my auto insurance policy",
+  "voice": "en-US-JennyMultilingualNeural",
+  "sample_rate": 16000,
+  "style": "chat",
+  "rate": "+0%",
+  "duration_seconds": 2.556,
+  "label": "insurance_inquiry-turn-2-of-2",
+  "scenario": "insurance_inquiry",
+  "turn_index": 2,
+  "turn_count": 2,
+  "created_at": "2025-09-01T22:07:58.517818Z",
+  "hash": "f8b46292a4"
+}

@@ -1,0 +1,16 @@
+{
+  "filename": "quick-question-turn-2-of-2_fed934e6f3.pcm",
+  "path": "tests/load/audio_cache/quick-question-turn-2-of-2_fed934e6f3.pcm",
+  "text": "Can you help me check my account balance?",
+  "voice": "en-US-JennyMultilingualNeural",
+  "sample_rate": 16000,
+  "style": "chat",
+  "rate": "+0%",
+  "duration_seconds": 2.232,
+  "label": "quick_question-turn-2-of-2",
+  "scenario": "quick_question",
+  "turn_index": 2,
+  "turn_count": 2,
+  "created_at": "2025-09-01T22:08:01.944901Z",
+  "hash": "fed934e6f3"
+}

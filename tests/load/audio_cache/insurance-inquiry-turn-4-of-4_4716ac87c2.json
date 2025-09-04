@@ -1,0 +1,16 @@
+{
+  "filename": "insurance-inquiry-turn-4-of-4_4716ac87c2.pcm",
+  "path": "tests/load/audio_cache/insurance-inquiry-turn-4-of-4_4716ac87c2.pcm",
+  "text": "What happens if I get into an accident?",
+  "voice": "en-US-JennyMultilingualNeural",
+  "sample_rate": 16000,
+  "style": "chat",
+  "rate": "+0%",
+  "duration_seconds": 2.304,
+  "label": "insurance_inquiry-turn-4-of-4",
+  "scenario": "insurance_inquiry",
+  "turn_index": 4,
+  "turn_count": 4,
+  "created_at": "2025-09-01T22:08:00.022195Z",
+  "hash": "4716ac87c2"
+}

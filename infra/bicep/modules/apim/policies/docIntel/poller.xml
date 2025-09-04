@@ -1,0 +1,54 @@
+<!--
+    - Policies are applied in the order they appear.
+    - Position <base/> inside a section to inherit policies from the outer scope.
+    - Comments within policies are not preserved.
+-->
+<!-- Add policies as children to the <inbound>, <outbound>, <backend>, and <on-error> elements -->
+<policies>
+    <!-- Throttle, authorize, validate, cache, or transform the requests -->
+    <inbound>
+        <base />
+        <choose>
+            <when condition="@(context.Request.Url.Query.ContainsKey(&quot;backendUrl&quot;))">
+                <set-variable name="decodedUrl" value="@{
+                var backendUrlEncoded = context.Request.Url.Query.GetValueOrDefault(&quot;backendUrl&quot;, &quot;&quot;);
+                // Make sure to decode the URL properly, potentially multiple times if needed
+                var decoded = System.Net.WebUtility.UrlDecode(backendUrlEncoded);
+                // Check if it's still encoded and decode again if necessary
+                while (decoded.Contains(&quot;%&quot;))
+                {
+                    decoded = System.Net.WebUtility.UrlDecode(decoded);
+                }
+                return decoded;
+            }" />
+                <!-- Log the decoded URL for debugging remove if not needed--> 
+                <trace source="Decoded URL">@((string)context.Variables["decodedUrl"])</trace>
+                <send-request mode="new" response-variable-name="backendResponse" timeout="30" ignore-error="false">
+                    <set-url>@((string)context.Variables["decodedUrl"])</set-url>
+                    <set-method>GET</set-method>
+                    <authentication-managed-identity resource="https://cognitiveservices.azure.com/" />
+                </send-request>
+                <return-response response-variable-name="backendResponse" />
+            </when>
+            <otherwise>
+                <return-response>
+                    <set-status code="400" reason="Missing backendUrl query parameter" />
+                    <set-body>{"error": "Missing backendUrl query parameter."}</set-body>
+                </return-response>
+            </otherwise>
+        </choose>
+    </inbound>
+    <!-- Control if and how the requests are forwarded to services  -->
+    <backend>
+        <base />
+    </backend>
+    <!-- Customize the responses -->
+    <outbound>
+        <base />
+    </outbound>
+    <!-- Handle exceptions and customize error responses  -->
+    <on-error>
+        <base />
+    </on-error>
+</policies>
+
