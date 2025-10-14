@@ -23,7 +23,7 @@ output "AZURE_OPENAI_ENDPOINT" {
 }
 
 output "AZURE_OPENAI_CHAT_DEPLOYMENT_ID" {
-  description = "Azure OpenAI Chat Deployment ID"
+  description = "Azure OpenAI Chat Deployment ID. Default chat model to use if not specified by the agent config."
   value       = "gpt-4o"
 }
 

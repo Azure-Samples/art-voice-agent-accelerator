@@ -101,7 +101,7 @@ class AOAIClientPool:
                 logger.info(f"AOAI client {i+1}/{self.pool_size} initialized")
 
             self._initialized = True
-            logger.info(
+            logger.debug(
                 f"AOAI client pool initialized successfully with {len(self.clients)} clients"
             )
 

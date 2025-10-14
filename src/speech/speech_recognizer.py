@@ -269,7 +269,7 @@ class StreamingSpeechRecognizerFromBytes:
                 # Initialize Azure Monitor if not already done
                 # init_logging_and_monitoring("speech_recognizer")
                 self.tracer = trace.get_tracer(__name__)
-                logger.info("Azure Monitor tracing initialized for speech recognizer")
+                logger.debug("Azure Monitor tracing initialized for speech recognizer")
             except Exception as e:
                 logger.warning(f"Failed to initialize Azure Monitor tracing: {e}")
                 self.enable_tracing = False
@@ -349,10 +349,10 @@ class StreamingSpeechRecognizerFromBytes:
             return speechsdk.SpeechConfig(subscription=self.key, region=self.region)
         else:
             # Use Azure Default Credentials (managed identity, service principal, etc.)
-            logger.info("Creating SpeechConfig with Azure Default Credentials")
+            logger.debug("Creating SpeechConfig with Entra Credentials")
             if not self.region:
                 raise ValueError(
-                    "Region must be specified when using Azure Default Credentials"
+                    "Region must be specified when using Entra Credentials"
                 )
 
             endpoint = os.getenv("AZURE_SPEECH_ENDPOINT")
@@ -371,7 +371,7 @@ class StreamingSpeechRecognizerFromBytes:
                     "https://cognitiveservices.azure.com/.default"
                 )
                 speech_config.authorization_token = token_result.token
-                logger.info(
+                logger.debug(
                     "Successfully configured SpeechConfig with Azure Default Credentials"
                 )
             except Exception as e:
@@ -383,6 +383,103 @@ class StreamingSpeechRecognizerFromBytes:
                 )
 
             return speech_config
+
+    def refresh_authentication(self) -> bool:
+        """Refresh authentication configuration when 401 errors occur.
+        
+        Returns:
+            bool: True if authentication refresh succeeded, False otherwise.
+        """
+        try:
+            logger.info(f"Refreshing authentication for call {self.call_connection_id}")
+            # Recreate speech config with fresh credentials
+            new_config = self._create_speech_config()
+            self.cfg = new_config
+            
+            # Clear the current speech recognizer to force recreation with new config
+            if self.speech_recognizer:
+                self.speech_recognizer = None
+                
+            logger.info("Authentication refresh completed successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to refresh authentication: {e}")
+            return False
+
+    def _is_authentication_error(self, details) -> bool:
+        """Check if cancellation details indicate a 401 authentication error.
+        
+        Args:
+            details: Cancellation details from speech recognition event
+            
+        Returns:
+            bool: True if this is a 401 authentication error, False otherwise.
+        """
+        if not details:
+            return False
+            
+        error_details = getattr(details, 'error_details', '')
+        if not error_details:
+            return False
+            
+        # Check for 401 authentication error patterns
+        auth_error_indicators = [
+            "401",
+            "Authentication error", 
+            "WebSocket upgrade failed: Authentication error",
+            "unauthorized",
+            "Please check subscription information"
+        ]
+        
+        return any(indicator.lower() in error_details.lower() for indicator in auth_error_indicators)
+
+    def restart_recognition_after_auth_refresh(self) -> bool:
+        """Restart speech recognition after authentication refresh.
+        
+        This method recreates the speech recognizer with fresh authentication
+        and restarts the recognition session. It's typically called after
+        a 401 authentication error has been detected and credentials refreshed.
+        
+        Returns:
+            bool: True if restart succeeded, False otherwise.
+        """
+        try:
+            logger.info("Restarting speech recognition with refreshed authentication")
+            
+            # Stop current recognition if still active
+            if self.speech_recognizer:
+                try:
+                    self.speech_recognizer.stop_continuous_recognition_async().get()
+                except Exception as e:
+                    logger.debug(f"Error stopping previous recognizer: {e}")
+                
+            # Clear current recognizer
+            self.speech_recognizer = None
+            
+            # Recreate and start recognition with new auth
+            self.prepare_start()
+            self.speech_recognizer.start_continuous_recognition_async().get()
+            
+            logger.info("Speech recognition restarted successfully with refreshed authentication")
+            
+            if self._session_span:
+                self._session_span.add_event(
+                    "recognition_restarted_after_auth_refresh",
+                    {"restart_success": True}
+                )
+                
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to restart speech recognition after auth refresh: {e}")
+            
+            if self._session_span:
+                self._session_span.add_event(
+                    "recognition_restart_failed",
+                    {"restart_success": False, "error": str(e)}
+                )
+                
+            return False
 
     def set_partial_result_callback(self, callback: Callable[[str, str], None]) -> None:
         """
@@ -586,52 +683,24 @@ class StreamingSpeechRecognizerFromBytes:
                 "speech_recognition_session", kind=SpanKind.CLIENT
             )
 
-            # Set session attributes for correlation
-            self._session_span.set_attribute(
-                "rt.call.connection_id", self.call_connection_id
-            )
-            self._session_span.set_attribute("rt.session.id", self.call_connection_id)
-            self._session_span.set_attribute("ai.operation.id", self.call_connection_id)
-            self._session_span.set_attribute("speech.region", self.region)
-
-            # Help App Map recognize this as an external service dependency
-            self._session_span.set_attribute("peer.service", "azure-cognitive-speech")
-            self._session_span.set_attribute(
-                "net.peer.name", f"{self.region}.stt.speech.microsoft.com"
-            )
-            # Make it look like an HTTP/WebSocket dependency
-            self._session_span.set_attribute(
-                "server.address", f"{self.region}.stt.speech.microsoft.com"
-            )
-            self._session_span.set_attribute("server.port", 443)
-            self._session_span.set_attribute("network.protocol.name", "websocket")
-            # Let the exporter classify as HTTP if it prefers http.* (belt & suspenders)
-            self._session_span.set_attribute("http.method", "POST")
-            # Set http.url using endpoint if provided, else construct from region
-            endpoint = os.getenv("AZURE_SPEECH_ENDPOINT")
-            if endpoint:
-                self._session_span.set_attribute(
-                    "http.url",
-                    f"{endpoint.rstrip('/')}/speech/recognition/conversation/cognitiveservices/v1",
-                )
-            else:
-                self._session_span.set_attribute(
-                    "http.url",
-                    f"https://{self.region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1",
-                )
-            self._session_span.set_attribute("speech.audio_format", self.audio_format)
-            self._session_span.set_attribute(
-                "speech.candidate_languages", ",".join(self.candidate_languages)
-            )
-            self._session_span.set_attribute(
-                "speech.vad_timeout_ms", self.vad_silence_timeout_ms
-            )
-
-            # Set standard attributes if available
-            self._session_span.set_attribute(
-                SpanAttr.SERVICE_NAME, "azure-speech-recognition"
-            )
-            self._session_span.set_attribute(SpanAttr.SERVICE_VERSION, "1.0.0")
+            # Set essential attributes using centralized enum and semantic conventions v1.27+
+            self._session_span.set_attributes({
+                "call_connection_id": self.call_connection_id,
+                "session_id": self.call_connection_id,
+                "ai.operation.id": self.call_connection_id,
+                
+                # Service and network identification
+                "peer.service": "azure-cognitive-speech",
+                "server.address": f"{self.region}.stt.speech.microsoft.com",
+                "server.port": 443,
+                "network.protocol.name": "websocket",
+                "http.request.method": "POST",
+                
+                # Speech configuration
+                "speech.audio_format": self.audio_format,
+                "speech.candidate_languages": ",".join(self.candidate_languages),
+                "speech.region": self.region,
+            })
 
             # Make this span current for the duration of setup
             with trace.use_span(self._session_span):
@@ -1401,6 +1470,42 @@ class StreamingSpeechRecognizerFromBytes:
         if evt.result and evt.result.cancellation_details:
             details = evt.result.cancellation_details
             error_msg = f"Reason: {details.reason}, Error: {details.error_details}"
+            
+            # Check for 401 authentication error and attempt refresh
+            if self._is_authentication_error(details):
+                logger.warning(f"Authentication error detected in speech recognition: {details.error_details}")
+                
+                if self._session_span:
+                    self._session_span.add_event(
+                        "recognition_authentication_error",
+                        {"error_details": details.error_details}
+                    )
+                
+                # Try to refresh authentication
+                if self.refresh_authentication():
+                    logger.info("Authentication refreshed successfully for speech recognition")
+                    
+                    if self._session_span:
+                        self._session_span.add_event(
+                            "recognition_authentication_refreshed",
+                            {"refresh_success": True}
+                        )
+                        
+                    # Attempt automatic restart with refreshed credentials
+                    if self.restart_recognition_after_auth_refresh():
+                        logger.info("Speech recognition automatically restarted with refreshed credentials")
+                        return  # Exit early on successful restart
+                    else:
+                        logger.warning("Automatic restart failed - manual restart required")
+                else:
+                    logger.error("Failed to refresh authentication for speech recognition")
+                    
+                    if self._session_span:
+                        self._session_span.add_event(
+                            "recognition_authentication_refresh_failed",
+                            {"refresh_success": False}
+                        )
+            
             logger.warning(error_msg)
 
             # Add detailed error information to span

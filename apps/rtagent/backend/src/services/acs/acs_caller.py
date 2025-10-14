@@ -46,8 +46,14 @@ def initialize_acs_caller_instance() -> Optional[AcsCaller]:
     if _instance:
         return _instance
 
+    # Check if required ACS configuration is present
     if not all([ACS_SOURCE_PHONE_NUMBER, BASE_URL]):
-        logger.warning("ACS env vars not fully configured – outbound calling disabled")
+        logger.warning(
+            "⚠️  ACS TELEPHONY DISABLED: Missing required environment variables "
+            "(ACS_SOURCE_PHONE_NUMBER or BASE_URL). "
+            "📞 Dial-in and dial-out calling will not work. "
+            "🔌 WebSocket conversation endpoint remains available for direct connections."
+        )
         return None
 
     callback_url = f"{BASE_URL.rstrip('/')}{ACS_CALL_CALLBACK_PATH}"

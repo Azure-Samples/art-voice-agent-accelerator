@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import "reactflow/dist/style.css";
 
 // Environment configuration
@@ -377,31 +377,49 @@ const styles = {
         "0 2px 8px rgba(0,0,0,0.08)"),
   }),
 
-  phoneButton: (isActive, isHovered) => ({
-    width: "56px",
-    height: "56px",
-    borderRadius: "50%",
-    border: "none",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    cursor: "pointer",
-    fontSize: "20px",
-    transition: "all 0.3s ease",
-    position: "relative",
-    background: isHovered ? 
-      (isActive ? "linear-gradient(135deg, #3f75a8ff, #2b5d8f)" : "linear-gradient(135deg, #dcfce7, #bbf7d0)") :
-      "linear-gradient(135deg, #f1f5f9, #e2e8f0)",
-    color: isHovered ? 
-      (isActive ? "white" : "#3f75a8ff") :
-      (isActive ? "#3f75a8ff" : "#64748b"),
-    transform: isHovered ? "scale(1.08)" : (isActive ? "scale(1.05)" : "scale(1)"),
-    boxShadow: isHovered ? 
-      "0 8px 25px rgba(16,185,129,0.4), 0 0 0 4px rgba(16,185,129,0.15), inset 0 1px 2px rgba(255,255,255,0.2)" :
-      (isActive ? 
-        "0 6px 20px rgba(16,185,129,0.3), 0 0 0 3px rgba(16,185,129,0.1)" : 
-        "0 2px 8px rgba(0,0,0,0.08)"),
-  }),
+  phoneButton: (isActive, isHovered, isDisabled = false) => {
+    const base = {
+      width: "56px",
+      height: "56px",
+      borderRadius: "50%",
+      border: "none",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      fontSize: "20px",
+      transition: "all 0.3s ease",
+      position: "relative",
+    };
+
+    if (isDisabled) {
+      return {
+        ...base,
+        cursor: "not-allowed",
+        background: "linear-gradient(135deg, #e2e8f0, #cbd5e1)",
+        color: "#94a3b8",
+        transform: "scale(1)",
+        boxShadow: "inset 0 0 0 1px rgba(148, 163, 184, 0.3)",
+        opacity: 0.7,
+      };
+    }
+
+    return {
+      ...base,
+      cursor: "pointer",
+      background: isHovered ? 
+        (isActive ? "linear-gradient(135deg, #3f75a8ff, #2b5d8f)" : "linear-gradient(135deg, #dcfce7, #bbf7d0)") :
+        "linear-gradient(135deg, #f1f5f9, #e2e8f0)",
+      color: isHovered ? 
+        (isActive ? "white" : "#3f75a8ff") :
+        (isActive ? "#3f75a8ff" : "#64748b"),
+      transform: isHovered ? "scale(1.08)" : (isActive ? "scale(1.05)" : "scale(1)"),
+      boxShadow: isHovered ? 
+        "0 8px 25px rgba(16,185,129,0.4), 0 0 0 4px rgba(16,185,129,0.15), inset 0 1px 2px rgba(255,255,255,0.2)" :
+        (isActive ? 
+          "0 6px 20px rgba(16,185,129,0.3), 0 0 0 3px rgba(16,185,129,0.1)" : 
+          "0 2px 8px rgba(0,0,0,0.08)"),
+    };
+  },
 
   // Tooltip styles
   buttonTooltip: {
@@ -579,19 +597,53 @@ const styles = {
   },
 
   // Call Me button style (rectangular box)
-  callMeButton: (isActive) => ({
+  callMeButton: (isActive, isDisabled = false) => ({
     padding: "12px 24px",
-    background: isActive ? "#ef4444" : "#67d8ef",
-    color: "white",
+    background: isDisabled ? "linear-gradient(135deg, #e2e8f0, #cbd5e1)" : (isActive ? "#ef4444" : "#67d8ef"),
+    color: isDisabled ? "#94a3b8" : "white",
     border: "none",
     borderRadius: "8px", // More box-like - less rounded
-    cursor: "pointer",
+    cursor: isDisabled ? "not-allowed" : "pointer",
     fontSize: "14px",
     fontWeight: "600",
     transition: "all 0.2s ease",
-    boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+    boxShadow: isDisabled ? "inset 0 0 0 1px rgba(148, 163, 184, 0.3)" : "0 2px 8px rgba(0,0,0,0.1)",
     minWidth: "120px", // Ensure consistent width
+    opacity: isDisabled ? 0.7 : 1,
   }),
+
+  acsHoverDialog: {
+    position: "fixed",
+    transform: "translateX(-50%)",
+    marginTop: "0",
+    backgroundColor: "rgba(255, 255, 255, 0.98)",
+    border: "1px solid #fed7aa",
+    borderRadius: "6px",
+    padding: "8px 10px",
+    fontSize: "9px",
+    color: "#b45309",
+    boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
+    width: "260px",
+    zIndex: 2000,
+    lineHeight: "1.4",
+    pointerEvents: "none",
+  },
+
+  phoneDisabledDialog: {
+    position: "fixed",
+    transform: "translateX(-50%)",
+    backgroundColor: "rgba(255, 255, 255, 0.98)",
+    border: "1px solid #fecaca",
+    borderRadius: "8px",
+    padding: "10px 14px",
+    fontSize: "11px",
+    color: "#b45309",
+    boxShadow: "0 6px 16px rgba(0,0,0,0.15)",
+    width: "280px",
+    zIndex: 2000,
+    lineHeight: "1.5",
+    pointerEvents: "none",
+  },
 
   // Help button in top right corner
   helpButton: {
@@ -938,7 +990,7 @@ const HelpButton = () => {
 /* ------------------------------------------------------------------ *
  *  ENHANCED BACKEND INDICATOR WITH HEALTH MONITORING & AGENT CONFIG
  * ------------------------------------------------------------------ */
-const BackendIndicator = ({ url, onConfigureClick }) => {
+const BackendIndicator = ({ url, onConfigureClick, onStatusChange }) => {
   const [isConnected, setIsConnected] = useState(null);
   const [displayUrl, setDisplayUrl] = useState(url);
   const [readinessData, setReadinessData] = useState(null);
@@ -953,6 +1005,9 @@ const BackendIndicator = ({ url, onConfigureClick }) => {
   const [configChanges, setConfigChanges] = useState({});
   const [updateStatus, setUpdateStatus] = useState({});
   const [showStatistics, setShowStatistics] = useState(false);
+  const [showAcsHover, setShowAcsHover] = useState(false);
+  const [acsTooltipPos, setAcsTooltipPos] = useState(null);
+  const summaryRef = useRef(null);
 
   // Track screen width for responsive positioning
   useEffect(() => {
@@ -975,7 +1030,7 @@ const BackendIndicator = ({ url, onConfigureClick }) => {
       // Validate expected structure
       if (data.status && data.checks && Array.isArray(data.checks)) {
         setReadinessData(data);
-        setIsConnected(data.status === "ready");
+        setIsConnected(data.status !== "unhealthy");
         setError(null);
       } else {
         throw new Error("Invalid response structure");
@@ -1120,16 +1175,27 @@ const BackendIndicator = ({ url, onConfigureClick }) => {
   }, [url]);
 
   // Get overall health status
+  const readinessChecks = readinessData?.checks ?? [];
+  const unhealthyChecks = readinessChecks.filter((c) => c.status === "unhealthy");
+  const degradedChecks = readinessChecks.filter((c) => c.status === "degraded");
+  const acsOnlyIssue =
+    unhealthyChecks.length > 0 &&
+    degradedChecks.length === 0 &&
+    unhealthyChecks.every((c) => c.component === "acs_caller") &&
+    readinessChecks
+      .filter((c) => c.component !== "acs_caller")
+      .every((c) => c.status === "healthy");
+
   const getOverallStatus = () => {
-    if (isConnected === null) return "checking";
-    if (!isConnected) return "unhealthy";
-    if (!readinessData?.checks) return "unhealthy";
-    
-    const hasUnhealthy = readinessData.checks.some(c => c.status === "unhealthy");
-    const hasDegraded = readinessData.checks.some(c => c.status === "degraded");
-    
-    if (hasUnhealthy) return "unhealthy";
-    if (hasDegraded) return "degraded";
+    if (!readinessData?.checks) {
+      if (isConnected === null) return "checking";
+      if (!isConnected) return "unhealthy";
+      return "checking";
+    }
+
+    if (acsOnlyIssue) return "degraded";
+    if (unhealthyChecks.length > 0) return "unhealthy";
+    if (degradedChecks.length > 0) return "degraded";
     return "healthy";
   };
 
@@ -1137,6 +1203,19 @@ const BackendIndicator = ({ url, onConfigureClick }) => {
   const statusColor = overallStatus === "healthy" ? "#10b981" : 
                      overallStatus === "degraded" ? "#f59e0b" :
                      overallStatus === "unhealthy" ? "#ef4444" : "#6b7280";
+
+  useEffect(() => {
+    if (typeof onStatusChange === "function") {
+      onStatusChange({ status: overallStatus, acsOnlyIssue });
+    }
+  }, [overallStatus, acsOnlyIssue, onStatusChange]);
+
+  useEffect(() => {
+    if (!acsOnlyIssue && showAcsHover) {
+      setShowAcsHover(false);
+      setAcsTooltipPos(null);
+    }
+  }, [acsOnlyIssue, showAcsHover]);
 
   // Dynamic sizing based on screen width - keep in bottom left but adjust size to maintain separation
   const getResponsiveStyle = () => {
@@ -1322,9 +1401,24 @@ const BackendIndicator = ({ url, onConfigureClick }) => {
                     cursor: "pointer",
                     transition: "all 0.2s ease",
                   }}
+                  ref={summaryRef}
                   onClick={(e) => {
                     e.stopPropagation();
                     setShowComponentDetails(!showComponentDetails);
+                  }}
+                  onMouseEnter={() => {
+                    if (summaryRef.current) {
+                      const rect = summaryRef.current.getBoundingClientRect();
+                      setAcsTooltipPos({
+                        top: rect.bottom + 8,
+                        left: rect.left + rect.width / 2,
+                      });
+                    }
+                    setShowAcsHover(true);
+                  }}
+                  onMouseLeave={() => {
+                    setShowAcsHover(false);
+                    setAcsTooltipPos(null);
                   }}
                   title="Click to show/hide component details"
                 >
@@ -1359,6 +1453,18 @@ const BackendIndicator = ({ url, onConfigureClick }) => {
                       ▼
                     </div>
                   </div>
+                </div>
+              )}
+
+              {acsOnlyIssue && showAcsHover && acsTooltipPos && (
+                <div
+                  style={{
+                    ...styles.acsHoverDialog,
+                    top: acsTooltipPos.top,
+                    left: acsTooltipPos.left,
+                  }}
+                >
+                  ACS outbound calling is currently unavailable, but the Conversation API continues to stream microphone audio from this device to the backend.
                 </div>
               )}
             </>
@@ -1896,6 +2002,17 @@ function RealTimeVoiceApp() {
   const [callActive, setCallActive] = useState(false);
   const [activeSpeaker, setActiveSpeaker] = useState(null);
   const [showPhoneInput, setShowPhoneInput] = useState(false);
+  const [systemStatus, setSystemStatus] = useState({
+    status: "checking",
+    acsOnlyIssue: false,
+  });
+  const handleSystemStatus = useCallback((nextStatus) => {
+    setSystemStatus((prev) =>
+      prev.status === nextStatus.status && prev.acsOnlyIssue === nextStatus.acsOnlyIssue
+        ? prev
+        : nextStatus
+    );
+  }, []);
 
   // Tooltip states
   const [showResetTooltip, setShowResetTooltip] = useState(false);
@@ -1906,6 +2023,17 @@ function RealTimeVoiceApp() {
   const [resetHovered, setResetHovered] = useState(false);
   const [micHovered, setMicHovered] = useState(false);
   const [phoneHovered, setPhoneHovered] = useState(false);
+  const [phoneDisabledPos, setPhoneDisabledPos] = useState(null);
+  const isCallDisabled =
+    systemStatus.status === "degraded" && systemStatus.acsOnlyIssue;
+
+  useEffect(() => {
+    if (isCallDisabled) {
+      setShowPhoneInput(false);
+    } else if (phoneDisabledPos) {
+      setPhoneDisabledPos(null);
+    }
+  }, [isCallDisabled, phoneDisabledPos]);
 
   // Health monitoring (disabled)
   /*
@@ -1932,6 +2060,7 @@ function RealTimeVoiceApp() {
   const chatRef = useRef(null);
   const messageContainerRef = useRef(null);
   const socketRef = useRef(null);
+  const phoneButtonRef = useRef(null);
 
   // Audio processing refs
   const audioContextRef = useRef(null);
@@ -2474,6 +2603,10 @@ function RealTimeVoiceApp() {
    *  OUTBOUND ACS CALL
    * ------------------------------------------------------------------ */
   const startACSCall = async () => {
+    if (systemStatus.status === "degraded" && systemStatus.acsOnlyIssue) {
+      appendLog("🚫 Outbound calling disabled until ACS configuration is provided.");
+      return;
+    }
     if (!/^\+\d+$/.test(targetPhoneNumber)) {
       alert("Enter phone in E.164 format e.g. +15551234567");
       return;
@@ -2579,7 +2712,7 @@ function RealTimeVoiceApp() {
     <div style={styles.root}>
       <div style={styles.mainContainer}>
         {/* Backend Status Indicator */}
-        <BackendIndicator url={API_BASE_URL} />
+        <BackendIndicator url={API_BASE_URL} onStatusChange={handleSystemStatus} />
 
         {/* App Header */}
         <div style={styles.appHeader}>
@@ -2714,18 +2847,42 @@ function RealTimeVoiceApp() {
             </div>
 
             {/* RIGHT: Phone Call Button */}
-            <div style={{ position: 'relative' }}>
-              <button
-                style={styles.phoneButton(callActive, phoneHovered)}
-                onMouseEnter={() => {
-                  setShowPhoneTooltip(true);
+            <div 
+              style={{ position: 'relative' }}
+              onMouseEnter={() => {
+                setShowPhoneTooltip(true);
+                if (isCallDisabled && phoneButtonRef.current) {
+                  const rect = phoneButtonRef.current.getBoundingClientRect();
+                  setPhoneDisabledPos({
+                    top: rect.bottom + 12,
+                    left: rect.left + rect.width / 2,
+                  });
+                }
+                if (!isCallDisabled) {
                   setPhoneHovered(true);
-                }}
-                onMouseLeave={() => {
-                  setShowPhoneTooltip(false);
-                  setPhoneHovered(false);
-                }}
+                }
+              }}
+              onMouseLeave={() => {
+                setShowPhoneTooltip(false);
+                setPhoneHovered(false);
+                setPhoneDisabledPos(null);
+              }}
+            >
+              <button
+                ref={phoneButtonRef}
+                style={styles.phoneButton(callActive, phoneHovered, isCallDisabled)}
+                disabled={isCallDisabled}
+                title={
+                  isCallDisabled
+                    ? undefined
+                    : callActive
+                      ? "Hang up the phone call"
+                      : "Make a phone call"
+                }
                 onClick={() => {
+                  if (isCallDisabled) {
+                    return;
+                  }
                   if (callActive) {
                     // Hang up call
                     stopRecognition();
@@ -2744,14 +2901,27 @@ function RealTimeVoiceApp() {
               </button>
               
               {/* Tooltip */}
-              <div 
-                style={{
-                  ...styles.buttonTooltip,
-                  ...(showPhoneTooltip ? styles.buttonTooltipVisible : {})
-                }}
-              >
-                {callActive ? "Hang up the phone call" : "Make a phone call"}
-              </div>
+              {!isCallDisabled && (
+                <div 
+                  style={{
+                    ...styles.buttonTooltip,
+                    ...(showPhoneTooltip ? styles.buttonTooltipVisible : {})
+                  }}
+                >
+                  {callActive ? "Hang up the phone call" : "Make a phone call"}
+                </div>
+              )}
+              {isCallDisabled && showPhoneTooltip && phoneDisabledPos && (
+                <div
+                  style={{
+                    ...styles.phoneDisabledDialog,
+                    top: phoneDisabledPos.top,
+                    left: phoneDisabledPos.left,
+                  }}
+                >
+                  ⚠️ Outbound calling is disabled. Update backend .env with Azure Communication Services settings (ACS_CONNECTION_STRING, ACS_SOURCE_PHONE_NUMBER, ACS_ENDPOINT) to enable this feature.
+                </div>
+              )}
             </div>
 
           </div>
@@ -2769,12 +2939,19 @@ function RealTimeVoiceApp() {
             onChange={(e) => setTargetPhoneNumber(e.target.value)}
             placeholder="+15551234567"
             style={styles.phoneInput}
-            disabled={callActive}
+            disabled={callActive || isCallDisabled}
           />
           <button
             onClick={callActive ? stopRecognition : startACSCall}
-            style={styles.callMeButton(callActive)}
-            title={callActive ? "🔴 Hang up call" : "📞 Start phone call"}
+            style={styles.callMeButton(callActive, isCallDisabled)}
+            title={
+              callActive
+                ? "🔴 Hang up call"
+                : isCallDisabled
+                  ? "Configure Azure Communication Services to enable calling"
+                  : "📞 Start phone call"
+            }
+            disabled={callActive || isCallDisabled}
           >
             {callActive ? "🔴 Hang Up" : "📞 Call Me"}
           </button>

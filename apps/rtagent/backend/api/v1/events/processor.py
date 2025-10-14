@@ -60,7 +60,15 @@ class CallEventProcessor:
         self._stats["handlers_registered"] += 1
 
         handler_name = getattr(handler, "__name__", handler.__class__.__name__)
-        logger.info(f"📋 Registered handler {handler_name} for {event_type}")
+        logger.debug(
+            "Registered event handler",
+            extra={
+                "event_type": event_type,
+                "handler_name": handler_name,
+                "total_handlers": len(self._handlers[event_type]),
+                "handler_count_by_type": {k: len(v) for k, v in self._handlers.items()}
+            }
+        )
 
     def unregister_handler(self, event_type: str, handler: CallEventHandler) -> bool:
         """

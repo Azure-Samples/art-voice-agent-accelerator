@@ -47,8 +47,8 @@ async def handoff_general_agent(args: HandoffGeneralArgs) -> Dict[str, Any]:
         return _json(False, "Invalid request format. Please provide handoff details.")
     
     try:
-        topic = args.get("topic", "").strip()
-        caller_name = args.get("caller_name", "").strip()
+        topic = (args.get("topic") or "").strip()
+        caller_name = (args.get("caller_name") or "").strip()
 
         if not topic or not caller_name:
             return _json(False, "Both 'topic' and 'caller_name' must be provided.")
@@ -96,9 +96,9 @@ async def handoff_claim_agent(args: HandoffClaimArgs) -> Dict[str, Any]:
         return _json(False, "Invalid request format. Please provide claim handoff details.")
     
     try:
-        caller_name = args.get("caller_name", "").strip()
-        policy_id = args.get("policy_id", "").strip()
-        intent = args.get("claim_intent", "").strip()
+        caller_name = (args.get("caller_name") or "").strip()
+        policy_id = (args.get("policy_id") or "").strip()
+        intent = (args.get("claim_intent") or "").strip()
 
         if not caller_name or not policy_id:
             return _json(
@@ -147,9 +147,9 @@ async def escalate_human(args: EscalateHumanArgs) -> Dict[str, Any]:
         return _json(False, "Invalid request format. Please provide escalation details.")
     
     try:
-        route_reason = args.get("route_reason", "").strip()
-        caller_name = args.get("caller_name", "").strip()
-        policy_id = args.get("policy_id", "").strip()
+        route_reason = (args.get("route_reason") or "").strip()
+        caller_name = (args.get("caller_name") or "").strip()
+        policy_id = (args.get("policy_id") or "").strip()
         
         # Check for missing required fields
         if not route_reason:

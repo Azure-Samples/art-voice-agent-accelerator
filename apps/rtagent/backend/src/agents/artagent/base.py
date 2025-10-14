@@ -173,13 +173,15 @@ class ARTAgent:
             + (f"@{self.voice_rate}" if hasattr(self, "voice_rate") else "")
         )
         logger.info(
-            "Loaded agent '%s' | org='%s' | desc='%s' | model=%s | %s | prompt=%s | "
-            "tools=%s",
-            self.name,
-            self.organization or "-",
-            desc_preview,
-            self.model_id,
-            voice_info,
-            self.prompt_path,
-            tool_names or "∅",
+            "Agent loaded successfully",
+            extra={
+            "agent_name": self.name,
+            "organization": self.organization or "unspecified",
+            "description": desc_preview,
+            "model_id": self.model_id,
+            "voice_config": voice_info,
+            "prompt_template": self.prompt_path,
+            "available_tools": tool_names or [],
+            "tool_count": len(self.tools)
+            }
         )

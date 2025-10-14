@@ -45,7 +45,7 @@ class AsyncPool:
             logger.error(f"Pool size must be positive, got: {size}")
             raise ValueError("Pool size must be positive")
 
-        logger.info(f"Initializing AsyncPool with size: {size}")
+        logger.debug(f"Initializing AsyncPool with size: {size}")
         self._factory = factory
         self._size = size
         self._q: asyncio.Queue[T] = asyncio.Queue(maxsize=size)
@@ -68,14 +68,14 @@ class AsyncPool:
             return
 
         try:
-            logger.info(f"Preparing pool with {self._size} resources")
+            logger.debug(f"Preparing pool with {self._size} resources")
             for i in range(self._size):
                 logger.debug(f"Creating resource {i+1}/{self._size}")
                 item = await self._factory()
                 await self._q.put(item)
 
             self._ready.set()
-            logger.info("Pool preparation completed successfully")
+            logger.debug("Pool preparation completed successfully")
         except Exception as e:
             logger.error(f"Failed to prepare pool: {e}")
             raise

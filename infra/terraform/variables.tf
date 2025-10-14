@@ -106,7 +106,7 @@ variable "enable_redis_ha" {
 variable "redis_sku" {
   description = "SKU for Azure Managed Redis (Enterprise) optimized for performance"
   type        = string
-  default     = "MemoryOptimized_M20"
+  default     = "MemoryOptimized_M10"
   validation {
     condition = contains([
       "MemoryOptimized_M10", "MemoryOptimized_M20", "MemoryOptimized_M50",
