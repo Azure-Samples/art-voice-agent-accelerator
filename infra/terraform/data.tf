@@ -81,7 +81,7 @@ resource "azapi_resource" "mongoCluster" {
       }
       backup = {}
       compute = {
-        tier = "M30"
+        tier = var.cosmosdb_sku
       }
       createMode = "Default"
       dataApi = {
@@ -90,7 +90,7 @@ resource "azapi_resource" "mongoCluster" {
       highAvailability = {
         targetMode = "Disabled"
       }
-      publicNetworkAccess = "Enabled"
+      publicNetworkAccess = var.cosmosdb_public_network_access_enabled ? "Enabled" : "Disabled"
       serverVersion       = "5.0"
       sharding = {
         shardCount = 1
@@ -120,7 +120,21 @@ resource "azapi_resource" "mongoCluster" {
   }
 }
 
+# MongoDB firewall rule to allow all IP addresses
+resource "azapi_resource" "mongo_firewall_all" {
+  count = var.cosmosdb_public_network_access_enabled ? 1 : 0
+  type      = "Microsoft.DocumentDB/mongoClusters/firewallRules@2025-04-01-preview"
+  parent_id = azapi_resource.mongoCluster.id
+  name      = "allowAll"
+  body = {
+    properties = {
+      startIpAddress = "0.0.0.0"
+      endIpAddress   = "255.255.255.255"
+    }
+  }
 
+  depends_on = [azapi_resource.mongoCluster]
+}
 
 
 # Store Entra ID connection string in Key Vault

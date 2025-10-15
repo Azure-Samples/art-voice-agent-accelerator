@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -9,10 +10,28 @@ import yaml
 from utils.azure_auth import get_credential
 from dotenv import load_dotenv
 from pymongo.auth_oidc import OIDCCallback, OIDCCallbackContext, OIDCCallbackResult
-from pymongo.errors import DuplicateKeyError, PyMongoError
+from pymongo.errors import DuplicateKeyError, NetworkTimeout, PyMongoError
 
 # Initialize logging
 logger = logging.getLogger(__name__)
+
+# Suppress CosmosDB compatibility warnings from PyMongo - these are expected when using Azure CosmosDB with MongoDB API
+warnings.filterwarnings("ignore", message=".*CosmosDB cluster.*", category=UserWarning)
+
+
+def _extract_cluster_host(connection_string: Optional[str]) -> Optional[str]:
+    if not connection_string:
+        return None
+    host_match = re.search(r"@([^/?]+)", connection_string)
+    if not host_match:
+        host_match = re.search(r"mongodb\+srv://([^/?]+)", connection_string)
+    if not host_match:
+        return None
+    host = host_match.group(1)
+    host = host.split(",")[0]
+    if ":" in host:
+        host = host.split(":")[0]
+    return host
 
 
 class AzureIdentityTokenCallback(OIDCCallback):
@@ -41,6 +60,8 @@ class CosmosDBMongoCoreManager:
             "AZURE_COSMOS_CONNECTION_STRING"
         )
 
+        self.cluster_host = _extract_cluster_host(connection_string)
+
         database_name = database_name or os.getenv("AZURE_COSMOS_DATABASE_NAME")
         collection_name = collection_name or os.getenv("AZURE_COSMOS_COLLECTION_NAME")
         try:
@@ -66,6 +87,9 @@ class CosmosDBMongoCoreManager:
 
                 # Override connection string for OIDC
                 connection_string = f"mongodb+srv://{cluster_name}.global.mongocluster.cosmos.azure.com/"
+                self.cluster_host = (
+                    f"{cluster_name}.global.mongocluster.cosmos.azure.com"
+                )
 
                 logger.info(f"Using OIDC authentication for cluster: {cluster_name}")
 
@@ -83,6 +107,8 @@ class CosmosDBMongoCoreManager:
 
                 # Initialize the MongoClient with the connection string
                 self.client = pymongo.MongoClient(connection_string)
+                if not self.cluster_host:
+                    self.cluster_host = _extract_cluster_host(connection_string)
             self.database = self.client[database_name]
             self.collection = self.database[collection_name]
             logger.info(
@@ -127,9 +153,12 @@ class CosmosDBMongoCoreManager:
             else:
                 logger.info(f"Updated document matching query: {query}")
                 return None
+        except NetworkTimeout as e:
+            logger.warning(f"Network timeout during upsert for query {query}: {e}")
+            raise
         except PyMongoError as e:
-            logger.error(f"Failed to upsert document: {e}")
-            return None
+            logger.error(f"Failed to upsert document for query {query}: {e}")
+            raise
 
     def read_document(self, query: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """

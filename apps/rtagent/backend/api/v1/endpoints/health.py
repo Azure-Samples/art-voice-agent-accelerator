@@ -29,6 +29,7 @@ from apps.rtagent.backend.api.v1.schemas.health import (
     ReadinessResponse,
 )
 from utils.ml_logging import get_logger
+from src.pools.aoai_pool import AOAI_POOL_ENABLED, get_aoai_pool
 
 logger = get_logger("v1.health")
 
@@ -409,12 +410,19 @@ async def readiness_check(
     health_checks.append(redis_status)
 
     # Check Azure OpenAI
-    openai_status = await fast_ping(
-        _check_azure_openai_fast,
-        request.app.state.azureopenai_client,
-        component="azure_openai",
+    # openai_status = await fast_ping(
+    #     _check_azure_openai_fast,
+    #     request.app.state.azureopenai_client,
+    #     component="azure_openai",
+    # )
+    # health_checks.append(openai_status)
+    # Check Azure OpenAI pool
+    aoai_status = await fast_ping(
+        _check_azure_openai_pool_fast,
+        request.app.state.aoai_pool,
+        component="azure_openai_pool",
     )
-    health_checks.append(openai_status)
+    health_checks.append(aoai_status)
 
     # Check Speech Services (pools)
     speech_status = await fast_ping(
@@ -518,6 +526,71 @@ async def _check_azure_openai_fast(openai_client) -> ServiceCheck:
         check_time_ms=round((time.time() - start) * 1000, 2),
         details="client initialized",
     )
+
+
+async def _check_azure_openai_pool_fast(aoai_pool) -> ServiceCheck:
+    """Fast Azure OpenAI pool check using pool manager."""
+    start = time.time()
+    if not AOAI_POOL_ENABLED:
+        return ServiceCheck(
+            component="azure_openai_pool",
+            status="healthy",
+            details="pool disabled",
+            check_time_ms=round((time.time() - start) * 1000, 2),
+        )
+
+    try:
+        pool = aoai_pool or await get_aoai_pool()
+    except Exception as exc:
+        return ServiceCheck(
+            component="azure_openai_pool",
+            status="unhealthy",
+            error=f"initialization failed: {exc}",
+            check_time_ms=round((time.time() - start) * 1000, 2),
+        )
+
+    if not pool:
+        return ServiceCheck(
+            component="azure_openai_pool",
+            status="unhealthy",
+            error="pool unavailable",
+            check_time_ms=round((time.time() - start) * 1000, 2),
+        )
+
+    # Check pool statistics and client health
+    try:
+        stats = pool.get_pool_stats()
+    except Exception as exc:
+        return ServiceCheck(
+            component="azure_openai_pool",
+            status="unhealthy",
+            error=f"stats inspection failed: {exc}",
+            check_time_ms=round((time.time() - start) * 1000, 2),
+        )
+
+    unhealthy_clients = [
+        client["client_index"]
+        for client in stats.get("clients", [])
+        if not client.get("healthy", True)
+    ]
+
+    status = "healthy" if not unhealthy_clients else "degraded"
+    details_parts = [
+        f"size={stats.get('pool_size', 0)}",
+        f"active_sessions={stats.get('active_sessions', 0)}",
+    ]
+    if unhealthy_clients:
+        details_parts.append(
+            "unhealthy_clients=" + ",".join(map(str, unhealthy_clients))
+        )
+
+    return ServiceCheck(
+        component="azure_openai_pool",
+        status=status,
+        check_time_ms=round((time.time() - start) * 1000, 2),
+        details=", ".join(details_parts),
+    )
+
 
 
 async def _check_speech_services_fast(tts_pool, stt_pool) -> ServiceCheck:

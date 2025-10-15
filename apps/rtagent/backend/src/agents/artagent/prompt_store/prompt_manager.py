@@ -33,7 +33,7 @@ class PromptManager:
         )
 
         templates = self.env.list_templates()
-        print(f"Templates found: {templates}")
+        logger.debug(f"Templates found: {templates}")
 
     def get_prompt(self, template_name: str, **kwargs) -> str:
         """

@@ -35,7 +35,7 @@ _enable_docs_raw = os.getenv("ENABLE_DOCS", "auto").lower()
 
 # Auto-detect docs enablement based on environment if not explicitly set
 if _enable_docs_raw == "auto":
-    ENABLE_DOCS = ENVIRONMENT in ("development", "dev", "testing", "test", "staging")
+    ENABLE_DOCS = ENVIRONMENT not in ("production", "prod", "staging", "uat")
 elif _enable_docs_raw in ("true", "1", "yes", "on"):
     ENABLE_DOCS = True
 else:

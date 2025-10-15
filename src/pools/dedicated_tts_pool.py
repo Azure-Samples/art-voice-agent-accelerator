@@ -22,7 +22,7 @@ from typing import Dict, Optional, Set, Any, Tuple
 from enum import Enum
 
 from src.speech.text_to_speech import SpeechSynthesizer
-from utils.ml_logging import get_logger
+from src.common.ml_logging import get_logger
 
 logger = get_logger("dedicated_tts_pool")
 

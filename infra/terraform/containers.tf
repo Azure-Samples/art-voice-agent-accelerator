@@ -289,6 +289,11 @@ resource "azurerm_container_app" "backend" {
         value = azurerm_application_insights.main.connection_string
       }
 
+      env {
+        name  = "DISABLE_CLOUD_TELEMETRY"
+        value = "false"
+      }
+
       # Redis Configuration
       env {
         name  = "REDIS_HOST"

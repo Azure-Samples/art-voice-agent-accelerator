@@ -25,10 +25,7 @@ async def get_dedicated_tts_manager():
 
         if "apps.rtagent.backend.main" in sys.modules:
             main_module = sys.modules["apps.rtagent.backend.main"]
-            if hasattr(main_module, "app") and hasattr(
-                main_module.app.state, "dedicated_tts_manager"
-            ):
-                return main_module.app.state.dedicated_tts_manager
+            return main_module.app.state.tts_pool
     except Exception as e:
         logger.warning(f"Could not access dedicated TTS manager: {e}")
 

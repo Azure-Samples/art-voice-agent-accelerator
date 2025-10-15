@@ -26,6 +26,7 @@ dev = [
   "bandit",
   "pylint",
   "pytest",
+  "pytest-asyncio",
   "pytest-cov",
   "types-PyYAML",
   "uvicorn"
@@ -121,6 +122,7 @@ exclude = [
 pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "-q -ra"
+asyncio_mode = "auto"
 filterwarnings = [
   "ignore::DeprecationWarning",
   "ignore::UserWarning"

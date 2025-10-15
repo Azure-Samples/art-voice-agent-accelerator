@@ -15,8 +15,32 @@ from fastapi import WebSocket
 
 from config import STOP_WORDS
 from utils.ml_logging import get_logger
+import time
+from collections import deque
+from statistics import quantiles
 
 logger = get_logger("helpers")
+
+# Simple performance tracking for WebSocket operations
+class SimplePerformanceTracker:
+    def __init__(self, max_samples=100):
+        self.samples = deque(maxlen=max_samples)
+        self.p95_threshold = None
+    
+    def add_sample(self, duration_ms):
+        self.samples.append(duration_ms)
+        if len(self.samples) >= 20:  # Recalculate P95 when we have enough samples
+            try:
+                p95_values = quantiles(self.samples, n=20)
+                self.p95_threshold = p95_values[18]  # 95th percentile
+            except:
+                self.p95_threshold = None
+    
+    def is_slow(self, duration_ms):
+        return self.p95_threshold and duration_ms > self.p95_threshold
+
+# Global performance tracker for WebSocket receives
+ws_perf_tracker = SimplePerformanceTracker()
 
 
 def check_for_stopwords(prompt: str) -> bool:
@@ -109,9 +133,18 @@ async def receive_and_filter(ws: WebSocket) -> Optional[str]:
     :raises WebSocketError: If there are issues reading from the WebSocket.
     :raises JSONDecodeError: If JSON parsing fails for structured messages.
     """
+    start_time = time.perf_counter()
+    
     try:
-        logger.debug("Receiving WebSocket frame")
         raw: str = await ws.receive_text()
+        
+        # Calculate duration and track performance
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        ws_perf_tracker.add_sample(duration_ms)
+        
+        # Only log if it's slow (above P95) or if there's an error
+        if ws_perf_tracker.is_slow(duration_ms):
+            logger.warning(f"⚠️ SLOW WebSocket receive: {duration_ms:.2f}ms (P95: {ws_perf_tracker.p95_threshold:.2f}ms)")
 
         try:
             msg: Dict[str, Any] = json.loads(raw)
@@ -123,9 +156,13 @@ async def receive_and_filter(ws: WebSocket) -> Optional[str]:
                 return None
             return msg.get("text", raw)
         except json.JSONDecodeError:
-            logger.debug("Received plain text message (not JSON)")
+            # Only log JSON decode issues if it's a slow operation
+            if ws_perf_tracker.is_slow(duration_ms):
+                logger.debug(f"Received plain text message (not JSON) - took {duration_ms:.2f}ms")
             return raw.strip()
 
     except Exception as e:
-        logger.error(f"Error receiving and filtering WebSocket message: {e}")
+        # Always log errors with duration
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        logger.error(f"Error receiving and filtering WebSocket message (took {duration_ms:.2f}ms): {e}")
         raise

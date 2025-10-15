@@ -55,6 +55,18 @@ variable "cosmosdb_location" {
   default     = null
 }
 
+variable "cosmosdb_sku" {
+  description = "SKU for Azure Cosmos DB (MongoDB Cluster)"
+  type        = string
+  default     = "M10"
+}
+
+variable "cosmosdb_public_network_access_enabled" {
+  description = "Enable public network access for Cosmos DB (required for non-VNet deployments)"
+  type        = bool
+  default     = true
+}
+
 variable "principal_id" {
   description = "Principal ID of the user or service principal to assign application roles"
   type        = string

@@ -1,16 +1,27 @@
+import asyncio
 import datetime
 
 from src.cosmosdb.manager import CosmosDBMongoCoreManager
 from src.stateful.state_managment import MemoManager
 from utils.ml_logging import get_logger
+from pymongo.errors import NetworkTimeout
 
 logger = get_logger("postcall_analytics")
 
 
-def build_and_flush(cm: MemoManager, cosmos: CosmosDBMongoCoreManager):
+def _connectivity_hint(cosmos: CosmosDBMongoCoreManager) -> str:
+    host = getattr(cosmos, "cluster_host", None)
+    if not host:
+        return "nc -vz <cluster>.global.mongocluster.cosmos.azure.com 10260"
+    primary_host = host.split(",")[0]
+    return f"nc -vz {primary_host} 10260"
+
+
+async def build_and_flush(cm: MemoManager, cosmos: CosmosDBMongoCoreManager):
     """
-    Build analytics document from conversation manager and upsert into Cosmos DB
-    (MongoDB API, _id = session_id).
+    Build analytics document from conversation manager and asynchronously upsert into
+    Cosmos DB (MongoDB API, _id = session_id). Executes the write on a worker thread to
+    avoid blocking the event loop and adds guidance when connectivity fails.
     """
     session_id = cm.session_id
     histories = cm.histories
@@ -40,9 +51,18 @@ def build_and_flush(cm: MemoManager, cosmos: CosmosDBMongoCoreManager):
     }
 
     try:
-        # Upsert the document using session_id as unique identifier
-        cosmos.upsert_document(document=doc, query={"_id": session_id})
+        await asyncio.to_thread(
+            cosmos.upsert_document, document=doc, query={"_id": session_id}
+        )
         logger.info(f"Analytics document upserted for session {session_id}")
+    except NetworkTimeout as err:
+        hint = _connectivity_hint(cosmos)
+        logger.warning(
+            "Cosmos analytics upsert timed out for session %s. Verify network access to the Cosmos Mongo cluster. Test connectivity with `%s`. Details: %s",
+            session_id,
+            hint,
+            err,
+        )
     except Exception as e:
         logger.error(
             f"Failed to upsert analytics document for session {session_id}: {e}",

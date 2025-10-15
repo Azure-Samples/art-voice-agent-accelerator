@@ -17,6 +17,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
+from src.pools.async_pool import AsyncPool
 from utils.telemetry_config import setup_azure_monitor
 
 # ---------------- Monitoring ------------------------------------------------
@@ -28,38 +29,32 @@ logger = get_logger("main")
 
 import time
 import asyncio
-from datetime import datetime
-from typing import Awaitable, Callable, TypeVar
-from contextlib import asynccontextmanager
+from typing import Awaitable, Callable, List, Optional, Tuple
+
+StepCallable = Callable[[], Awaitable[None]]
+LifecycleStep = Tuple[str, StepCallable, Optional[StepCallable]]
 
 import uvicorn
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from opentelemetry import trace
-from src.pools.async_pool import AsyncPool
+from opentelemetry.trace import Status, StatusCode
 from src.pools.connection_manager import ThreadSafeConnectionManager
 from src.pools.session_metrics import ThreadSafeSessionMetrics
-from src.pools.voice_live_pool import get_voice_live_pool
-from src.enums.stream_modes import StreamMode
-
-# Import clean application configuration
-from src.enums import StreamMode
-from config import ACS_STREAMING_MODE
 from config.app_config import AppConfig
 from config.app_settings import (
     AGENT_AUTH_CONFIG,
     AGENT_CLAIM_INTAKE_CONFIG,
     AGENT_GENERAL_INFO_CONFIG,
     ALLOWED_ORIGINS,
-    AUDIO_FORMAT,
+    ACS_CONNECTION_STRING,
+    ACS_ENDPOINT,
+    ACS_SOURCE_PHONE_NUMBER,
     AZURE_COSMOS_COLLECTION_NAME,
     AZURE_COSMOS_CONNECTION_STRING,
     AZURE_COSMOS_DATABASE_NAME,
-    RECOGNIZED_LANGUAGE,
-    SILENCE_DURATION_MS,
-    VAD_SEMANTIC_SEGMENTATION,
-    GREETING_VOICE_TTS,
+
     ENTRA_EXEMPT_PATHS,
     ENABLE_AUTH_VALIDATION,
     # Documentation settings
@@ -70,6 +65,7 @@ from config.app_settings import (
     SECURE_DOCS_URL,
     ENVIRONMENT,
     DEBUG_MODE,
+    BASE_URL,
 )
 
 from apps.rtagent.backend.src.agents.artagent.base import ARTAgent
@@ -87,10 +83,115 @@ from apps.rtagent.backend.src.services import (
 from apps.rtagent.backend.src.services.acs.acs_caller import (
     initialize_acs_caller_instance,
 )
-from apps.rtagent.backend.src.services.openai_services import (
-    client as azure_openai_client,
-)
+
 from apps.rtagent.backend.api.v1.events.registration import register_default_handlers
+
+
+# --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+#  Developer startup dashboard
+# --------------------------------------------------------------------------- #
+def _build_startup_dashboard(
+    app_config: AppConfig,
+    app: FastAPI,
+    startup_results: List[Tuple[str, float]],
+) -> str:
+    """Construct a concise ASCII dashboard for developers."""
+
+    header = "=" * 68
+    base_url = BASE_URL or f"http://localhost:{os.getenv('PORT', '8080')}"
+    auth_status = "ENABLED" if ENABLE_AUTH_VALIDATION else "DISABLED"
+
+    required_acs = {
+        "ACS_ENDPOINT": ACS_ENDPOINT,
+        "ACS_CONNECTION_STRING": ACS_CONNECTION_STRING,
+        "ACS_SOURCE_PHONE_NUMBER": ACS_SOURCE_PHONE_NUMBER,
+    }
+    missing = [name for name, value in required_acs.items() if not value]
+    if missing:
+        acs_line = f"[warn] telephony disabled (missing {', '.join(missing)})"
+    else:
+        acs_line = f"[ok] telephony ready (source {ACS_SOURCE_PHONE_NUMBER})"
+
+    docs_enabled = ENABLE_DOCS
+
+    endpoints = [
+        ("GET", "/api/v1/health", "liveness"),
+        ("GET", "/api/v1/readiness", "dependency readiness"),
+        ("GET", "/api/info", "environment metadata"),
+        ("POST", "/api/v1/calls/initiate", "outbound call"),
+        ("POST", "/api/v1/calls/answer", "ACS inbound webhook"),
+        ("POST", "/api/v1/calls/callbacks", "ACS events"),
+        ("WS", "/api/v1/media/stream", "ACS media bridge"),
+        ("WS", "/api/v1/realtime/conversation", "Direct audio streaming channel"),
+    ]
+
+    telemetry_disabled = os.getenv("DISABLE_CLOUD_TELEMETRY", "false").lower() == "true"
+    telemetry_line = "DISABLED (DISABLE_CLOUD_TELEMETRY=true)" if telemetry_disabled else "ENABLED"
+
+    lines = [
+        "",
+        header,
+        " Real-Time Voice Agent :: Developer Console",
+        header,
+        f" Environment : {ENVIRONMENT} | Debug: {'ON' if DEBUG_MODE else 'OFF'}",
+        f" Base URL    : {base_url}",
+        f" Auth Guard  : {auth_status}",
+        f" Telemetry   : {telemetry_line}",
+        f" ACS         : {acs_line}",
+        (
+            " Speech Pools: "
+            f"TTS={app_config.speech_pools.tts_pool_size}, "
+            f"STT={app_config.speech_pools.stt_pool_size}"
+        ),
+    ]
+
+    if docs_enabled:
+        lines.append(" Docs       : ENABLED")
+        if DOCS_URL:
+            lines.append(f"   Swagger  : {DOCS_URL}")
+        if REDOC_URL:
+            lines.append(f"   ReDoc    : {REDOC_URL}")
+        if SECURE_DOCS_URL:
+            lines.append(f"   Secure   : {SECURE_DOCS_URL}")
+        if OPENAPI_URL:
+            lines.append(f"   OpenAPI  : {OPENAPI_URL}")
+    else:
+        lines.append(" Docs       : DISABLED (set ENABLE_DOCS=true)")
+
+    lines.append("")
+    lines.append(" Startup Stage Durations (sec):")
+    for stage_name, stage_duration in startup_results:
+        lines.append(f"   {stage_name:<13}{stage_duration:.2f}")
+
+    lines.append("")
+    agent_configs = [
+        ("auth", "auth_agent", AGENT_AUTH_CONFIG),
+        ("claim-intake", "claim_intake_agent", AGENT_CLAIM_INTAKE_CONFIG),
+        ("general-info", "general_info_agent", AGENT_GENERAL_INFO_CONFIG),
+    ]
+    loaded_agents: List[str] = []
+    for label, attr, config_path in agent_configs:
+        agent = getattr(app.state, attr, None)
+        if agent is None:
+            loaded_agents.append(f"   {label:<13}missing (check {os.path.basename(config_path)})")
+        else:
+            loaded_agents.append(
+                f"   {label:<13}{agent.__class__.__name__} from {os.path.basename(config_path)}"
+            )
+
+    lines.append("")
+    lines.append(" Loaded Agents:")
+    lines.extend(loaded_agents)
+
+    lines.append("")
+    lines.append(" Key API Endpoints:")
+    lines.append("   METHOD PATH                           NOTES")
+    for method, path, note in endpoints:
+        lines.append(f"   {method:<6}{path:<32}{note}")
+
+    lines.append(header)
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- #
@@ -111,95 +212,99 @@ async def lifespan(app: FastAPI):
     """
     tracer = trace.get_tracer(__name__)
 
-    # ---- Startup ----
-    with tracer.start_as_current_span("startup-lifespan") as span:
-        logger.info("Application startup initiated")
-        start_time = time.perf_counter()
+    startup_steps: List[LifecycleStep] = []
+    executed_steps: List[LifecycleStep] = []
+    startup_results: List[Tuple[str, float]] = []
 
-        span.set_attributes(
-            {
-                "service.name": "rtagent-api",
-                "service.version": "1.0.0",
-                "startup.stage": "initialization",
-            }
-        )
+    def add_step(name: str, start: StepCallable, shutdown: Optional[StepCallable] = None) -> None:
+        startup_steps.append((name, start, shutdown))
 
-        # Initialize clean application configuration
-        app_config = AppConfig()
-        logger.info(
-            f"Configuration loaded: TTS Pool={app_config.speech_pools.tts_pool_size}, "
-            f"STT Pool={app_config.speech_pools.stt_pool_size}, "
-            f"Max Connections={app_config.connections.max_connections}"
-        )
+    async def run_steps(steps: List[LifecycleStep], phase: str) -> None:
+        for name, start_fn, shutdown_fn in steps:
+            stage_span_name = f"{phase}.{name}"
+            with tracer.start_as_current_span(stage_span_name) as step_span:
+                step_start = time.perf_counter()
+                logger.info(f"{phase} stage started", extra={"stage": name})
+                try:
+                    await start_fn()
+                except Exception as exc:  # pragma: no cover - defensive path
+                    step_span.record_exception(exc)
+                    step_span.set_status(Status(StatusCode.ERROR, str(exc)))
+                    logger.error(f"{phase} stage failed", extra={"stage": name, "error": str(exc)})
+                    raise
+                step_duration = time.perf_counter() - step_start
+                step_span.set_attribute("duration_sec", step_duration)
+                rounded = round(step_duration, 2)
+                logger.info(f"{phase} stage completed", extra={"stage": name, "duration_sec": rounded})
+                executed_steps.append((name, start_fn, shutdown_fn))
+                startup_results.append((name, rounded))
 
-        # ------------------------ Process-wide shared state -------------------
-        # Thread-safe connection management and session tracking
-        from src.pools.session_manager import ThreadSafeSessionManager
+    async def run_shutdown(steps: List[LifecycleStep]) -> None:
+        for name, _, shutdown_fn in reversed(steps):
+            if shutdown_fn is None:
+                continue
+            stage_span_name = f"shutdown.{name}"
+            with tracer.start_as_current_span(stage_span_name) as step_span:
+                step_start = time.perf_counter()
+                logger.info("shutdown stage started", extra={"stage": name})
+                try:
+                    await shutdown_fn()
+                except Exception as exc:  # pragma: no cover - defensive path
+                    step_span.record_exception(exc)
+                    step_span.set_status(Status(StatusCode.ERROR, str(exc)))
+                    logger.error("shutdown stage failed", extra={"stage": name, "error": str(exc)})
+                    continue
+                step_duration = time.perf_counter() - step_start
+                step_span.set_attribute("duration_sec", step_duration)
+                logger.info("shutdown stage completed", extra={"stage": name, "duration_sec": round(step_duration, 2)})
 
-        # Initialize Redis first (needed by connection manager)
-        span.set_attribute("startup.stage", "redis")
+    app_config = AppConfig()
+    logger.info(
+        "Configuration loaded",
+        extra={
+            "tts_pool": app_config.speech_pools.tts_pool_size,
+            "stt_pool": app_config.speech_pools.stt_pool_size,
+            "max_connections": app_config.connections.max_connections,
+        },
+    )
+
+    from src.pools.session_manager import ThreadSafeSessionManager
+
+    async def start_core_state() -> None:
         try:
             app.state.redis = AzureRedisManager()
-            await app.state.redis.initialize()
-            logger.info("Redis initialized successfully")
-        except Exception as e:
-            logger.error(f"Redis initialization failed: {e}")
-            raise RuntimeError(f"Redis initialization failed: {e}")
+        except Exception as exc:
+            raise RuntimeError(f"Azure Managed Redis initialization failed: {exc}")
 
-        # Initialize clean connection manager with config integration
         app.state.conn_manager = ThreadSafeConnectionManager(
             max_connections=app_config.connections.max_connections,
             queue_size=app_config.connections.queue_size,
             enable_connection_limits=app_config.connections.enable_limits,
         )
-
-        logger.info(
-            f"Connection manager initialized: max_connections={app_config.connections.max_connections}, "
-            f"queue_size={app_config.connections.queue_size}, limits_enabled={app_config.connections.enable_limits}"
-        )
-
         app.state.session_manager = ThreadSafeSessionManager()
-        app.state.greeted_call_ids = set()  # avoid double greetings
-
-        # Thread-safe session metrics for visibility
         app.state.session_metrics = ThreadSafeSessionMetrics()
-
-        # ------------------------ Speech Pools (TTS / STT) -------------------
-        span.set_attribute("startup.stage", "speech_pools")
-
+        app.state.greeted_call_ids = set()
         logger.info(
-            f"Initializing speech pools: TTS={app_config.speech_pools.tts_pool_size}, STT={app_config.speech_pools.stt_pool_size}"
+            "core state ready",
+            extra={
+                "max_connections": app_config.connections.max_connections,
+                "queue_size": app_config.connections.queue_size,
+                "limits_enabled": app_config.connections.enable_limits,
+            },
         )
 
+    async def stop_core_state() -> None:
+        if hasattr(app.state, "conn_manager"):
+            await app.state.conn_manager.stop()
+            logger.info("connection manager stopped")
+
+    add_step("core", start_core_state, stop_core_state)
+
+    async def start_speech_pools() -> None:
         async def make_tts() -> SpeechSynthesizer:
-            """
-            Create and configure a new Text-to-Speech synthesizer instance.
-
-            This factory function creates a properly configured SpeechSynthesizer
-            with the appropriate voice settings and playback configuration for
-            real-time audio generation in the voice agent system.
-
-            :param: None (uses configuration from environment variables).
-            :return: Configured SpeechSynthesizer instance ready for audio generation.
-            :raises SpeechServiceError: If TTS service initialization fails.
-            """
-            # If SDK benefits from a warm-up, you can synth a short phrase here.
-            return SpeechSynthesizer(
-                voice=app_config.voice.default_voice, playback="always"
-            )
+            return SpeechSynthesizer(voice=app_config.voice.default_voice, playback="always")
 
         async def make_stt() -> StreamingSpeechRecognizerFromBytes:
-            """
-            Create and configure a new Speech-to-Text recognizer instance.
-
-            This factory function creates a properly configured streaming speech
-            recognizer with semantic segmentation, VAD settings, and language
-            configuration for real-time audio processing and transcription.
-
-            :param: None (uses configuration from environment variables).
-            :return: Configured StreamingSpeechRecognizerFromBytes instance ready for transcription.
-            :raises SpeechServiceError: If STT service initialization fails.
-            """
             from config.app_settings import (
                 VAD_SEMANTIC_SEGMENTATION,
                 SILENCE_DURATION_MS,
@@ -214,116 +319,130 @@ async def lifespan(app: FastAPI):
                 audio_format=AUDIO_FORMAT,
             )
 
-        app.state.tts_pool = AsyncPool(make_tts, app_config.speech_pools.tts_pool_size)
-        app.state.stt_pool = AsyncPool(make_stt, app_config.speech_pools.stt_pool_size)
-
-        # Warm both pools concurrently
-        await asyncio.gather(
-            app.state.tts_pool.prepare(),
-            app.state.stt_pool.prepare(),
+        logger.info("Initializing Speech Recognizer pool")
+        app.state.stt_pool = AsyncPool(
+            factory=make_stt,
+            size=app_config.speech_pools.stt_pool_size,
+            enable_session_awareness=False,
+            enable_prewarming=False,
+            enable_cleanup=False,
+            acquire_timeout=2.0,
         )
-
-        # Initialize dedicated TTS pool manager
-        span.set_attribute("startup.stage", "dedicated_tts_pool")
-        from src.pools.dedicated_tts_pool import DedicatedTtsPoolManager
-
-        app.state.dedicated_tts_manager = DedicatedTtsPoolManager(
-            warm_pool_size=app_config.speech_pools.tts_pool_size,  # Reuse config
-            max_dedicated_clients=app_config.connections.max_connections,  # Scale with connections
-            prewarming_batch_size=5,
+        
+        logger.info("Initializing Speech Synthesizer pool")
+        app.state.tts_pool = AsyncPool(
+            factory=make_tts,
+            size=app_config.speech_pools.tts_pool_size,
+            enable_session_awareness=True,
+            max_dedicated_resources=app_config.connections.max_connections,
             enable_prewarming=True,
-        )
-        await app.state.dedicated_tts_manager.initialize()
-        logger.info(
-            "Enhanced Dedicated TTS Pool Manager initialized for Phase 1 optimization"
+            prewarming_batch_size=5,
+            enable_cleanup=True,
+            cleanup_interval_seconds=180,
+            resource_max_age_seconds=1800,
+            acquire_timeout=2.0,
         )
 
-        # Initialize AOAI client pool during startup to avoid first-request delays
-        span.set_attribute("startup.stage", "aoai_pool")
+        await asyncio.gather(app.state.tts_pool.prepare(), app.state.stt_pool.prepare())
+        logger.info(
+            "speech pools prepared",
+            extra={
+                "tts_pool": app_config.speech_pools.tts_pool_size,
+                "stt_pool": app_config.speech_pools.stt_pool_size,
+            },
+        )
+
+    async def stop_speech_pools() -> None:
+        shutdown_tasks = []
+        if hasattr(app.state, "tts_pool"):
+            shutdown_tasks.append(app.state.tts_pool.shutdown())
+        if hasattr(app.state, "stt_pool"):
+            shutdown_tasks.append(app.state.stt_pool.shutdown())
+        if shutdown_tasks:
+            await asyncio.gather(*shutdown_tasks, return_exceptions=True)
+            logger.info("speech pools shutdown complete")
+
+    add_step("speech", start_speech_pools, stop_speech_pools)
+
+    async def start_aoai_pool() -> None:
         from src.pools.aoai_pool import get_aoai_pool
 
-        if os.getenv("AOAI_POOL_ENABLED", "true").lower() == "true":
-            logger.info("Initializing AOAI client pool during startup...")
-            start_time = time.time()
-            aoai_pool = await get_aoai_pool()
-            if aoai_pool:
-                init_time = time.time() - start_time
-                logger.info(
-                    f"AOAI client pool pre-initialized in {init_time:.2f}s with {len(aoai_pool.clients)} clients"
-                )
-            else:
-                logger.warning("AOAI pool initialization returned None")
+        if os.getenv("AOAI_POOL_ENABLED", "true").lower() != "true":
+            app.state.aoai_pool = None
+            logger.info("AOAI pool disabled")
+            return
+
+        aoai_pool = await get_aoai_pool()
+        if aoai_pool:
+            app.state.aoai_pool = aoai_pool
+            logger.info("AOAI pool initialized", extra={"clients": len(aoai_pool.clients)})
         else:
-            logger.info("AOAI pool disabled, skipping startup initialization")
+            app.state.aoai_pool = None
+            logger.warning("AOAI pool initialization returned None")
 
-        # if ACS_STREAMING_MODE == StreamMode.VOICE_LIVE:
-        #     # Initialize Voice Live warm pool (pre-connect agents)
-        #     span.set_attribute("startup.stage", "voice_live_pool")
-        #     try:
-        #         # Use background prewarm to avoid blocking startup time
-        #         app.state.voice_live_pool = await get_voice_live_pool(background_prewarm=True)
-        #         logger.info("Voice Live pool initialization scheduled (background prewarm)")
-        #     except Exception as e:
-        #         logger.error(f"Voice Live pool initialization failed: {e}")
+    add_step("aoai", start_aoai_pool)
 
-        # ------------------------ Other singletons ---------------------------
-        span.set_attribute("startup.stage", "cosmos_db")
+    async def start_external_services() -> None:
         app.state.cosmos = CosmosDBMongoCoreManager(
             connection_string=AZURE_COSMOS_CONNECTION_STRING,
             database_name=AZURE_COSMOS_DATABASE_NAME,
             collection_name=AZURE_COSMOS_COLLECTION_NAME,
         )
-
-        span.set_attribute("startup.stage", "openai_clients")
-        app.state.azureopenai_client = azure_openai_client
-        app.state.promptsclient = PromptManager()
-
-        span.set_attribute("startup.stage", "acs_agents")
         app.state.acs_caller = initialize_acs_caller_instance()
+        logger.info("external services ready")
+
+    add_step("services", start_external_services)
+
+    async def start_agents() -> None:
         app.state.auth_agent = ARTAgent(config_path=AGENT_AUTH_CONFIG)
         app.state.claim_intake_agent = ARTAgent(config_path=AGENT_CLAIM_INTAKE_CONFIG)
         app.state.general_info_agent = ARTAgent(config_path=AGENT_GENERAL_INFO_CONFIG)
+        app.state.promptsclient = PromptManager()
+        logger.info("agents initialized")
 
-        # ------------------------ Events / Orchestrator -----------------------
-        span.set_attribute("startup.stage", "v1_event_handlers")
+    add_step("agents", start_agents)
+
+    async def start_event_handlers() -> None:
         register_default_handlers()
-        logger.info("V1 event handlers registered at startup")
-
-        span.set_attribute("startup.stage", "orchestrator")
         orchestrator_preset = os.getenv("ORCHESTRATOR_PRESET", "production")
-        logger.info(f"Initializing orchestrator with preset: {orchestrator_preset}")
+        logger.info("event handlers registered", extra={"orchestrator_preset": orchestrator_preset})
 
-        elapsed = time.perf_counter() - start_time
-        logger.info(f"startup complete in {elapsed:.2f}s")
-        span.set_attributes(
+    add_step("events", start_event_handlers)
+
+    with tracer.start_as_current_span("startup.lifespan") as startup_span:
+        startup_span.set_attributes(
             {
-                "startup.duration_sec": elapsed,
+                "service.name": "rtagent-api",
+                "service.version": "1.0.0",
+                "startup.stage": "lifecycle",
+            }
+        )
+        startup_begin = time.perf_counter()
+        await run_steps(startup_steps, "startup")
+        startup_duration = time.perf_counter() - startup_begin
+        startup_span.set_attributes(
+            {
+                "startup.duration_sec": startup_duration,
                 "startup.stage": "complete",
                 "startup.success": True,
             }
         )
+        duration_rounded = round(startup_duration, 2)
+        logger.info("startup complete", extra={"duration_sec": duration_rounded})
+        logger.info(f"startup duration: {duration_rounded}s")
+        
+    logger.info(_build_startup_dashboard(app_config, app, startup_results))
 
     # ---- Run app ----
     yield
 
-    # ---- Shutdown ----
-    with tracer.start_as_current_span("shutdown-lifespan") as span:
+    with tracer.start_as_current_span("shutdown.lifespan") as shutdown_span:
         logger.info("🛑 shutdown…")
-        span.set_attributes(
-            {"service.name": "rtagent-api", "shutdown.stage": "cleanup"}
-        )
+        shutdown_begin = time.perf_counter()
+        await run_shutdown(executed_steps)
 
-        # Gracefully stop the connection manager
-        if hasattr(app.state, "conn_manager"):
-            await app.state.conn_manager.stop()
-            logger.info("Connection manager stopped")
-
-        # Shutdown dedicated TTS pool manager
-        if hasattr(app.state, "dedicated_tts_manager"):
-            await app.state.dedicated_tts_manager.shutdown()
-            logger.info("Enhanced Dedicated TTS Pool Manager shutdown complete")
-
-        span.set_attribute("shutdown.success", True)
+        shutdown_span.set_attribute("shutdown.duration_sec", time.perf_counter() - shutdown_begin)
+        shutdown_span.set_attribute("shutdown.success", True)
 
 
 # --------------------------------------------------------------------------- #
@@ -459,15 +578,6 @@ def initialize_app():
     app = create_app()
     setup_app_middleware_and_routes(app)
 
-    # Log documentation status
-    if ENABLE_DOCS:
-        logger.info(f"📚 Swagger docs available at: {DOCS_URL}")
-        logger.info(f"📚 ReDoc available at: {REDOC_URL}")
-        if SECURE_DOCS_URL:
-            logger.info(f"🔒 Secure docs available at: {SECURE_DOCS_URL}")
-    else:
-        logger.info("📚 API documentation is disabled for this environment")
-
     return app
 
 
@@ -486,18 +596,4 @@ def main():
         host="0.0.0.0",  # nosec: B104
         port=port,
         reload=False,  # Don't use reload in production
-    )
-
-
-# --------------------------------------------------------------------------- #
-#  CLI entry-point
-# --------------------------------------------------------------------------- #
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8010))
-    # For development with reload, use the import string instead of app object
-    uvicorn.run(
-        "main:app",  # Use import string for reload to work
-        host="0.0.0.0",  # nosec: B104
-        port=port,
-        reload=True,
     )

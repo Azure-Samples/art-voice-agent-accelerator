@@ -313,12 +313,8 @@ async def browser_conversation_endpoint(
                 session_id = str(uuid.uuid4())
 
         logger.info(
-            f"[BACKEND] Conversation WebSocket connection from frontend with session_id: {session_id}"
+            f"[{session_id}] Conversation WebSocket connection established"
         )
-        logger.info(
-            f"[BACKEND] Browser conversation starting with session_id: {session_id}"
-        )
-
         with tracer.start_as_current_span(
             "api.v1.realtime.conversation_connect",
             kind=SpanKind.SERVER,
@@ -414,8 +410,41 @@ async def _initialize_conversation_session(
     memory_manager = MemoManager.from_redis(session_id, redis_mgr)
 
     # Acquire per-connection TTS synthesizer from pool
-    tts_client = await websocket.app.state.tts_pool.acquire()
-    logger.info(f"Acquired TTS synthesizer from pool for session {session_id}")
+    tts_pool = websocket.app.state.tts_pool
+    try:
+        (
+            tts_client,
+            tts_tier,
+        ) = await tts_pool.acquire_for_session(session_id)
+    except TimeoutError as exc:
+        pool_status = tts_pool.snapshot()
+        logger.error(
+            "[%s] TTS pool acquire timeout: %s",
+            session_id,
+            pool_status,
+        )
+        log_with_context(
+            logger,
+            "error",
+            "TTS pool acquire timeout",
+            operation="tts_acquire_timeout",
+            session_id=session_id,
+            pool_status=json.dumps(pool_status),
+        )
+        if websocket.client_state == WebSocketState.CONNECTED:
+            try:
+                await websocket.close(
+                    code=1013, reason="TTS capacity temporarily unavailable"
+                )
+            except Exception:
+                pass
+        raise WebSocketDisconnect(code=1013) from exc
+
+    logger.info(
+        "[%s] Acquired TTS synthesizer from pool (tier=%s)",
+        session_id,
+        getattr(tts_tier, "value", "unknown"),
+    )
 
     # Create latency tool for this session
     latency_tool = LatencyTool(memory_manager)
@@ -486,7 +515,7 @@ async def _initialize_conversation_session(
 
     # Set up STT callbacks
     def on_partial(txt: str, lang: str, speaker_id: str):
-        logger.info(f"User (partial) in {lang}: {txt}")
+        logger.info(f"[{session_id}] User (partial) in {lang}: {txt}")
         try:
             # Check both synthesis flag and session audio state for barge-in
             is_synthesizing = get_metadata("is_synthesizing", False)
@@ -530,41 +559,59 @@ async def _initialize_conversation_session(
             logger.debug(f"Failed to dispatch UI cancel control: {e}")
 
     def on_final(txt: str, lang: str):
-        logger.info(f"User (final) in {lang}: {txt}")
+        logger.info(f"[{session_id}] User (final) in {lang}: {txt}")
         current_buffer = get_metadata("user_buffer", "")
         set_metadata("user_buffer", current_buffer + txt.strip() + "\n")
 
-    # Acquire per‑connection speech recognizer from pool
-    stt_client = await websocket.app.state.stt_pool.acquire()
+    # Acquire per-connection speech recognizer from pool
+    stt_pool = websocket.app.state.stt_pool
+    try:
+        (
+            stt_client,
+            stt_tier,
+        ) = await stt_pool.acquire_for_session(session_id)
+    except TimeoutError as exc:
+        pool_status = stt_pool.snapshot()
+        logger.error(
+            "[%s] STT pool acquire timeout: %s",
+            session_id,
+            pool_status,
+        )
+        log_with_context(
+            logger,
+            "error",
+            "STT pool acquire timeout",
+            operation="stt_acquire_timeout",
+            session_id=session_id,
+            pool_status=json.dumps(pool_status),
+        )
+        if websocket.client_state == WebSocketState.CONNECTED:
+            try:
+                await websocket.close(
+                    code=1013, reason="STT capacity temporarily unavailable"
+                )
+            except Exception:
+                pass
+        raise WebSocketDisconnect(code=1013) from exc
+
     set_metadata("stt_client", stt_client)
     stt_client.set_partial_result_callback(on_partial)
     stt_client.set_final_result_callback(on_final)
     stt_client.start()
 
-    # Allocate dedicated TTS client for this session
-    if hasattr(websocket.app.state, "dedicated_tts_manager"):
-        try:
-            (
-                tts_client,
-                client_tier,
-            ) = await websocket.app.state.dedicated_tts_manager.get_dedicated_client(
-                session_id
-            )
-            set_metadata("tts_client", tts_client)
-            set_metadata("tts_client_tier", client_tier)
+    # Persist the already-acquired TTS client into metadata
+    set_metadata("tts_client", tts_client)
+    logger.info(
+        "Allocated TTS client for session %s (tier=%s)",
+        session_id,
+        getattr(tts_tier, "value", "unknown"),
+    )
 
-            # Store session_id on WebSocket state for shared_ws access
-            websocket.state.session_id = session_id
-
-            logger.info(
-                f"Allocated dedicated TTS client for session {session_id} (tier={client_tier.value})"
-            )
-        except Exception as e:
-            logger.warning(
-                f"Failed to allocate dedicated TTS client for session {session_id}: {e}"
-            )
-
-    logger.info(f"STT recognizer started for session {session_id}")
+    logger.info(
+        "STT recognizer started for session %s (tier=%s)",
+        session_id,
+        getattr(stt_tier, "value", "unknown"),
+    )
     return memory_manager
 
 
@@ -732,7 +779,7 @@ async def _process_conversation_messages(
         except Exception as e:
             span.set_status(Status(StatusCode.ERROR, f"Message processing error: {e}"))
             logger.error(
-                f"Error processing conversation messages for session {session_id}: {e}"
+                f"[{session_id}] Error processing conversation messages: {e}"
             )
             raise
 
@@ -913,7 +960,7 @@ async def _cleanup_conversation_session(
             orchestration_tasks = getattr(websocket.state, "orchestration_tasks", set())
             if orchestration_tasks:
                 logger.info(
-                    f"[PERF] Cancelling {len(orchestration_tasks)} background orchestration tasks for session {session_id}"
+                    f"[{session_id}][PERF] Cancelling {len(orchestration_tasks)} background orchestration tasks"
                 )
                 for task in orchestration_tasks.copy():
                     if not task.done():
@@ -928,7 +975,7 @@ async def _cleanup_conversation_session(
                             )
                 orchestration_tasks.clear()
                 logger.debug(
-                    f"[PERF] Background task cleanup complete for session {session_id}"
+                    f"[{session_id}][PERF] Background task cleanup complete"
                 )
 
             # Clean up session resources directly through connection manager
@@ -937,29 +984,37 @@ async def _cleanup_conversation_session(
 
             if connection and connection.meta.handler:
                 # Clean up TTS client
+                tts_pool = getattr(websocket.app.state, "tts_pool", None)
                 tts_client = connection.meta.handler.get("tts_client")
-                if tts_client and hasattr(websocket.app.state, "tts_pool"):
+                tts_released = False
+
+                if tts_client:
                     try:
                         tts_client.stop_speaking()
-                        await websocket.app.state.tts_pool.release(tts_client)
-                        logger.info("Released TTS client during cleanup")
                     except Exception as e:
-                        logger.error(f"Error releasing TTS client: {e}")
+                        logger.debug(f"[{session_id}] TTS stop_speaking error: {e}")
 
-                # Release dedicated TTS client
-                if hasattr(websocket.app.state, "dedicated_tts_manager") and session_id:
+                if tts_pool:
                     try:
-                        released = await websocket.app.state.dedicated_tts_manager.release_session_client(
-                            session_id
-                        )
-                        if released:
-                            logger.info(
-                                f"Released dedicated TTS client for session {session_id}"
+                        if session_id:
+                            tts_released = await tts_pool.release_session_resource(
+                                session_id
                             )
+                            if tts_released:
+                                logger.info(
+                                    f"[{session_id}] Released dedicated TTS client"
+                                )
+
+                        if not tts_released and tts_client:
+                            await tts_pool.release_session_resource(session_id)
+                            tts_released = True
+                            logger.info("Released pooled TTS client during cleanup")
                     except Exception as e:
-                        logger.error(
-                            f"Error releasing dedicated TTS client for session {session_id}: {e}"
-                        )
+                        logger.error(f"[{session_id}] Error releasing TTS client: {e}")
+
+                if connection.meta.handler:
+                    connection.meta.handler["tts_client"] = None
+                    connection.meta.handler["audio_playing"] = False
 
                 #  Release session-specific AOAI client
                 if session_id:
@@ -968,11 +1023,11 @@ async def _cleanup_conversation_session(
 
                         await release_session_client(session_id)
                         logger.info(
-                            f"Released dedicated AOAI client for session {session_id}"
+                            f"[{session_id}] Released dedicated AOAI client"
                         )
                     except Exception as e:
                         logger.error(
-                            f"Error releasing AOAI client for session {session_id}: {e}"
+                            f"[{session_id}] Error releasing AOAI client: {e}"
                         )
 
                 # Clean up STT client
@@ -980,7 +1035,7 @@ async def _cleanup_conversation_session(
                 if stt_client and hasattr(websocket.app.state, "stt_pool"):
                     try:
                         stt_client.stop()
-                        await websocket.app.state.stt_pool.release(stt_client)
+                        await websocket.app.state.stt_pool.release_session_resource(session_id)
                         logger.info("Released STT client during cleanup")
                     except Exception as e:
                         logger.error(f"Error releasing STT client: {e}")
@@ -1004,13 +1059,13 @@ async def _cleanup_conversation_session(
                     except Exception as e:
                         logger.error(f"Error cleaning up latency timers: {e}")
 
-            logger.info(f"Session cleanup complete for {conn_id}")
+            logger.info(f"[{session_id}] Session cleanup complete")
 
             # Unregister from connection manager (this also cleans up handler if attached)
             if conn_id:
                 await websocket.app.state.conn_manager.unregister(conn_id)
                 logger.info(
-                    f"Conversation connection {conn_id} unregistered from manager"
+                    f"[{session_id}] Conversation connection {conn_id} unregistered from manager"
                 )
 
             # Remove from session registry thread-safely
@@ -1023,7 +1078,7 @@ async def _cleanup_conversation_session(
                         await websocket.app.state.session_manager.get_session_count()
                     )
                     logger.info(
-                        f"Conversation session {session_id} removed. Active sessions: {remaining_count}"
+                        f"[{session_id}] Conversation removed. Active sessions: {remaining_count}"
                     )
 
             # Track WebSocket disconnection for session metrics
@@ -1040,7 +1095,9 @@ async def _cleanup_conversation_session(
             # Persist analytics if possible
             if memory_manager and hasattr(websocket.app.state, "cosmos"):
                 try:
-                    build_and_flush(memory_manager, websocket.app.state.cosmos)
+                    await build_and_flush(
+                        memory_manager, websocket.app.state.cosmos
+                    )
                 except Exception as e:
                     logger.error(f"Error persisting analytics: {e}", exc_info=True)
 

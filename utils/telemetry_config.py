@@ -16,7 +16,7 @@ try:  # minimal, silent if python-dotenv missing
 except Exception:
     pass
 
-from azure.core.exceptions import HttpResponseError
+from azure.core.exceptions import HttpResponseError, ServiceResponseError
 from utils.azure_auth import get_credential, ManagedIdentityCredential
 from azure.monitor.opentelemetry import configure_azure_monitor
 from opentelemetry.sdk.resources import Resource, ResourceAttributes
@@ -56,7 +56,7 @@ def setup_azure_monitor(logger_name: str = None):
         logger_name (str, optional): Name for the Azure Monitor logger. Defaults to environment variable or 'default'.
     """
     # Allow hard opt-out for local dev or debugging.
-    if os.getenv("DISABLE_CLOUD_TELEMETRY", "false").lower() == "true":
+    if os.getenv("DISABLE_CLOUD_TELEMETRY", "true").lower() == "true":
         logger.info(
             "Telemetry disabled (DISABLE_CLOUD_TELEMETRY=true) – skipping Azure Monitor setup"
         )
@@ -136,20 +136,6 @@ def setup_azure_monitor(logger_name: str = None):
             status_msg += " (live metrics disabled)"
         logger.info(status_msg)
 
-        # Test the configuration by creating a test trace
-        from opentelemetry import trace
-
-        tracer = trace.get_tracer("azure_monitor_setup_test")
-        with tracer.start_as_current_span("azure_monitor_configuration_test") as span:
-            span.set_attributes(
-                {
-                    "setup.success": True,
-                    "setup.logger_name": logger_name,
-                    "setup.live_metrics_enabled": enable_live_metrics,
-                }
-            )
-            logger.info("🧪 Azure Monitor configuration test trace created")
-
     except ImportError:
         logger.warning(
             "⚠️ Azure Monitor OpenTelemetry not available. Install azure-monitor-opentelemetry package."
@@ -162,6 +148,12 @@ def setup_azure_monitor(logger_name: str = None):
             _retry_without_live_metrics(logger_name, connection_string)
         else:
             logger.error(f"⚠️ HTTP error configuring Azure Monitor: {e}")
+    except ServiceResponseError as e:
+        logger.warning(
+            "⚠️ Live metrics ping failed during setup. Retrying with live metrics disabled...",
+            exc_info=True,
+        )
+        _retry_without_live_metrics(logger_name, connection_string)
     except Exception as e:
         logger.error(f"⚠️ Failed to configure Azure Monitor: {e}")
         import traceback

@@ -17,7 +17,7 @@ import json
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Set, Literal
+from typing import Any, Awaitable, Callable, Dict, Optional, Set, Literal
 
 from fastapi import WebSocket
 from fastapi.websockets import WebSocketState
@@ -46,13 +46,19 @@ class ConnectionMeta:
 class _Connection:
     """Internal connection wrapper with send queue and proper thread safety."""
 
-    def __init__(self, websocket: WebSocket, meta: ConnectionMeta):
+    def __init__(
+        self,
+        websocket: WebSocket,
+        meta: ConnectionMeta,
+        on_send_failure: Optional[Callable[[Exception], Awaitable[None]]] = None,
+    ):
         self.ws = websocket
         self.meta = meta
         self._queue = asyncio.Queue(maxsize=100)  # Simple queue with reasonable limit
         self._sender_task = asyncio.create_task(self._sender_loop())
         self._send_lock = asyncio.Lock()  # Protect send operations
         self._closed = False
+        self._on_send_failure = on_send_failure
 
     async def send_json(self, payload: Dict[str, Any]) -> None:
         """Queue JSON message for sending with thread safety."""
@@ -96,15 +102,26 @@ class _Connection:
                         await self.ws.send_text(message)
                     else:
                         logger.debug(
-                            f"WebSocket not connected, dropping message",
+                            "WebSocket no longer connected; stopping sender",
                             extra={"conn_id": self.meta.connection_id},
                         )
+                        self._closed = True
+                        if self._on_send_failure:
+                            asyncio.create_task(self._on_send_failure(RuntimeError("websocket_disconnected")))
                         return
                 except Exception as e:
-                    logger.error(
-                        f"WebSocket send failed: {e}",
+                    level = logger.error
+                    message = str(e) if e else ""
+                    if isinstance(e, RuntimeError) and "close message" in message.lower():
+                        level = logger.info
+                    level(
+                        "WebSocket send failed: %s",
+                        message,
                         extra={"conn_id": self.meta.connection_id},
                     )
+                    self._closed = True
+                    if self._on_send_failure:
+                        asyncio.create_task(self._on_send_failure(e))
                     return
 
         except asyncio.CancelledError:
@@ -320,7 +337,14 @@ class ThreadSafeConnectionManager:
             topics=topics or set(),
             handler=handler,
         )
-        conn = _Connection(websocket=websocket, meta=meta)
+        async def _on_send_failure(exc: Exception, conn_id: str = conn_id):
+            await self._handle_connection_send_failure(conn_id, exc)
+
+        conn = _Connection(
+            websocket=websocket,
+            meta=meta,
+            on_send_failure=_on_send_failure,
+        )
 
         async with self._lock:
             self._conns[conn_id] = conn
@@ -337,6 +361,32 @@ class ThreadSafeConnectionManager:
             extra={"conn_id": conn_id, "session_id": session_id, "call_id": call_id},
         )
         return conn_id
+
+    async def _handle_connection_send_failure(
+        self, connection_id: str, exc: Exception
+    ) -> None:
+        """Automatically unregister connections whose sender loop failed."""
+        msg = str(exc) if exc else ""
+        if msg:
+            logger.info(
+                "Scheduling cleanup for connection %s after send failure: %s",
+                connection_id,
+                msg,
+            )
+        else:
+            logger.info(
+                "Scheduling cleanup for connection %s after send failure",
+                connection_id,
+            )
+
+        try:
+            await self.unregister(connection_id)
+        except Exception as cleanup_error:
+            logger.error(
+                "Error during send-failure cleanup for %s: %s",
+                connection_id,
+                cleanup_error,
+            )
 
     async def unregister(self, connection_id: str) -> None:
         """Remove connection and cleanup resources."""

@@ -115,22 +115,33 @@ generate_audio:
 
 # WebSocket endpoint load testing (current approach)
 # DEPLOYED_URL = 
-LOCAL_URL = localhost:8010
+REALTIME_URL = localhost:8010/api/v1/realtime/conversation
+MEDIA_URL = localhost:8010/api/v1/realtime/conversation
 run_load_test:
-	@echo "Running load test (override with e.g. make run_load_test URL=wss://host TURNS=10 CONVERSATIONS=50 CONCURRENT=5 RECORD=1 RECORD_RATE=0.1 EXTRA_ARGS='--verbose')"
-	$(eval URL ?= wss://$(LOCAL_URL)/api/v1/media/stream)
-	$(eval TURNS ?= 5)
-	$(eval CONVERSATIONS ?= 20)
-	$(eval CONCURRENT ?= 20)
-	$(eval RECORD ?= )
-	$(eval RECORD_RATE ?= 0.2)
-	@python $(SCRIPTS_LOAD_DIR)/detailed_statistics_analyzer.py \
-		--url $(URL) \
-		--turns $(TURNS) \
-		--conversations $(CONVERSATIONS) \
-		--concurrent $(CONCURRENT) \
-		$(if $(RECORD),--record) \
-		$(if $(RECORD_RATE),--record-rate $(RECORD_RATE)) \
+	@echo "Running load test (override with e.g. make run_load_test URL=ws://host USERS=10 SPAWN_RATE=2 TIME=30s EXTRA_ARGS='--headless')"
+	$(eval URL ?= ws://$(MEDIA_URL))
+	$(eval USERS ?= 10)
+	$(eval SPAWN_RATE ?= 2)
+	$(eval TIME ?= 30s)
+	@echo "🔍 Checking for audio files..."
+	@if [ ! -d "$(SCRIPTS_LOAD_DIR)/audio_cache" ] || [ -z "$$(find $(SCRIPTS_LOAD_DIR)/audio_cache -name '*.pcm' -print -quit 2>/dev/null)" ]; then \
+		echo "⚠️  No audio files found. Generating audio files first..."; \
+		$(MAKE) generate_audio; \
+	else \
+		echo "✅ Audio files found. Proceeding with load test..."; \
+	fi
+	@echo "🚀 Starting Locust load test..."
+	@echo "   Host: $(URL)"
+	@echo "   Users: $(USERS)"
+	@echo "   Spawn Rate: $(SPAWN_RATE) users/sec"
+	@echo "   Duration: $(TIME)"
+	@echo ""
+	locust -f $(SCRIPTS_LOAD_DIR)/locustfile.py \
+		--host=$(URL) \
+		--users $(USERS) \
+		--spawn-rate $(SPAWN_RATE) \
+		--run-time $(TIME) \
+		--headless \
 		$(EXTRA_ARGS)
 
 # Conversation Analysis Targets

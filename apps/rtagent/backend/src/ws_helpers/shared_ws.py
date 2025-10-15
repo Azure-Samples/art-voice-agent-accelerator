@@ -16,7 +16,7 @@ import json
 import uuid
 from typing import Optional
 
-from fastapi import WebSocket
+from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
 
 from config import (
@@ -25,7 +25,6 @@ from config import (
     TTS_SAMPLE_RATE_ACS,
     TTS_SAMPLE_RATE_UI,
 )
-from src.pools.dedicated_tts_pool import ClientTier
 from src.tools.latency_tool import LatencyTool
 from apps.rtagent.backend.src.services.acs.acs_helpers import play_response_with_queue
 from apps.rtagent.backend.src.ws_helpers.envelopes import make_status_envelope
@@ -110,28 +109,27 @@ async def send_tts_audio(
     # Use dedicated TTS client per session
     synth = None
     client_tier = None
+    temp_synth = False
     session_id = getattr(ws.state, "session_id", None)
 
-    if session_id and hasattr(ws.app.state, "dedicated_tts_manager"):
-        try:
-            (
-                synth,
-                client_tier,
-            ) = await ws.app.state.dedicated_tts_manager.get_dedicated_client(
-                session_id
-            )
-            logger.debug(
-                f"[PERF] Using dedicated TTS client for session {session_id} (tier={client_tier.value}, run={run_id})"
-            )
-        except Exception as e:
-            logger.error(
-                f"[PERF] Failed to get dedicated TTS client (run={run_id}): {e}"
-            )
+    try:
+        (
+            synth,
+            client_tier,
+        ) = await ws.app.state.tts_pool.acquire_for_session(
+            session_id
+        )
+        logger.debug(
+            f"[PERF] Using dedicated TTS client for session {session_id} (tier={client_tier.value}, run={run_id})"
+        )
+    except Exception as e:
+        logger.error(
+            f"[PERF] Failed to get dedicated TTS client (run={run_id}): {e}"
+        )
 
     # Fallback to legacy pool if dedicated system unavailable
     if not synth:
         synth = _get_connection_metadata(ws, "tts_client")
-        temp_synth = False
 
         if not synth:
             logger.warning(f"[PERF] Falling back to legacy TTS pool (run={run_id})")
@@ -219,8 +217,26 @@ async def send_tts_audio(
                         "is_final": i == len(frames) - 1,
                     }
                 )
+            except (WebSocketDisconnect, RuntimeError) as e:
+                message = str(e)
+                if message and "close message" in message.lower():
+                    logger.info(
+                        "WebSocket closing during TTS frame send (run=%s): %s",
+                        run_id,
+                        message,
+                    )
+                else:
+                    logger.debug(
+                        "WebSocket disconnected while sending TTS frame %s (run=%s): %s",
+                        i,
+                        run_id,
+                        message,
+                    )
+                break
             except Exception as e:
-                logger.error(f"Failed to send audio frame {i} (run={run_id}): {e}")
+                logger.error(
+                    f"Failed to send audio frame {i} (run={run_id}): {e}"
+                )
                 break
 
         #  Safe stop with timer cleanup
@@ -269,13 +285,14 @@ async def send_tts_audio(
         )
 
         _set_connection_metadata(ws, "is_synthesizing", False)
+        _set_connection_metadata(ws, "audio_playing", False)
         try:
             _set_connection_metadata(ws, "tts_cancel_requested", False)
         except Exception:
             pass
 
         # Enhanced pool management with dedicated clients
-        if hasattr(ws.app.state, "dedicated_tts_manager") and session_id:
+        if session_id:
             # Dedicated clients are managed by the pool manager, no manual release needed
             logger.debug(
                 f"[PERF] Dedicated TTS client usage complete (session={session_id}, run={run_id})"
