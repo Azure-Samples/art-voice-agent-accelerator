@@ -79,6 +79,14 @@ def _lt_stop(latency_tool: Optional[LatencyTool], stage: str, ws: WebSocket, met
             logger.error(f"Latency stop error for stage '{stage}': {e}")
 
 
+def _ws_is_connected(ws: WebSocket) -> bool:
+    """Return True if both client and application states are active."""
+    return (
+        ws.client_state == WebSocketState.CONNECTED
+        and ws.application_state == WebSocketState.CONNECTED
+    )
+
+
 async def send_tts_audio(
     text: str,
     ws: WebSocket,
@@ -201,9 +209,9 @@ async def send_tts_audio(
             except Exception:
                 # If metadata isn't available, proceed safely
                 pass
-            if ws.client_state != WebSocketState.CONNECTED:
-                logger.warning(
-                    f"WebSocket disconnected during audio transmission (run={run_id})"
+            if not _ws_is_connected(ws):
+                logger.debug(
+                    "WebSocket closing during browser frame send (run=%s)", run_id
                 )
                 break
             try:
@@ -219,15 +227,15 @@ async def send_tts_audio(
                 )
             except (WebSocketDisconnect, RuntimeError) as e:
                 message = str(e)
-                if message and "close message" in message.lower():
-                    logger.info(
-                        "WebSocket closing during TTS frame send (run=%s): %s",
+                if not _ws_is_connected(ws):
+                    logger.debug(
+                        "WebSocket closing during browser frame send (run=%s): %s",
                         run_id,
                         message,
                     )
                 else:
-                    logger.debug(
-                        "WebSocket disconnected while sending TTS frame %s (run=%s): %s",
+                    logger.warning(
+                        "Browser frame send failed unexpectedly (frame=%s, run=%s): %s",
                         i,
                         run_id,
                         message,
@@ -322,35 +330,47 @@ async def send_response_to_acs(
 ) -> Optional[asyncio.Task]:
     """Send TTS response to ACS phone call."""
     run_id = str(uuid.uuid4())[:8]
+    voice_to_use = voice_name or GREETING_VOICE_TTS
+    style = voice_style or "conversational"
+    eff_rate = rate or "medium"
+    frames: list[str] = []
+    synth = None
+    temp_synth = False
 
     if latency_tool:
         try:
             latency_tool.start("tts")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Latency start error (run={run_id}): {e}")
 
     if stream_mode == StreamMode.MEDIA:
         synth = _get_connection_metadata(ws, "tts_client")
-        temp_synth = False
-
         if not synth:
-            synth = await ws.app.state.tts_pool.acquire()
-            temp_synth = True
-            logger.warning("ACS MEDIA: Temporarily acquired TTS synthesizer from pool")
+            try:
+                synth = await ws.app.state.tts_pool.acquire()
+                temp_synth = True
+                logger.warning("ACS MEDIA: Temporarily acquired TTS synthesizer from pool")
+            except Exception as e:
+                logger.error(f"ACS MEDIA: Unable to acquire TTS synthesizer (run={run_id}): {e}")
+                _lt_stop(latency_tool, "tts", ws, meta={"run_id": run_id, "mode": "acs", "error": "acquire_failed"})
+                return None
 
         try:
-            voice_to_use = voice_name or GREETING_VOICE_TTS
-            style = voice_style or "conversational"
-            eff_rate = rate or "medium"
-
-            # Synthesize audio
-            pcm_bytes = synth.synthesize_to_pcm(
-                text=text,
-                voice=voice_to_use,
-                sample_rate=TTS_SAMPLE_RATE_ACS,
-                style=style,
-                rate=eff_rate,
+            logger.info(
+                "ACS MEDIA: Starting TTS synthesis (run=%s, voice=%s, text_len=%s)",
+                run_id,
+                voice_to_use,
+                len(text),
             )
+            synth_future = asyncio.to_thread(
+                synth.synthesize_to_pcm,
+                text,
+                voice_to_use,
+                TTS_SAMPLE_RATE_ACS,
+                style,
+                eff_rate,
+            )
+            pcm_bytes = await asyncio.wait_for(synth_future, timeout=6.0)
 
             # Split into frames for ACS
             frames = SpeechSynthesizer.split_pcm_to_base64_frames(
@@ -358,6 +378,12 @@ async def send_response_to_acs(
             )
 
             for frame in frames:
+                if not _ws_is_connected(ws):
+                    logger.info(
+                        "ACS MEDIA: WebSocket closing; stopping frame send (run=%s)",
+                        run_id,
+                    )
+                    break
                 lt = _get_connection_metadata(ws, "lt")
                 greeting_ttfb_stopped = _get_connection_metadata(
                     ws, "_greeting_ttfb_stopped", False
@@ -376,11 +402,69 @@ async def send_response_to_acs(
                         }
                     )
                 except Exception as e:
-                    logger.error(f"Failed to send ACS audio frame: {e}")
+                    if not _ws_is_connected(ws):
+                        logger.info(
+                            "ACS MEDIA: WebSocket closed during frame send (run=%s)",
+                            run_id,
+                        )
+                    else:
+                        logger.error(
+                            "Failed to send ACS audio frame (run=%s): %s | text_preview=%s",
+                            run_id,
+                            e,
+                            (text[:40] + "...") if len(text) > 40 else text,
+                        )
                     break
 
+            logger.info(
+                "ACS MEDIA: Completed TTS synthesis (run=%s, frames=%s)",
+                run_id,
+                len(frames),
+            )
+
+            if frames:
+                if not _ws_is_connected(ws):
+                    logger.debug(
+                        "ACS MEDIA: WebSocket closing; skipping StopAudio send (run=%s)",
+                        run_id,
+                    )
+                else:
+                    try:
+                        await ws.send_json(
+                            {"kind": "StopAudio", "AudioData": None, "StopAudio": {}}
+                        )
+                        logger.debug(
+                            "ACS MEDIA: Sent StopAudio after playback (run=%s)", run_id
+                        )
+                    except Exception as e:
+                        if not _ws_is_connected(ws):
+                            logger.debug(
+                                "ACS MEDIA: WebSocket closed before StopAudio send (run=%s)",
+                                run_id,
+                            )
+                        else:
+                            logger.warning(
+                                "ACS MEDIA: Failed to send StopAudio (run=%s): %s",
+                                run_id,
+                                e,
+                            )
+
+        except asyncio.TimeoutError:
+            logger.error(
+                "ACS MEDIA: TTS synthesis timed out (run=%s, voice=%s, text_preview=%s)",
+                run_id,
+                voice_to_use,
+                (text[:40] + "...") if len(text) > 40 else text,
+            )
+            frames = []
         except Exception as e:
-            logger.error(f"Failed to send audio frames to ACS: {e}")
+            frames = []
+            logger.error(
+                "Failed to produce ACS audio (run=%s): %s | text_preview=%s",
+                run_id,
+                e,
+                (text[:40] + "...") if len(text) > 40 else text,
+            )
         finally:
             _lt_stop(
                 latency_tool,
@@ -399,7 +483,7 @@ async def send_response_to_acs(
                 try:
                     await ws.app.state.tts_pool.release(synth)
                 except Exception as e:
-                    logger.error(f"Error releasing temporary ACS TTS synthesizer: {e}")
+                    logger.error(f"Error releasing temporary ACS TTS synthesizer (run={run_id}): {e}")
 
         return None
 
@@ -429,7 +513,7 @@ async def send_response_to_acs(
 
         # Queue with ACS
         task = asyncio.create_task(
-            play_response_with_queue(acs_caller, call_conn, text, voice_name=voice_name)
+            play_response_with_queue(acs_caller, call_conn, text, voice_name=voice_to_use)
         )
 
         _lt_stop(

@@ -440,9 +440,9 @@ async def _create_media_handler(
 
     if conn_meta:
         conn_meta.handler["cm"] = memory_manager
-        conn_meta.handler[
-            "call_conn"
-        ] = websocket.app.state.acs_caller.get_call_connection(call_connection_id)
+        # Store call connection metadata without acs_caller dependency
+        if call_connection_id:
+            conn_meta.handler["call_connection_id"] = call_connection_id
 
     if ACS_STREAMING_MODE == StreamMode.MEDIA:
         # Use the V1 ACS media handler - acquire recognizer from pool
@@ -495,9 +495,13 @@ async def _create_media_handler(
             stt_client = conn_meta.handler.get("stt_client") if conn_meta else None
             tts_client = conn_meta.handler.get("tts_client") if conn_meta else None
             if stt_client:
-                await websocket.app.state.stt_pool.release_session_resource(call_connection_id)
+                await websocket.app.state.stt_pool.release_for_session(
+                    call_connection_id, stt_client
+                )
             if tts_client:
-                await websocket.app.state.tts_pool.release_session_resource(call_connection_id)
+                await websocket.app.state.tts_pool.release_for_session(
+                    call_connection_id, tts_client
+                )
                 # Also clear from WebSocket state
                 if hasattr(websocket.state, "tts_client"):
                     websocket.state.tts_client = None
@@ -608,7 +612,7 @@ async def _process_media_stream(
         },
     ) as span:
         logger.info(
-            f"🚀 Starting media stream processing for call: {call_connection_id}"
+            f"[{call_connection_id}]🚀 Starting media stream processing for call"
         )
 
         try:
@@ -618,16 +622,40 @@ async def _process_media_stream(
                 websocket.client_state == WebSocketState.CONNECTED
                 and websocket.application_state == WebSocketState.CONNECTED
             ):
-                msg = await websocket.receive_text()
+                raw_message = await websocket.receive()
                 message_count += 1
+
+                if raw_message.get("type") == "websocket.close":
+                    logger.info(
+                        f"[{call_connection_id}] WebSocket requested close (code={raw_message.get('code')})"
+                    )
+                    raise WebSocketDisconnect(code=raw_message.get("code", 1000))
+
+                if raw_message.get("type") not in {"websocket.receive", "websocket.disconnect"}:
+                    logger.debug(
+                        f"[{call_connection_id}] Ignoring unexpected message type={raw_message.get('type')}"
+                    )
+                    continue
+
+                msg_text = raw_message.get("text")
+                if msg_text is None:
+                    if raw_message.get("bytes"):
+                        logger.debug(
+                            f"[{call_connection_id}] Received binary frame ({len(raw_message['bytes'])} bytes)"
+                        )
+                        continue
+                    logger.warning(
+                        f"[{call_connection_id}] Received message without text payload: keys={list(raw_message.keys())}"
+                    )
+                    continue
 
                 # Handle message based on streaming mode
                 if ACS_STREAMING_MODE == StreamMode.MEDIA:
-                    await handler.handle_media_message(msg)
+                    await handler.handle_media_message(msg_text)
                 elif ACS_STREAMING_MODE == StreamMode.TRANSCRIPTION:
-                    await handler.handle_transcription_message(msg)
+                    await handler.handle_transcription_message(msg_text)
                 elif ACS_STREAMING_MODE == StreamMode.VOICE_LIVE:
-                    await handler.handle_audio_data(msg)
+                    await handler.handle_audio_data(msg_text)
 
         except WebSocketDisconnect as e:
             # Handle WebSocket disconnects gracefully - treat healthy disconnects
@@ -659,7 +687,9 @@ async def _process_media_stream(
                 raise
         except Exception as e:
             span.set_status(Status(StatusCode.ERROR, f"Stream processing error: {e}"))
-            logger.error(f"❌ Error in media stream processing: {e}")
+            logger.exception(
+                f"[{call_connection_id}]❌ Error in media stream processing"
+            )
             raise
 
 
@@ -814,20 +844,20 @@ async def _cleanup_websocket_resources(
 
                 if tts_pool:
                     try:
-                        if call_connection_id:
-                            tts_released = await tts_pool.release_session_resource(
-                                call_connection_id
+                        if call_connection_id or tts_client:
+                            tts_released = await tts_pool.release_for_session(
+                                call_connection_id, tts_client
                             )
                             if tts_released:
-                                logger.info(
-                                    "Released dedicated TTS client for ACS call %s",
-                                    call_connection_id,
-                                )
-
-                        if not tts_released and tts_client:
-                            await tts_pool.release_session_resource(call_connection_id)
-                            tts_released = True
-                            logger.info("Released pooled TTS client during media cleanup")
+                                if tts_pool.session_awareness_enabled:
+                                    logger.info(
+                                        "Released dedicated TTS client for ACS call %s",
+                                        call_connection_id,
+                                    )
+                                else:
+                                    logger.info(
+                                        "Released pooled TTS client during media cleanup"
+                                    )
                     except Exception as exc:
                         logger.error(
                             "[%s] Error releasing TTS client: %s",
@@ -843,8 +873,11 @@ async def _cleanup_websocket_resources(
                 if stt_client and stt_pool:
                     try:
                         stt_client.stop()
-                        await stt_pool.release_session_resource(call_connection_id)
-                        logger.info("Released STT client during media cleanup")
+                        released = await stt_pool.release_for_session(
+                            call_connection_id, stt_client
+                        )
+                        if released:
+                            logger.info("Released STT client during media cleanup")
                     except Exception as exc:
                         logger.error(
                             "[%s] Error releasing STT client: %s",
@@ -895,9 +928,12 @@ async def _cleanup_websocket_resources(
 
             # Release dedicated TTS client for ACS media
             try:
-                released = await websocket.app.state.tts_pool.release_session_resource(
-                    call_connection_id
-                )
+                tts_pool = getattr(websocket.app.state, "tts_pool", None)
+                released = False
+                if tts_pool and tts_pool.session_awareness_enabled:
+                    released = await tts_pool.release_for_session(
+                        call_connection_id, None
+                    )
                 if released:
                     logger.info(
                         f"Released dedicated TTS client for ACS call {call_connection_id}"

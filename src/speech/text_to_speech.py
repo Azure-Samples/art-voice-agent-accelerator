@@ -14,7 +14,6 @@ import time
 from typing import Callable, Dict, List, Optional
 
 import azure.cognitiveservices.speech as speechsdk
-from utils.azure_auth import get_credential
 from dotenv import load_dotenv
 from langdetect import LangDetectException, detect
 
@@ -24,6 +23,7 @@ from opentelemetry.trace import SpanKind, Status, StatusCode
 
 # Import centralized span attributes enum
 from src.enums.monitoring import SpanAttr
+from src.speech.auth_manager import SpeechTokenManager, get_speech_token_manager
 from utils.ml_logging import get_logger
 
 # Load environment variables from a .env file if present
@@ -606,6 +606,7 @@ class SpeechSynthesizer:
         self.playback = playback
         self.enable_tracing = enable_tracing
         self.call_connection_id = call_connection_id or "unknown"
+        self._token_manager: Optional[SpeechTokenManager] = None
 
         # Initialize tracing components (matching speech_recognizer pattern)
         self.tracer = None
@@ -774,43 +775,32 @@ class SpeechSynthesizer:
             should be cached at the instance level to avoid repeated auth calls.
         """
         if self.key:
-            # Use API key authentication if provided
             logger.info("Creating SpeechConfig with API key authentication")
             speech_config = speechsdk.SpeechConfig(
                 subscription=self.key, region=self.region
             )
         else:
-            # Use Azure Default Credentials (managed identity, service principal, etc.)
-            logger.debug("Creating SpeechConfig with Azure Default Credentials")
+            logger.debug("Creating SpeechConfig with Azure AD credentials")
             if not self.region:
                 raise ValueError(
                     "Region must be specified when using Azure Default Credentials"
                 )
 
             endpoint = os.getenv("AZURE_SPEECH_ENDPOINT")
-            credential = get_credential()
+            if endpoint:
+                speech_config = speechsdk.SpeechConfig(endpoint=endpoint)
+            else:
+                speech_config = speechsdk.SpeechConfig(region=self.region)
 
-            # Use default Azure credential for authentication
-            # Get a fresh token each time to handle token expiration
             try:
-                logger.debug(
-                    "Attempting to use DefaultAzureCredential for Azure Speech"
-                )
-                credential = get_credential()
-                speech_resource_id = os.getenv("AZURE_SPEECH_RESOURCE_ID")
-                token = credential.get_token(
-                    "https://cognitiveservices.azure.com/.default"
-                )
-                auth_token = "aad#" + speech_resource_id + "#" + token.token
-                speech_config = speechsdk.SpeechConfig(
-                    auth_token=auth_token, region=self.region
-                )
-
-                logger.debug("Successfully authenticated with DefaultAzureCredential")
+                token_manager = get_speech_token_manager()
+                token_manager.apply_to_config(speech_config, force_refresh=True)
+                self._token_manager = token_manager
+                logger.debug("Successfully applied Azure AD token to SpeechConfig")
             except Exception as e:
-                logger.error(f"Failed to get Azure credential token: {e}")
+                logger.error(f"Failed to apply Azure AD speech token: {e}")
                 raise RuntimeError(
-                    f"Failed to authenticate with Azure Speech. Please set AZURE_SPEECH_KEY environment variable or ensure proper Azure credentials are configured: {e}"
+                    "Failed to authenticate with Azure Speech via Azure AD credentials"
                 )
 
         if not speech_config:
@@ -834,9 +824,11 @@ class SpeechSynthesizer:
         """
         try:
             logger.info(f"Refreshing authentication for call {self.call_connection_id}")
-            # Recreate speech config with fresh credentials
-            new_config = self._create_speech_config()
-            self.cfg = new_config
+            if self.key:
+                self.cfg = self._create_speech_config()
+            else:
+                self._ensure_auth_token(force_refresh=True)
+                self._speaker = None  # force re-creation with new token
             
             logger.info("Authentication refresh completed successfully")
             return True
@@ -870,6 +862,22 @@ class SpeechSynthesizer:
         ]
         
         return any(indicator.lower() in error_details.lower() for indicator in auth_error_indicators)
+
+    def _ensure_auth_token(self, *, force_refresh: bool = False) -> None:
+        """Ensure the cached speech configuration has a valid Azure AD token."""
+        if self.key:
+            return
+
+        if not self.cfg:
+            self.cfg = self._create_speech_config()
+
+        if not self._token_manager:
+            self._token_manager = get_speech_token_manager()
+
+        if not self.cfg:
+            raise RuntimeError("Speech configuration unavailable for token refresh")
+
+        self._token_manager.apply_to_config(self.cfg, force_refresh=force_refresh)
 
     def _create_speaker_synthesizer(self):
         """Create audio output synthesizer with intelligent playback mode handling.
@@ -976,6 +984,7 @@ class SpeechSynthesizer:
 
         # 3. Create the speaker synthesizer according to playback mode
         try:
+            self._ensure_auth_token()
             speech_config = self.cfg
             headless = _is_headless()
 
@@ -1318,6 +1327,7 @@ class SpeechSynthesizer:
     ) -> bytes:
         """Internal method to perform synthesis with tracing events"""
         voice = voice or self.voice
+        self._ensure_auth_token()
         try:
             # Add event for synthesis start
             if self._session_span:
@@ -1511,6 +1521,7 @@ class SpeechSynthesizer:
     ) -> list[str]:
         """Internal method to perform frame synthesis with tracing events"""
         voice = voice or self.voice
+        self._ensure_auth_token()
         try:
             # Add event for synthesis start
             if self._session_span:
@@ -1715,15 +1726,13 @@ class SpeechSynthesizer:
                 return False
 
             if not self.key:
-                # Test DefaultAzureCredential
                 try:
-                    credential = get_credential()
-                    token = credential.get_token(
-                        "https://cognitiveservices.azure.com/.default"
-                    )
-                    logger.info("DefaultAzureCredential authentication successful")
+                    manager = self._token_manager or get_speech_token_manager()
+                    manager.get_token(force_refresh=True)
+                    self._token_manager = manager
+                    logger.info("Azure AD authentication successful")
                 except Exception as e:
-                    logger.error(f"DefaultAzureCredential authentication failed: {e}")
+                    logger.error(f"Azure AD authentication failed: {e}")
                     return False
 
             # Test a simple synthesis to validate configuration
@@ -1769,6 +1778,8 @@ class SpeechSynthesizer:
         voice = voice or self.voice
         style = style or "chat"
         rate = rate or "+3%"
+
+        self._ensure_auth_token()
 
         speech_config = self.cfg
         speech_config.speech_synthesis_voice_name = voice

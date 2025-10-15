@@ -996,19 +996,19 @@ async def _cleanup_conversation_session(
 
                 if tts_pool:
                     try:
-                        if session_id:
-                            tts_released = await tts_pool.release_session_resource(
-                                session_id
+                        if session_id or tts_client:
+                            tts_released = await tts_pool.release_for_session(
+                                session_id, tts_client
                             )
                             if tts_released:
-                                logger.info(
-                                    f"[{session_id}] Released dedicated TTS client"
-                                )
-
-                        if not tts_released and tts_client:
-                            await tts_pool.release_session_resource(session_id)
-                            tts_released = True
-                            logger.info("Released pooled TTS client during cleanup")
+                                if tts_pool.session_awareness_enabled:
+                                    logger.info(
+                                        f"[{session_id}] Released dedicated TTS client"
+                                    )
+                                else:
+                                    logger.info(
+                                        "Released pooled TTS client during cleanup"
+                                    )
                     except Exception as e:
                         logger.error(f"[{session_id}] Error releasing TTS client: {e}")
 
@@ -1035,8 +1035,11 @@ async def _cleanup_conversation_session(
                 if stt_client and hasattr(websocket.app.state, "stt_pool"):
                     try:
                         stt_client.stop()
-                        await websocket.app.state.stt_pool.release_session_resource(session_id)
-                        logger.info("Released STT client during cleanup")
+                        released = await websocket.app.state.stt_pool.release_for_session(
+                            session_id, stt_client
+                        )
+                        if released:
+                            logger.info("Released STT client during cleanup")
                     except Exception as e:
                         logger.error(f"Error releasing STT client: {e}")
 

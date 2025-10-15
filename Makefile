@@ -116,13 +116,13 @@ generate_audio:
 # WebSocket endpoint load testing (current approach)
 # DEPLOYED_URL = 
 REALTIME_URL = localhost:8010/api/v1/realtime/conversation
-MEDIA_URL = localhost:8010/api/v1/realtime/conversation
-run_load_test:
+MEDIA_URL = localhost:8010/api/v1/media/stream
+run_load_test_acs_media:
 	@echo "Running load test (override with e.g. make run_load_test URL=ws://host USERS=10 SPAWN_RATE=2 TIME=30s EXTRA_ARGS='--headless')"
-	$(eval URL ?= ws://$(MEDIA_URL))
-	$(eval USERS ?= 10)
+	$(eval WS_URL ?= ws://$(MEDIA_URL))
+	$(eval USERS ?= 15)
 	$(eval SPAWN_RATE ?= 2)
-	$(eval TIME ?= 30s)
+	$(eval TIME ?= 90s)
 	@echo "🔍 Checking for audio files..."
 	@if [ ! -d "$(SCRIPTS_LOAD_DIR)/audio_cache" ] || [ -z "$$(find $(SCRIPTS_LOAD_DIR)/audio_cache -name '*.pcm' -print -quit 2>/dev/null)" ]; then \
 		echo "⚠️  No audio files found. Generating audio files first..."; \
@@ -131,18 +131,46 @@ run_load_test:
 		echo "✅ Audio files found. Proceeding with load test..."; \
 	fi
 	@echo "🚀 Starting Locust load test..."
-	@echo "   Host: $(URL)"
+	@echo "   Host: $(WS_URL)"
 	@echo "   Users: $(USERS)"
 	@echo "   Spawn Rate: $(SPAWN_RATE) users/sec"
 	@echo "   Duration: $(TIME)"
 	@echo ""
-	locust -f $(SCRIPTS_LOAD_DIR)/locustfile.py \
-		--host=$(URL) \
+	locust -f $(SCRIPTS_LOAD_DIR)/locustfile.acs_media.py \
+		--host=$(WS_URL) \
 		--users $(USERS) \
 		--spawn-rate $(SPAWN_RATE) \
 		--run-time $(TIME) \
 		--headless \
 		$(EXTRA_ARGS)
+
+run_load_test_realtime_conversation:
+	@echo "Running load test (override with e.g. make run_load_test URL=ws://host USERS=10 SPAWN_RATE=2 TIME=30s EXTRA_ARGS='--headless')"
+	$(eval WS_URL ?= ws://$(REALTIME_URL))
+	$(eval USERS ?= 15)
+	$(eval SPAWN_RATE ?= 2)
+	$(eval TIME ?= 90s)
+	@echo "🔍 Checking for audio files..."
+	@if [ ! -d "$(SCRIPTS_LOAD_DIR)/audio_cache" ] || [ -z "$$(find $(SCRIPTS_LOAD_DIR)/audio_cache -name '*.pcm' -print -quit 2>/dev/null)" ]; then \
+		echo "⚠️  No audio files found. Generating audio files first..."; \
+		$(MAKE) generate_audio; \
+	else \
+		echo "✅ Audio files found. Proceeding with load test..."; \
+	fi
+	@echo "🚀 Starting Locust load test..."
+	@echo "   Host: $(WS_URL)"
+	@echo "   Users: $(USERS)"
+	@echo "   Spawn Rate: $(SPAWN_RATE) users/sec"
+	@echo "   Duration: $(TIME)"
+	@echo ""
+	locust -f $(SCRIPTS_LOAD_DIR)/locustfile.realtime_conversation.py \
+		--host=$(WS_URL) \
+		--users $(USERS) \
+		--spawn-rate $(SPAWN_RATE) \
+		--run-time $(TIME) \
+		--headless \
+		$(EXTRA_ARGS)
+
 
 # Conversation Analysis Targets
 list-conversations:

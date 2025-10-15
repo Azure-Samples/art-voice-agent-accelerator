@@ -381,6 +381,11 @@ class AsyncPool(Generic[T]):
         status["metrics"] = asdict(self._metrics)
         return status
 
+    @property
+    def session_awareness_enabled(self) -> bool:
+        """Expose whether the pool tracks per-session resources."""
+        return self._enable_session_awareness
+
     async def release_session_resource(self, session_id: str) -> bool:
         """
         Release a session's dedicated resource back to the warm pool.
@@ -415,6 +420,24 @@ class AsyncPool(Generic[T]):
             self._metrics.active_sessions = len(self._dedicated_resources)
             self._metrics.cleanup_operations += 1
             return True
+
+    async def release_for_session(
+        self, session_id: Optional[str], resource: Optional[T] = None
+    ) -> bool:
+        """Release a resource regardless of session awareness configuration."""
+        if self._enable_session_awareness:
+            if not session_id:
+                logger.debug("release_for_session called without session_id")
+                return False
+            return await self.release_session_resource(session_id)
+
+        if resource is None:
+            logger.warning("release_for_session requires resource when session awareness is disabled")
+            return False
+
+        await self.release(resource)
+        self._metrics.cleanup_operations += 1
+        return True
 
     @asynccontextmanager
     async def lease_for_session(

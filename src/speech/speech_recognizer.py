@@ -13,7 +13,6 @@ import os
 from typing import Callable, List, Optional, Final
 
 import azure.cognitiveservices.speech as speechsdk
-from utils.azure_auth import get_credential
 from dotenv import load_dotenv
 
 # OpenTelemetry imports for tracing
@@ -22,6 +21,7 @@ from opentelemetry.trace import SpanKind, Status, StatusCode
 
 # Import centralized span attributes enum
 from src.enums.monitoring import SpanAttr
+from src.speech.auth_manager import SpeechTokenManager, get_speech_token_manager
 from utils.ml_logging import get_logger
 
 # Set up logger
@@ -246,6 +246,7 @@ class StreamingSpeechRecognizerFromBytes:
 
         self.call_connection_id = call_connection_id or "unknown"
         self.enable_tracing = enable_tracing
+        self._token_manager: Optional[SpeechTokenManager] = None
 
         self.partial_callback: Optional[Callable[[str, str, str | None], None]] = None
         self.final_callback: Optional[Callable[[str, str, str | None], None]] = None
@@ -349,15 +350,13 @@ class StreamingSpeechRecognizerFromBytes:
             return speechsdk.SpeechConfig(subscription=self.key, region=self.region)
         else:
             # Use Azure Default Credentials (managed identity, service principal, etc.)
-            logger.debug("Creating SpeechConfig with Entra Credentials")
+            logger.debug("Creating SpeechConfig with Azure AD credentials")
             if not self.region:
                 raise ValueError(
                     "Region must be specified when using Entra Credentials"
                 )
 
             endpoint = os.getenv("AZURE_SPEECH_ENDPOINT")
-            credential = get_credential()
-
             if endpoint:
                 # Use endpoint if provided
                 speech_config = speechsdk.SpeechConfig(endpoint=endpoint)
@@ -366,20 +365,18 @@ class StreamingSpeechRecognizerFromBytes:
 
             # Set the authorization token
             try:
-                # Get token for Cognitive Services scope
-                token_result = credential.get_token(
-                    "https://cognitiveservices.azure.com/.default"
-                )
-                speech_config.authorization_token = token_result.token
+                token_manager = get_speech_token_manager()
+                token_manager.apply_to_config(speech_config, force_refresh=True)
+                self._token_manager = token_manager
                 logger.debug(
-                    "Successfully configured SpeechConfig with Azure Default Credentials"
+                    "Successfully applied Azure AD token to SpeechConfig"
                 )
             except Exception as e:
                 logger.error(
-                    f"Failed to get Azure token: {e}. Ensure that the required RBAC role, such as 'Cognitive Services User', is assigned to your identity."
+                    f"Failed to apply Azure AD speech token: {e}. Ensure that the required RBAC role, such as 'Cognitive Services User', is assigned to your identity."
                 )
                 raise ValueError(
-                    f"Failed to authenticate with Azure Default Credentials: {e}. Ensure that the required RBAC role, such as 'Cognitive Services User', is assigned to your identity."
+                    "Failed to authenticate with Azure Speech via Azure AD credentials"
                 )
 
             return speech_config
@@ -392,9 +389,10 @@ class StreamingSpeechRecognizerFromBytes:
         """
         try:
             logger.info(f"Refreshing authentication for call {self.call_connection_id}")
-            # Recreate speech config with fresh credentials
-            new_config = self._create_speech_config()
-            self.cfg = new_config
+            if self.key:
+                self.cfg = self._create_speech_config()
+            else:
+                self._ensure_auth_token(force_refresh=True)
             
             # Clear the current speech recognizer to force recreation with new config
             if self.speech_recognizer:
@@ -432,6 +430,22 @@ class StreamingSpeechRecognizerFromBytes:
         ]
         
         return any(indicator.lower() in error_details.lower() for indicator in auth_error_indicators)
+
+    def _ensure_auth_token(self, *, force_refresh: bool = False) -> None:
+        """Ensure the Speech SDK config holds a valid Azure AD token."""
+        if self.key:
+            return
+
+        if not self.cfg:
+            self.cfg = self._create_speech_config()
+
+        if not self._token_manager:
+            self._token_manager = get_speech_token_manager()
+
+        if not self.cfg:
+            raise RuntimeError("Speech configuration unavailable for token refresh")
+
+        self._token_manager.apply_to_config(self.cfg, force_refresh=force_refresh)
 
     def restart_recognition_after_auth_refresh(self) -> bool:
         """Restart speech recognition after authentication refresh.
@@ -799,6 +813,8 @@ class StreamingSpeechRecognizerFromBytes:
             self._enable_neural_fe,
             self._enable_diarisation,
         )
+
+        self._ensure_auth_token()
 
         # ------------------------------------------------------------------ #
         # 1. SpeechConfig – global properties

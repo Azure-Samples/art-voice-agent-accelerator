@@ -24,6 +24,7 @@ from opentelemetry.sdk.trace import TracerProvider
 
 # Set up logger for this module
 logger = logging.getLogger(__name__)
+_live_metrics_permanently_disabled = False
 
 
 # Suppress Azure credential noise early
@@ -55,6 +56,8 @@ def setup_azure_monitor(logger_name: str = None):
     Args:
         logger_name (str, optional): Name for the Azure Monitor logger. Defaults to environment variable or 'default'.
     """
+    global _live_metrics_permanently_disabled
+
     # Allow hard opt-out for local dev or debugging.
     if os.getenv("DISABLE_CLOUD_TELEMETRY", "true").lower() == "true":
         logger.info(
@@ -66,7 +69,7 @@ def setup_azure_monitor(logger_name: str = None):
     logger_name = logger_name or os.getenv("AZURE_MONITOR_LOGGER_NAME", "default")
 
     # Check if we should disable live metrics due to permission issues
-    disable_live_metrics = (
+    disable_live_metrics_env = (
         os.getenv("AZURE_MONITOR_DISABLE_LIVE_METRICS", "false").lower() == "true"
     )
     # Build resource attributes, include environment name if present
@@ -95,14 +98,17 @@ def setup_azure_monitor(logger_name: str = None):
 
         # Configure with live metrics initially disabled if environment variable is set
         # or if we're in a development environment
-        enable_live_metrics = not disable_live_metrics
-        # enable_live_metrics = not disable_live_metrics and _should_enable_live_metrics()
-        logger.info(
-            f"Configuring Azure Monitor with live metrics: {enable_live_metrics}"
+        enable_live_metrics = (
+            not disable_live_metrics_env
+            and not _live_metrics_permanently_disabled
+            and _should_enable_live_metrics()
         )
 
         logger.info(
-            f"Configuring Azure Monitor with live metrics: {enable_live_metrics}"
+            "Configuring Azure Monitor with live metrics: %s (env_disable=%s, permanent_disable=%s)",
+            enable_live_metrics,
+            disable_live_metrics_env,
+            _live_metrics_permanently_disabled,
         )
 
         resource = Resource(attributes=resource_attrs)
@@ -149,9 +155,8 @@ def setup_azure_monitor(logger_name: str = None):
         else:
             logger.error(f"⚠️ HTTP error configuring Azure Monitor: {e}")
     except ServiceResponseError as e:
-        logger.warning(
-            "⚠️ Live metrics ping failed during setup. Retrying with live metrics disabled...",
-            exc_info=True,
+        _disable_live_metrics_permanently(
+            "Live metrics ping failed during setup", exc_info=e
         )
         _retry_without_live_metrics(logger_name, connection_string)
     except Exception as e:
@@ -199,6 +204,9 @@ def _retry_without_live_metrics(logger_name: str, connection_string: str):
     """
     Retry Azure Monitor configuration without live metrics if permission errors occur.
     """
+    if not connection_string:
+        return
+
     try:
         credential = _get_azure_credential()
 
@@ -228,4 +236,25 @@ def _retry_without_live_metrics(logger_name: str, connection_string: str):
     except Exception as e:
         logger.error(
             f"⚠️ Failed to configure Azure Monitor even without live metrics: {e}"
+        )
+
+
+def _disable_live_metrics_permanently(reason: str, exc_info: Exception | None = None):
+    """Set a module-level guard and environment flag to stop future QuickPulse attempts."""
+    global _live_metrics_permanently_disabled
+    if _live_metrics_permanently_disabled:
+        return
+
+    _live_metrics_permanently_disabled = True
+    os.environ["AZURE_MONITOR_DISABLE_LIVE_METRICS"] = "true"
+
+    if exc_info:
+        logger.warning(
+            "⚠️ %s. Live metrics disabled for remainder of process.",
+            reason,
+            exc_info=exc_info,
+        )
+    else:
+        logger.warning(
+            "⚠️ %s. Live metrics disabled for remainder of process.", reason
         )
