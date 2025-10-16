@@ -100,7 +100,7 @@ class ACSUser(User):
         elif candidate.startswith("http://"):
             candidate = "wss://" + candidate[len("http://") :]
         elif candidate.startswith("ws://"):
-            candidate = "wss://" + candidate[len("ws://") :]
+            candidate = "ws://" + candidate[len("ws://") :]
         elif not candidate.startswith("wss://"):
             candidate = f"wss://{candidate.lstrip('/')}"
 
