@@ -1,0 +1,1555 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Real-Time Voice Agent API",
+    "description": "Real-Time Voice Agent API",
+    "contact": {
+      "name": "Real-Time Voice Agent Team",
+      "email": "support@example.com"
+    },
+    "license": {
+      "name": "MIT License",
+      "url": "https://opensource.org/licenses/MIT"
+    },
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "tags": [
+          "health",
+          "Health"
+        ],
+        "summary": "Basic Health Check",
+        "description": "Basic health check endpoint that returns 200 if the server is running. Used by load balancers for liveness checks.",
+        "operationId": "health_check_api_v1_health_get",
+        "responses": {
+          "200": {
+            "description": "Service is healthy and running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                },
+                "example": {
+                  "status": "healthy",
+                  "version": "1.0.0",
+                  "timestamp": 1691668800.0,
+                  "message": "Real-Time Audio Agent API v1 is running",
+                  "details": {
+                    "api_version": "v1",
+                    "service": "rtagent-backend"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/readiness": {
+      "get": {
+        "tags": [
+          "health",
+          "Health"
+        ],
+        "summary": "Comprehensive Readiness Check",
+        "description": "Comprehensive readiness probe that checks all critical dependencies with timeouts.\n    \n    This endpoint verifies:\n    - Redis connectivity and performance\n    - Azure OpenAI client health\n    - Speech services (TTS/STT) availability\n    - ACS caller configuration and connectivity\n    - RT Agents initialization\n    - Authentication configuration (when ENABLE_AUTH_VALIDATION=True)\n    - Event system health\n    \n    When authentication validation is enabled, checks:\n    - BACKEND_AUTH_CLIENT_ID is set and is a valid GUID\n    - AZURE_TENANT_ID is set and is a valid GUID  \n    - ALLOWED_CLIENT_IDS contains at least one valid GUID\n    \n    Returns 503 if any critical services are unhealthy, 200 if all systems are ready.",
+        "operationId": "readiness_check_api_v1_readiness_get",
+        "responses": {
+          "200": {
+            "description": "All services are ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                },
+                "example": {
+                  "status": "ready",
+                  "timestamp": 1691668800.0,
+                  "response_time_ms": 45.2,
+                  "checks": [
+                    {
+                      "component": "redis",
+                      "status": "healthy",
+                      "check_time_ms": 12.5,
+                      "details": "Connected to Redis successfully"
+                    },
+                    {
+                      "component": "auth_configuration",
+                      "status": "healthy",
+                      "check_time_ms": 1.2,
+                      "details": "Auth validation enabled with 2 allowed client(s)"
+                    }
+                  ],
+                  "event_system": {
+                    "is_healthy": true,
+                    "handlers_count": 7,
+                    "domains_count": 2
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "One or more services are not ready",
+            "content": {
+              "application/json": {
+                "example": {
+                  "status": "not_ready",
+                  "timestamp": 1691668800.0,
+                  "response_time_ms": 1250.0,
+                  "checks": [
+                    {
+                      "component": "redis",
+                      "status": "unhealthy",
+                      "check_time_ms": 1000.0,
+                      "error": "Connection timeout"
+                    },
+                    {
+                      "component": "auth_configuration",
+                      "status": "unhealthy",
+                      "check_time_ms": 2.1,
+                      "error": "BACKEND_AUTH_CLIENT_ID is not a valid GUID"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Get Agents Info",
+        "description": "Get information about loaded RT agents including their configuration,\nmodel settings, and voice settings that can be modified.",
+        "operationId": "get_agents_info_api_v1_agents_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{agent_name}": {
+      "put": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Update Agent Config",
+        "description": "Update configuration for a specific agent (model settings, voice, etc.).\nChanges are applied to the runtime instance but not persisted to YAML files.",
+        "operationId": "update_agent_config_api_v1_agents__agent_name__put",
+        "parameters": [
+          {
+            "name": "agent_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentConfigUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/calls/initiate": {
+      "post": {
+        "tags": [
+          "Call Management",
+          "Call Management"
+        ],
+        "summary": "Initiate Outbound Call",
+        "description": "Initiate a new outbound call to the specified phone number.\n    \n    This endpoint:\n    - Validates the phone number format\n    - Generates a unique call ID\n    - Emits a call initiation event through the V1 event system\n    - Returns immediately with call status\n    \n    The actual call establishment is handled asynchronously through Azure Communication Services.",
+        "operationId": "initiate_call_api_v1_calls_initiate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CallInitiateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Call initiation successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallInitiateResponse"
+                },
+                "example": {
+                  "call_id": "call_abc12345",
+                  "status": "initiating",
+                  "target_number": "+1234567890",
+                  "message": "Call initiation requested for +1234567890"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (e.g., malformed phone number)",
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Invalid phone number format. Must be in E.164 format (e.g., +1234567890)"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error during call initiation",
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Failed to initiate call: Azure Communication Service unavailable"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/calls/": {
+      "get": {
+        "tags": [
+          "Call Management",
+          "Call Management"
+        ],
+        "summary": "List Calls",
+        "description": "Retrieve a paginated list of calls with optional filtering.\n    \n    Supports:\n    - Pagination with page and limit parameters\n    - Filtering by call status\n    - Sorting by creation time (newest first)",
+        "operationId": "list_calls_api_v1_calls__get",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Page number (1-based)",
+              "examples": {
+                "default": {
+                  "summary": "page number",
+                  "value": 1
+                }
+              },
+              "default": 1,
+              "title": "Page"
+            },
+            "description": "Page number (1-based)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "Number of items per page (1-100)",
+              "examples": {
+                "default": {
+                  "summary": "items per page",
+                  "value": 10
+                }
+              },
+              "default": 10,
+              "title": "Limit"
+            },
+            "description": "Number of items per page (1-100)"
+          },
+          {
+            "name": "status_filter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter calls by status",
+              "examples": {
+                "default": {
+                  "summary": "status filter",
+                  "value": "connected"
+                }
+              },
+              "enum": [
+                "initiating",
+                "ringing",
+                "connected",
+                "on_hold",
+                "disconnected",
+                "failed"
+              ],
+              "title": "Status Filter"
+            },
+            "description": "Filter calls by status"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Calls retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallListResponse"
+                },
+                "example": {
+                  "calls": [
+                    {
+                      "call_id": "call_abc12345",
+                      "status": "connected",
+                      "duration": 120,
+                      "participants": [],
+                      "events": []
+                    }
+                  ],
+                  "total": 25,
+                  "page": 1,
+                  "limit": 10
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid pagination parameters",
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Page number must be positive"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/calls/answer": {
+      "post": {
+        "tags": [
+          "Call Management",
+          "Call Management"
+        ],
+        "summary": "Answer Inbound Call",
+        "description": "Handle inbound call events and Event Grid subscription validation.\n    \n    This endpoint:\n    - Validates Event Grid subscription requests\n    - Answers incoming calls automatically with orchestrator selection\n    - Initializes conversation state with features\n    - Supports pluggable conversation orchestrators\n    - Provides advanced tracing and monitoring\n    \n    Enhanced V1 features:\n    - Pluggable orchestrator injection for conversation handling\n    - Enhanced state management with orchestrator metadata\n    - Advanced observability and correlation\n    - Production-ready error handling",
+        "operationId": "answer_inbound_call_api_v1_calls_answer_post",
+        "responses": {
+          "200": {
+            "description": "Inbound call processed successfully",
+            "content": {
+              "application/json": {
+                "schema": {},
+                "example": {
+                  "status": "call answered",
+                  "orchestrator": "gpt_flow",
+                  "acs_features": {
+                    "orchestrator_support": true,
+                    "advanced_tracing": true,
+                    "api_version": "v1"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Invalid Event Grid request format"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service dependencies not available",
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "ACS not initialised"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/calls/callbacks": {
+      "post": {
+        "tags": [
+          "Call Management",
+          "Call Events"
+        ],
+        "summary": "Handle ACS Callback Events",
+        "description": "Handle Azure Communication Services callback events.\n    \n    This endpoint receives webhooks from ACS when call events occur:\n    - Call connected/disconnected\n    - Participant joined/left\n    - Media events (DTMF tones, play completed, etc.)\n    - Transfer events\n    \n    The endpoint validates authentication, processes events through the \n    V1 CallEventProcessor system, and returns processing results.",
+        "operationId": "handle_acs_callbacks_api_v1_calls_callbacks_post",
+        "responses": {
+          "200": {
+            "description": "Events processed successfully",
+            "content": {
+              "application/json": {
+                "schema": {},
+                "example": {
+                  "status": "success",
+                  "processed_events": 1,
+                  "call_connection_id": "abc123"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Event processing failed",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "Failed to process callback events"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service dependencies not available",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": "ACS not initialised"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/media/status": {
+      "get": {
+        "tags": [
+          "ACS Media Session",
+          "WebSocket"
+        ],
+        "summary": "Get Media Streaming Status",
+        "description": "Get the current status of media streaming configuration.\n\n:return: Current media streaming configuration and status\n:rtype: dict",
+        "operationId": "get_media_status_api_v1_media_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Media Status Api V1 Media Status Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/media/sessions": {
+      "post": {
+        "tags": [
+          "ACS Media Session",
+          "WebSocket"
+        ],
+        "summary": "Create Media Session",
+        "description": "Create a new media streaming session for Azure Communication Services.\n\nInitializes a media session with specified audio configuration and returns\nWebSocket connection details for real-time audio streaming. This endpoint\nprepares the infrastructure for bidirectional media communication with\nconfigurable audio parameters.\n\nArgs:\n    request: Media session configuration including call connection ID, \n            audio format, sample rate, and streaming options.\n\nReturns:\n    MediaSessionResponse: Session details containing unique session ID,\n    WebSocket URL for streaming, status, and audio configuration.\n\nRaises:\n    HTTPException: When session creation fails due to invalid configuration\n                  or system resource constraints.\n\nExample:\n    >>> request = MediaSessionRequest(call_connection_id=\"call_123\")\n    >>> response = await create_media_session(request)\n    >>> print(response.websocket_url)",
+        "operationId": "create_media_session_api_v1_media_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MediaSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaSessionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/media/sessions/{session_id}": {
+      "get": {
+        "tags": [
+          "ACS Media Session",
+          "WebSocket"
+        ],
+        "summary": "Get Media Session Status",
+        "description": "Retrieve status and metadata for a specific media session.\n\nQueries the current state of an active media session including connection\nstatus, WebSocket state, and session configuration details. Used for\nmonitoring and debugging media streaming sessions.\n\nArgs:\n    session_id: Unique identifier for the media session to query.\n\nReturns:\n    dict: Session information including status, connection state, creation\n    timestamp, and API version details.\n\nExample:\n    >>> session_info = await get_media_session(\"media_session_123\")\n    >>> print(session_info[\"status\"])",
+        "operationId": "get_media_session_api_v1_media_sessions__session_id__get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Media Session Api V1 Media Sessions  Session Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/realtime/status": {
+      "get": {
+        "tags": [
+          "Real-time Communication",
+          "WebSocket",
+          "Realtime Status"
+        ],
+        "summary": "Get Realtime Service Status",
+        "description": "Get the current status of the realtime communication service.\n    \n    Returns information about:\n    - Service availability and health\n    - Supported protocols and features\n    - Active connection counts\n    - WebSocket endpoint configurations",
+        "operationId": "get_realtime_status_api_v1_realtime_status_get",
+        "responses": {
+          "200": {
+            "description": "Service status retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RealtimeStatusResponse"
+                },
+                "example": {
+                  "status": "available",
+                  "websocket_endpoints": {
+                    "dashboard_relay": "/api/v1/realtime/dashboard/relay",
+                    "conversation": "/api/v1/realtime/conversation"
+                  },
+                  "features": {
+                    "dashboard_broadcasting": true,
+                    "conversation_streaming": true,
+                    "orchestrator_support": true,
+                    "session_management": true
+                  },
+                  "active_connections": {
+                    "dashboard_clients": 0,
+                    "conversation_sessions": 0
+                  },
+                  "version": "v1"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AgentConfigUpdate": {
+        "properties": {
+          "model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentModelUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "voice": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentVoiceUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "title": "AgentConfigUpdate"
+      },
+      "AgentModelUpdate": {
+        "properties": {
+          "deployment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deployment Id"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temperature"
+          },
+          "top_p": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top P"
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens"
+          }
+        },
+        "type": "object",
+        "title": "AgentModelUpdate"
+      },
+      "AgentVoiceUpdate": {
+        "properties": {
+          "voice_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Voice Name"
+          },
+          "voice_style": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Voice Style"
+          }
+        },
+        "type": "object",
+        "title": "AgentVoiceUpdate"
+      },
+      "CallInitiateRequest": {
+        "properties": {
+          "target_number": {
+            "type": "string",
+            "pattern": "^\\+[1-9]\\d{1,14}$",
+            "title": "Target Number",
+            "description": "Phone number to call in E.164 format (e.g., +1234567890)",
+            "example": "+1234567890"
+          },
+          "caller_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Caller Id",
+            "description": "Caller ID to display (optional, uses system default if not provided)",
+            "example": "+1987654321"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context",
+            "description": "Additional call context metadata",
+            "example": {
+              "customer_id": "cust_12345",
+              "department": "support",
+              "priority": "high",
+              "source": "web_portal"
+            }
+          }
+        },
+        "type": "object",
+        "required": [
+          "target_number"
+        ],
+        "title": "CallInitiateRequest",
+        "description": "Request model for initiating a call.",
+        "example": {
+          "caller_id": "+1987654321",
+          "context": {
+            "customer_id": "cust_12345",
+            "department": "support"
+          },
+          "target_number": "+1234567890"
+        }
+      },
+      "CallInitiateResponse": {
+        "properties": {
+          "call_id": {
+            "type": "string",
+            "title": "Call Id",
+            "description": "Unique call identifier",
+            "example": "call_abc12345"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Current call status",
+            "example": "initiating"
+          },
+          "target_number": {
+            "type": "string",
+            "title": "Target Number",
+            "description": "Target phone number",
+            "example": "+1234567890"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "Human-readable status message",
+            "example": "Call initiation requested"
+          }
+        },
+        "type": "object",
+        "required": [
+          "call_id",
+          "status",
+          "target_number",
+          "message"
+        ],
+        "title": "CallInitiateResponse",
+        "description": "Response model for call initiation.",
+        "example": {
+          "call_id": "call_abc12345",
+          "message": "Call initiation requested for +1234567890",
+          "status": "initiating",
+          "target_number": "+1234567890"
+        }
+      },
+      "CallListResponse": {
+        "properties": {
+          "calls": {
+            "items": {
+              "$ref": "#/components/schemas/CallStatusResponse"
+            },
+            "type": "array",
+            "title": "Calls",
+            "description": "List of calls"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "Total number of calls matching criteria",
+            "example": 25
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page",
+            "description": "Current page number (1-based)",
+            "default": 1,
+            "example": 1
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit",
+            "description": "Number of items per page",
+            "default": 10,
+            "example": 10
+          }
+        },
+        "type": "object",
+        "required": [
+          "calls",
+          "total"
+        ],
+        "title": "CallListResponse",
+        "description": "Response model for listing calls.",
+        "example": {
+          "calls": [
+            {
+              "call_id": "call_abc12345",
+              "duration": 120,
+              "events": [],
+              "participants": [],
+              "status": "connected"
+            }
+          ],
+          "limit": 10,
+          "page": 1,
+          "total": 25
+        }
+      },
+      "CallStatusResponse": {
+        "properties": {
+          "call_id": {
+            "type": "string",
+            "title": "Call Id",
+            "description": "Unique call identifier",
+            "example": "call_abc12345"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "initiating",
+              "ringing",
+              "connected",
+              "on_hold",
+              "disconnected",
+              "failed"
+            ],
+            "title": "Status",
+            "description": "Current call status",
+            "example": "connected"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration",
+            "description": "Call duration in seconds (null if not connected)",
+            "example": 120
+          },
+          "participants": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Participants",
+            "description": "List of call participants",
+            "example": [
+              {
+                "id": "participant_1",
+                "phone_number": "+1234567890",
+                "role": "caller",
+                "status": "connected"
+              }
+            ]
+          },
+          "events": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Events",
+            "description": "Recent call events",
+            "example": [
+              {
+                "details": {
+                  "connection_established": true
+                },
+                "timestamp": "2025-08-10T13:45:30Z",
+                "type": "call_connected"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "call_id",
+          "status"
+        ],
+        "title": "CallStatusResponse",
+        "description": "Response model for call status.",
+        "example": {
+          "call_id": "call_abc12345",
+          "duration": 120,
+          "events": [
+            {
+              "details": {
+                "connection_established": true
+              },
+              "timestamp": "2025-08-10T13:45:30Z",
+              "type": "call_connected"
+            }
+          ],
+          "participants": [
+            {
+              "id": "participant_1",
+              "phone_number": "+1234567890",
+              "role": "caller",
+              "status": "connected"
+            }
+          ],
+          "status": "connected"
+        }
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Overall health status",
+            "example": "healthy"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version",
+            "description": "API version",
+            "default": "1.0.0",
+            "example": "1.0.0"
+          },
+          "timestamp": {
+            "type": "number",
+            "title": "Timestamp",
+            "description": "Timestamp when check was performed",
+            "example": 1691668800.0
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "Human-readable status message",
+            "example": "Real-Time Audio Agent API v1 is running"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details",
+            "description": "Additional health details",
+            "example": {
+              "api_version": "v1",
+              "service": "rtagent-backend"
+            }
+          },
+          "active_sessions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Sessions",
+            "description": "Current number of active realtime conversation sessions (None if unavailable)",
+            "example": 3
+          },
+          "session_metrics": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Metrics",
+            "description": "Optional granular session metrics (connected/disconnected, etc.)",
+            "example": {
+              "active": 3,
+              "connected": 5,
+              "disconnected": 2
+            }
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "timestamp",
+          "message"
+        ],
+        "title": "HealthResponse",
+        "description": "Health check response model.",
+        "example": {
+          "active_sessions": 3,
+          "details": {
+            "api_version": "v1",
+            "service": "rtagent-backend"
+          },
+          "message": "Real-Time Audio Agent API v1 is running",
+          "session_metrics": {
+            "active": 3,
+            "connected": 5,
+            "disconnected": 2
+          },
+          "status": "healthy",
+          "timestamp": 1691668800.0,
+          "version": "1.0.0"
+        }
+      },
+      "MediaSessionRequest": {
+        "properties": {
+          "call_connection_id": {
+            "type": "string",
+            "title": "Call Connection Id",
+            "description": "ACS call connection identifier",
+            "example": "call_12345"
+          },
+          "sample_rate": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample Rate",
+            "description": "Audio sample rate in Hz",
+            "default": 16000,
+            "example": 16000
+          },
+          "channels": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channels",
+            "description": "Number of audio channels",
+            "default": 1,
+            "example": 1
+          },
+          "audio_format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audio Format",
+            "description": "Audio format (pcm_16, pcm_24, opus, etc.)",
+            "default": "pcm_16",
+            "example": "pcm_16"
+          },
+          "chunk_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Size",
+            "description": "Audio chunk size in bytes",
+            "default": 1024,
+            "example": 1024
+          },
+          "enable_transcription": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enable Transcription",
+            "description": "Enable real-time transcription",
+            "default": true,
+            "example": true
+          },
+          "enable_vad": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enable Vad",
+            "description": "Enable voice activity detection",
+            "default": true,
+            "example": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "call_connection_id"
+        ],
+        "title": "MediaSessionRequest",
+        "description": "Request schema for starting a media session.",
+        "example": {
+          "audio_format": "pcm_16",
+          "call_connection_id": "call_12345",
+          "channels": 1,
+          "chunk_size": 1024,
+          "enable_transcription": true,
+          "enable_vad": true,
+          "sample_rate": 16000
+        }
+      },
+      "MediaSessionResponse": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id",
+            "description": "Unique media session identifier",
+            "example": "media_session_123456"
+          },
+          "websocket_url": {
+            "type": "string",
+            "title": "Websocket Url",
+            "description": "WebSocket URL for audio streaming",
+            "example": "wss://api.example.com/v1/media/stream/media_session_123456"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Session status",
+            "example": "active"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "description": "Session creation timestamp",
+            "example": "2025-08-10T13:45:00Z"
+          },
+          "configuration": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Configuration",
+            "description": "Session configuration settings",
+            "example": {
+              "channels": 1,
+              "chunk_size": 1024,
+              "format": "pcm_16",
+              "sample_rate": 16000
+            }
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "websocket_url",
+          "status",
+          "created_at",
+          "configuration"
+        ],
+        "title": "MediaSessionResponse",
+        "description": "Response schema for media session creation.",
+        "example": {
+          "configuration": {
+            "channels": 1,
+            "chunk_size": 1024,
+            "format": "pcm_16",
+            "sample_rate": 16000
+          },
+          "created_at": "2025-08-10T13:45:00Z",
+          "session_id": "media_session_123456",
+          "status": "active",
+          "websocket_url": "wss://api.example.com/v1/media/stream/media_session_123456"
+        }
+      },
+      "ReadinessResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "not_ready",
+              "degraded"
+            ],
+            "title": "Status",
+            "description": "Overall readiness status",
+            "example": "ready"
+          },
+          "timestamp": {
+            "type": "number",
+            "title": "Timestamp",
+            "description": "Timestamp when check was performed",
+            "example": 1691668800.0
+          },
+          "response_time_ms": {
+            "type": "number",
+            "title": "Response Time Ms",
+            "description": "Total time taken for all checks in milliseconds",
+            "example": 45.2
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceCheck"
+            },
+            "type": "array",
+            "title": "Checks",
+            "description": "Individual component health checks"
+          },
+          "event_system": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event System",
+            "description": "Event system status information",
+            "example": {
+              "domains_count": 2,
+              "handlers_count": 7,
+              "is_healthy": true
+            }
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "timestamp",
+          "response_time_ms",
+          "checks"
+        ],
+        "title": "ReadinessResponse",
+        "description": "Comprehensive readiness check response model.",
+        "example": {
+          "checks": [
+            {
+              "check_time_ms": 12.5,
+              "component": "redis",
+              "details": "Connected to Redis successfully",
+              "status": "healthy"
+            },
+            {
+              "check_time_ms": 8.3,
+              "component": "azure_openai",
+              "details": "Client initialized",
+              "status": "healthy"
+            }
+          ],
+          "event_system": {
+            "domains_count": 2,
+            "handlers_count": 7,
+            "is_healthy": true
+          },
+          "response_time_ms": 45.2,
+          "status": "ready",
+          "timestamp": 1691668800.0
+        }
+      },
+      "RealtimeStatusResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "available",
+              "degraded",
+              "unavailable"
+            ],
+            "title": "Status",
+            "description": "Current service status",
+            "example": "available"
+          },
+          "websocket_endpoints": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Websocket Endpoints",
+            "description": "Available WebSocket endpoints",
+            "example": {
+              "conversation": "/api/v1/realtime/conversation",
+              "dashboard_relay": "/api/v1/realtime/dashboard/relay"
+            }
+          },
+          "features": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "type": "object",
+            "title": "Features",
+            "description": "Supported features and capabilities",
+            "example": {
+              "conversation_streaming": true,
+              "dashboard_broadcasting": true,
+              "orchestrator_support": true,
+              "session_management": true
+            }
+          },
+          "active_connections": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Active Connections",
+            "description": "Current active connection counts",
+            "example": {
+              "conversation_sessions": 0,
+              "dashboard_clients": 0
+            }
+          },
+          "protocols_supported": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Protocols Supported",
+            "description": "Supported communication protocols",
+            "default": [
+              "WebSocket"
+            ],
+            "example": [
+              "WebSocket"
+            ]
+          },
+          "version": {
+            "type": "string",
+            "title": "Version",
+            "description": "API version",
+            "default": "v1",
+            "example": "v1"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "websocket_endpoints",
+          "features",
+          "active_connections"
+        ],
+        "title": "RealtimeStatusResponse",
+        "description": "Response schema for realtime service status endpoint.\n\nProvides comprehensive information about the realtime communication\nservice including availability, features, and active connections."
+      },
+      "ServiceCheck": {
+        "properties": {
+          "component": {
+            "type": "string",
+            "title": "Component",
+            "description": "Name of the component being checked",
+            "example": "redis"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "unhealthy",
+              "degraded"
+            ],
+            "title": "Status",
+            "description": "Health status of the component",
+            "example": "healthy"
+          },
+          "check_time_ms": {
+            "type": "number",
+            "title": "Check Time Ms",
+            "description": "Time taken to perform the check in milliseconds",
+            "example": 12.5
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error",
+            "description": "Error message if check failed",
+            "example": "Connection timeout"
+          },
+          "details": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Details",
+            "description": "Additional details about the check",
+            "example": "Connected to Redis successfully"
+          }
+        },
+        "type": "object",
+        "required": [
+          "component",
+          "status",
+          "check_time_ms"
+        ],
+        "title": "ServiceCheck",
+        "description": "Individual service check result.",
+        "example": {
+          "check_time_ms": 12.5,
+          "component": "redis",
+          "details": "Connected to Redis successfully",
+          "status": "healthy"
+        }
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

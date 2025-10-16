@@ -1,0 +1,145 @@
+/* OpenAPI Documentation (OAD) Custom Styles */
+
+/* Table of Contents styling */
+.oad-toc {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 0.25rem;
+    padding: 1rem;
+    margin-bottom: 2rem;
+}
+
+.oad-toc h3 {
+    margin-top: 0;
+    color: #495057;
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+.oad-toc ul {
+    list-style-type: none;
+    padding-left: 0;
+}
+
+.oad-toc li {
+    margin: 0.25rem 0;
+}
+
+.oad-toc a {
+    text-decoration: none;
+    color: #007bff;
+    padding: 0.25rem 0;
+    display: block;
+}
+
+.oad-toc a:hover {
+    color: #0056b3;
+    background-color: #f1f3f4;
+    padding-left: 0.5rem;
+    border-radius: 0.125rem;
+}
+
+/* API sections styling */
+.oad-section {
+    margin-bottom: 3rem;
+}
+
+.oad-section h2 {
+    color: #2c3e50;
+    border-bottom: 2px solid #3498db;
+    padding-bottom: 0.5rem;
+}
+
+.oad-operation {
+    margin: 1.5rem 0;
+    border: 1px solid #e9ecef;
+    border-radius: 0.5rem;
+    overflow: hidden;
+}
+
+.oad-operation-header {
+    background: #f8f9fa;
+    padding: 1rem;
+    border-bottom: 1px solid #e9ecef;
+}
+
+.oad-method {
+    font-weight: bold;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    color: white;
+    font-size: 0.875rem;
+    margin-right: 0.5rem;
+}
+
+.oad-method.get { background-color: #28a745; }
+.oad-method.post { background-color: #007bff; }
+.oad-method.put { background-color: #ffc107; color: #212529; }
+.oad-method.delete { background-color: #dc3545; }
+.oad-method.patch { background-color: #6f42c1; }
+
+.oad-path {
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 1rem;
+    color: #495057;
+}
+
+.oad-summary {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #2c3e50;
+    margin: 0.5rem 0;
+}
+
+.oad-description {
+    color: #6c757d;
+    line-height: 1.5;
+}
+
+/* Response and request styling */
+.oad-responses, .oad-parameters {
+    padding: 1rem;
+}
+
+.oad-response-code {
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-weight: bold;
+    color: #28a745;
+}
+
+.oad-schema {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 0.25rem;
+    padding: 1rem;
+    margin: 0.5rem 0;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 0.875rem;
+    overflow-x: auto;
+}
+
+/* Dark mode support */
+[data-md-color-scheme="slate"] .oad-toc {
+    background: #2d3748;
+    border-color: #4a5568;
+    color: #e2e8f0;
+}
+
+[data-md-color-scheme="slate"] .oad-toc h3 {
+    color: #e2e8f0;
+}
+
+[data-md-color-scheme="slate"] .oad-toc a {
+    color: #63b3ed;
+}
+
+[data-md-color-scheme="slate"] .oad-toc a:hover {
+    background-color: #4a5568;
+    color: #90cdf4;
+}
+
+[data-md-color-scheme="slate"] .oad-schema {
+    background: #2d3748;
+    border-color: #4a5568;
+    color: #e2e8f0;
+}
