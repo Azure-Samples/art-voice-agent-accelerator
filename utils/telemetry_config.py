@@ -25,6 +25,7 @@ from opentelemetry.sdk.trace import TracerProvider
 # Set up logger for this module
 logger = logging.getLogger(__name__)
 _live_metrics_permanently_disabled = False
+_azure_monitor_configured = False
 
 
 # Suppress Azure credential noise early
@@ -48,6 +49,12 @@ def suppress_azure_credential_logs():
 suppress_azure_credential_logs()
 
 
+def is_azure_monitor_configured() -> bool:
+    """Return True when Azure Monitor finished configuring successfully."""
+
+    return _azure_monitor_configured
+
+
 def setup_azure_monitor(logger_name: str = None):
     """
     Configure Azure Monitor / Application Insights if connection string is available.
@@ -56,7 +63,9 @@ def setup_azure_monitor(logger_name: str = None):
     Args:
         logger_name (str, optional): Name for the Azure Monitor logger. Defaults to environment variable or 'default'.
     """
-    global _live_metrics_permanently_disabled
+    global _live_metrics_permanently_disabled, _azure_monitor_configured
+
+    _azure_monitor_configured = False
 
     # Allow hard opt-out for local dev or debugging.
     if os.getenv("DISABLE_CLOUD_TELEMETRY", "true").lower() == "true":
@@ -141,6 +150,7 @@ def setup_azure_monitor(logger_name: str = None):
         if not enable_live_metrics:
             status_msg += " (live metrics disabled)"
         logger.info(status_msg)
+        _azure_monitor_configured = True
 
     except ImportError:
         logger.warning(
@@ -207,6 +217,8 @@ def _retry_without_live_metrics(logger_name: str, connection_string: str):
     if not connection_string:
         return
 
+    global _azure_monitor_configured
+
     try:
         credential = _get_azure_credential()
 
@@ -232,11 +244,13 @@ def _retry_without_live_metrics(logger_name: str, connection_string: str):
         logger.info(
             "✅ Azure Monitor configured successfully (live metrics disabled due to permissions)"
         )
+        _azure_monitor_configured = True
 
     except Exception as e:
         logger.error(
             f"⚠️ Failed to configure Azure Monitor even without live metrics: {e}"
         )
+        _azure_monitor_configured = False
 
 
 def _disable_live_metrics_permanently(reason: str, exc_info: Exception | None = None):

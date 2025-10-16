@@ -140,6 +140,7 @@ AZURE_LOCATION=$(get_azd_value "AZURE_LOCATION")
 # Application Configuration
 ACS_STREAMING_MODE=media
 ENVIRONMENT=$AZD_ENV_NAME
+DISABLE_CLOUD_TELEMETRY=false
 
 # Logging Configuration
 LOG_LEVEL=$(get_azd_value "LOG_LEVEL" "INFO")

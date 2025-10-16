@@ -23,12 +23,16 @@ _telemetry_disabled = os.getenv("DISABLE_CLOUD_TELEMETRY", "false").lower() == "
 if not _telemetry_disabled:
     from opentelemetry import trace
     from opentelemetry.sdk._logs import LoggingHandler
-    from utils.telemetry_config import setup_azure_monitor
+    from utils.telemetry_config import (
+        setup_azure_monitor,
+        is_azure_monitor_configured,
+    )
 else:
     # Mock objects when telemetry is disabled
     trace = None
     LoggingHandler = None
     setup_azure_monitor = lambda *args, **kwargs: None
+    is_azure_monitor_configured = lambda: False
 
 colorama_init(autoreset=True)
 
@@ -256,12 +260,14 @@ def get_logger(
     has_azure_handler = LoggingHandler is not None and any(
         isinstance(h, LoggingHandler) for h in logger.handlers
     )
-    if (
+    should_attach_azure_handler = (
         not has_azure_handler
         and not _telemetry_disabled
         and LoggingHandler is not None
-        and os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING")
-    ):
+        and is_azure_monitor_configured()
+    )
+
+    if should_attach_azure_handler:
         try:
             azure_handler = LoggingHandler(level=logging.INFO)
             logger.addHandler(azure_handler)

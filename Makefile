@@ -115,11 +115,11 @@ generate_audio:
 
 # WebSocket endpoint load testing (current approach)
 # DEPLOYED_URL = 
-REALTIME_URL = localhost:8010/api/v1/realtime/conversation
-MEDIA_URL = localhost:8010/api/v1/media/stream
+# HOST = localhost:8010
+HOST = rtaudioagent-backend-yvy2hvjq.purplesmoke-1d68a4cd.eastus.azurecontainerapps.io
 run_load_test_acs_media:
 	@echo "Running load test (override with e.g. make run_load_test URL=ws://host USERS=10 SPAWN_RATE=2 TIME=30s EXTRA_ARGS='--headless')"
-	$(eval WS_URL ?= ws://$(MEDIA_URL))
+	$(eval WS_URL ?= ws://$(HOST)/api/v1/media/stream)
 	$(eval USERS ?= 15)
 	$(eval SPAWN_RATE ?= 2)
 	$(eval TIME ?= 90s)
@@ -146,7 +146,7 @@ run_load_test_acs_media:
 
 run_load_test_realtime_conversation:
 	@echo "Running load test (override with e.g. make run_load_test URL=ws://host USERS=10 SPAWN_RATE=2 TIME=30s EXTRA_ARGS='--headless')"
-	$(eval WS_URL ?= ws://$(REALTIME_URL))
+	$(eval WS_URL ?= ws://$(HOST)/api/v1/realtime/conversation)
 	$(eval USERS ?= 15)
 	$(eval SPAWN_RATE ?= 2)
 	$(eval TIME ?= 90s)

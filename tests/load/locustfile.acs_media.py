@@ -14,11 +14,11 @@ WS_IGNORE_CLOSE_EXCEPTIONS = os.getenv("WS_IGNORE_CLOSE_EXCEPTIONS", "true").low
 
 ## For debugging websocket connections
 # websocket.enableTrace(True)
-# print("WS_URL =", os.environ.get("WS_URL"))
+# print("LOCUST_HOST =", os.environ.get("LOCUST_HOST"))
 
 #
 # --- Config ---
-WS_URL = os.getenv("WS_URL", "ws://127.0.0.1:8010/api/v1/media/stream")
+DEFAULT_WS_URL = os.getenv("WS_URL")
 PCM_DIR = os.getenv("PCM_DIR", "tests/load/audio_cache")  # If set, iterate .pcm files in this directory per turn
 # PCM_PATH = os.getenv("PCM_PATH", "sample_16k_s16le_mono.pcm")  # Used if no directory provided
 SAMPLE_RATE = int(os.getenv("SAMPLE_RATE", "16000"))  # Hz
@@ -68,6 +68,30 @@ def generate_silence_chunk(duration_ms: float = 100.0, sample_rate: int = 16000)
   # PCM16LE and other signed
 
 class ACSUser(User):
+    def _resolve_ws_url(self) -> str:
+        candidate = (self.environment.host or DEFAULT_WS_URL or "").strip()
+        if not candidate:
+            raise RuntimeError(
+                "No websocket host configured. Provide --host/LOCUST_HOST or legacy WS_URL."
+            )
+
+        if candidate.startswith("https://"):
+            candidate = "wss://" + candidate[len("https://") :]
+        elif candidate.startswith("http://"):
+            candidate = "wss://" + candidate[len("http://") :]
+        elif candidate.startswith("ws://"):
+            candidate = "wss://" + candidate[len("ws://") :]
+        elif not candidate.startswith("wss://"):
+            candidate = f"wss://{candidate.lstrip('/')}"
+
+        parsed = urllib.parse.urlparse(candidate)
+        path = parsed.path or ""
+        if path in {"", "/"}:
+            parsed = parsed._replace(path="/api/v1/media/stream")
+            candidate = urllib.parse.urlunparse(parsed)
+
+        return candidate
+
     def _recv_with_timeout(self, per_attempt_timeout: float):
         try:
             self.ws.settimeout(per_attempt_timeout)
@@ -128,7 +152,7 @@ class ACSUser(User):
     def _connect_ws(self):
         # Emulate ACS headers that many servers expect for correlation
         self.call_connection_id = f"{uuid.uuid4()}"
-        url = f"{WS_URL}"
+        url = self._resolve_ws_url()
         self.correlation_id = str(uuid.uuid4())
 
         # Parse host for SNI and Origin
@@ -140,6 +164,7 @@ class ACSUser(User):
             f"x-call-connection-id: {self.call_connection_id}",
             f"x-session-id: {self.call_connection_id}",
         ]
+        print(url)
         sslopt = {}
         if url.startswith("wss://"):
             sslopt = {
@@ -148,11 +173,12 @@ class ACSUser(User):
                 "check_hostname": True,
                 "server_hostname": host,   # ensure SNI
             }
+        origin_scheme = "https" if url.startswith("wss://") else "http"
         # Explicitly disable proxies even if env vars are set
         self.ws = websocket.create_connection(
             url,
             header=headers,
-            origin=f"https://{host}",
+            origin=f"{origin_scheme}://{host}",
             enable_multithread=True,
             sslopt=sslopt,
             http_proxy_host=None,

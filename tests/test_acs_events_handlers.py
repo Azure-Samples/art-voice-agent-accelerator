@@ -8,8 +8,10 @@ Focused tests for the refactored ACS events handling.
 import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
+from types import SimpleNamespace
 from azure.core.messaging import CloudEvent
 
+import apps.rtagent.backend.api.v1.events.handlers as events_handlers
 from apps.rtagent.backend.api.v1.events.handlers import CallEventHandlers
 from apps.rtagent.backend.api.v1.events.types import (
     CallEventContext,
@@ -37,6 +39,29 @@ class TestCallEventHandlers:
         )
         context.memo_manager = MagicMock()
         context.redis_mgr = MagicMock()
+        context.clients = []
+
+        # Stub ACS caller connection with participants list
+        call_conn = MagicMock()
+        call_conn.list_participants.return_value = [
+            SimpleNamespace(
+                identifier=SimpleNamespace(
+                    kind="phone_number", properties={"value": "+1234567890"}
+                )
+            ),
+            SimpleNamespace(
+                identifier=SimpleNamespace(kind="communicationUser", properties={})
+            ),
+        ]
+
+        acs_caller = MagicMock()
+        acs_caller.get_call_connection.return_value = call_conn
+        context.acs_caller = acs_caller
+
+        # App state with redis pool stub
+        redis_pool = AsyncMock()
+        redis_pool.get = AsyncMock(return_value=None)
+        context.app_state = SimpleNamespace(redis_pool=redis_pool, conn_manager=None)
         return context
 
     @patch("apps.rtagent.backend.api.v1.events.handlers.logger")
@@ -85,24 +110,29 @@ class TestCallEventHandlers:
         self, mock_logger, mock_context
     ):
         """Test call connected handler with WebSocket broadcast."""
-        mock_clients = [MagicMock(), MagicMock()]
-        mock_context.clients = mock_clients
-
         with patch(
             "apps.rtagent.backend.api.v1.events.handlers.broadcast_message"
-        ) as mock_broadcast:
+        ) as mock_broadcast, patch(
+            "apps.rtagent.backend.api.v1.events.handlers.DTMFValidationLifecycle.setup_aws_connect_validation_flow",
+            new=AsyncMock(),
+        ) as mock_dtmf:
             await CallEventHandlers.handle_call_connected(mock_context)
 
+            if events_handlers.DTMF_VALIDATION_ENABLED:
+                mock_dtmf.assert_awaited()
+            else:
+                mock_dtmf.assert_not_awaited()
             mock_broadcast.assert_called_once()
-            # Verify message structure
-            args = mock_broadcast.call_args
-            assert args[0][0] == mock_clients  # clients
-            # Message should be JSON string
+
+            args, kwargs = mock_broadcast.call_args
+            assert args[0] is None
+
             import json
 
-            message = json.loads(args[0][1])
+            message = json.loads(args[1])
             assert message["type"] == "call_connected"
             assert message["call_connection_id"] == "test_123"
+            assert kwargs["session_id"] == "test_123"
 
     @patch("apps.rtagent.backend.api.v1.events.handlers.logger")
     async def test_handle_dtmf_tone_received(self, mock_logger, mock_context):

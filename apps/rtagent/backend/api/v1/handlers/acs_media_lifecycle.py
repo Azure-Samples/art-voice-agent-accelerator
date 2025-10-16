@@ -336,7 +336,7 @@ class SpeechSDKThread:
         def on_error(error: str):
             logger.error(f"[{self.call_connection_id}] Speech error: {error}")
             error_event = SpeechEvent(event_type=SpeechEventType.ERROR, text=error)
-            self.queue_speech_result(self.speech_queue, error_event)
+            self.thread_bridge.queue_speech_result(self.speech_queue, error_event)
 
         try:
             logger.debug(

@@ -319,25 +319,34 @@ async def lifespan(app: FastAPI):
                 audio_format=AUDIO_FORMAT,
             )
 
-        logger.info("Initializing Speech Recognizer pool")
+        logger.info("Initializing Speech pools")
+        # STT Pool: Session-agnostic design for maximum flexibility
+        # Speech-to-text recognizers can float between sessions since they only
+        # consume audio input and produce text transcriptions. Each STT instance
+        # is stateless and can be safely shared across different call sessions
+        # without resource conflicts or session-specific state contamination.
         app.state.stt_pool = AsyncPool(
             factory=make_stt,
             size=app_config.speech_pools.stt_pool_size,
-            enable_session_awareness=False,
-            enable_prewarming=False,
-            enable_cleanup=False,
+            enable_session_awareness=False,  # STT instances can serve any session
+            enable_prewarming=False,  # Simple on-demand allocation
+            enable_cleanup=False,     # Minimal lifecycle management
             acquire_timeout=2.0,
         )
         
-        logger.info("Initializing Speech Synthesizer pool")
+        # TTS Pool: Session-aware design for voice consistency and state preservation
+        # Text-to-speech synthesizers maintain voice characteristics, prosody state,
+        # and conversation context that must remain consistent within a session.
+        # Dedicated session assignment prevents voice drift and ensures natural
+        # conversation flow by preserving speaker-specific synthesis parameters.
         app.state.tts_pool = AsyncPool(
             factory=make_tts,
             size=app_config.speech_pools.tts_pool_size,
-            enable_session_awareness=True,
+            enable_session_awareness=True,  # Each session gets dedicated TTS instance
             max_dedicated_resources=app_config.connections.max_connections,
-            enable_prewarming=True,
+            enable_prewarming=True,         # Pre-allocate for low latency
             prewarming_batch_size=5,
-            enable_cleanup=True,
+            enable_cleanup=True,            # Manage long-lived session resources
             cleanup_interval_seconds=180,
             resource_max_age_seconds=1800,
             acquire_timeout=2.0,

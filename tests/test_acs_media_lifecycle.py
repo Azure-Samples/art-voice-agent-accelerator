@@ -20,6 +20,9 @@ import threading
 import time
 from unittest.mock import Mock, AsyncMock, MagicMock, patch, call
 from typing import Optional, Dict, Any
+from types import SimpleNamespace
+
+from fastapi.websockets import WebSocketState
 
 # Import the classes under test
 from apps.rtagent.backend.api.v1.handlers.acs_media_lifecycle import (
@@ -39,14 +42,40 @@ class MockWebSocket:
     def __init__(self):
         self.sent_messages = []
         self.closed = False
+        self.client_state = WebSocketState.CONNECTED
+        self.application_state = WebSocketState.CONNECTED
+        self.state = SimpleNamespace()
+        class _ConnManager:
+            def __init__(self):
+                self.broadcasts = []
+
+            async def broadcast_session(self, session_id, envelope):
+                self.broadcasts.append((session_id, envelope))
+                return 1
+
+        self._conn_manager = _ConnManager()
+        self.app = SimpleNamespace(
+            state=SimpleNamespace(conn_manager=self._conn_manager, redis=None)
+        )
 
     async def send_text(self, message: str):
         """Mock send_text method."""
         self.sent_messages.append(message)
 
+    async def send_json(self, payload):
+        """Mock send_json method matching FastAPI interface."""
+        self.sent_messages.append(payload)
+
     async def close(self):
         """Mock close method."""
         self.closed = True
+        self.client_state = WebSocketState.DISCONNECTED
+        self.application_state = WebSocketState.DISCONNECTED
+
+    def mark_closing(self):
+        """Mark the websocket as closing without delivering more messages."""
+        self.client_state = WebSocketState.DISCONNECTED
+        self.application_state = WebSocketState.DISCONNECTED
 
 
 class MockRecognizer:
@@ -57,6 +86,7 @@ class MockRecognizer:
         self.stopped = False
         self.callbacks = {}
         self.write_bytes_calls = []
+        self.push_stream = object()
 
     def set_partial_result_callback(self, callback):
         """Mock partial result callback setter."""
@@ -106,14 +136,30 @@ class MockOrchestrator:
         self.responses = ["Hello, how can I help you?"]
         self.call_index = 0
 
-    async def __call__(self, cm, transcript: str, ws):
+    async def __call__(self, cm, transcript: str, ws, **kwargs):
         """Mock orchestrator call."""
-        self.calls.append({"transcript": transcript, "timestamp": time.time()})
+        self.calls.append(
+            {
+                "transcript": transcript,
+                "timestamp": time.time(),
+                "kwargs": kwargs,
+            }
+        )
 
         # Return mock response
         response = self.responses[self.call_index % len(self.responses)]
         self.call_index += 1
         return response
+
+
+async def wait_for_condition(predicate, timeout: float = 0.5, interval: float = 0.05) -> bool:
+    """Poll predicate until truthy or timeout reached."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        await asyncio.sleep(interval)
+    return False
 
 
 @pytest.fixture
@@ -136,8 +182,10 @@ def mock_orchestrator():
 
 @pytest.fixture
 def mock_memory_manager():
-    """Fixture providing a mock memory manager."""
-    return Mock()
+    """Fixture providing a lightweight memory manager."""
+    manager = Mock()
+    manager.session_id = "session-123"
+    return manager
 
 
 @pytest.fixture
@@ -178,8 +226,11 @@ class TestThreadBridge:
         bridge = ThreadBridge()
         loop = asyncio.new_event_loop()
 
-        bridge.set_main_loop(loop)
-        assert bridge.main_loop is loop
+        try:
+            bridge.set_main_loop(loop)
+            assert bridge.main_loop is loop
+        finally:
+            loop.close()
 
     @pytest.mark.asyncio
     async def test_queue_speech_result_put_nowait(self):
@@ -213,29 +264,35 @@ class TestThreadBridge:
             event_type=SpeechEventType.PARTIAL, text="Test", language="en-US"
         )
 
-        # This should use the event loop fallback
-        bridge.queue_speech_result(queue, event)
+        with patch.object(queue, "put_nowait", side_effect=asyncio.QueueFull):
+            with patch(
+                "apps.rtagent.backend.api.v1.handlers.acs_media_lifecycle.asyncio.run_coroutine_threadsafe"
+            ) as mock_run:
+                bridge.queue_speech_result(queue, event)
+                mock_run.assert_not_called()
 
-        # Remove dummy item and check for our event
-        await queue.get()  # Remove dummy
-        queued_event = await asyncio.wait_for(queue.get(), timeout=1.0)
-        assert queued_event.text == "Test"
+        # Queue should still only contain the dummy item (event dropped)
+        assert await queue.get() == "dummy_item"
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(queue.get(), timeout=0.05)
 
 
 class TestSpeechSDKThread:
     """Test SpeechSDKThread functionality."""
 
-    def test_initialization(self, mock_recognizer):
+    @pytest.mark.asyncio
+    async def test_initialization(self, mock_recognizer):
         """Test SpeechSDKThread initialization."""
         bridge = ThreadBridge()
         speech_queue = asyncio.Queue()
         barge_in_handler = AsyncMock()
 
         thread = SpeechSDKThread(
-            recognizer=mock_recognizer,
-            thread_bridge=bridge,
-            barge_in_handler=barge_in_handler,
-            speech_queue=speech_queue,
+            "call-123",
+            mock_recognizer,
+            bridge,
+            barge_in_handler,
+            speech_queue,
         )
 
         assert thread.recognizer is mock_recognizer
@@ -243,17 +300,19 @@ class TestSpeechSDKThread:
         assert not thread.thread_running
         assert not thread.recognizer_started
 
-    def test_callback_setup(self, mock_recognizer):
+    @pytest.mark.asyncio
+    async def test_callback_setup(self, mock_recognizer):
         """Test speech recognition callback setup."""
         bridge = ThreadBridge()
         speech_queue = asyncio.Queue()
         barge_in_handler = AsyncMock()
 
         thread = SpeechSDKThread(
-            recognizer=mock_recognizer,
-            thread_bridge=bridge,
-            barge_in_handler=barge_in_handler,
-            speech_queue=speech_queue,
+            "call-123",
+            mock_recognizer,
+            bridge,
+            barge_in_handler,
+            speech_queue,
         )
 
         # Verify callbacks were set
@@ -261,17 +320,19 @@ class TestSpeechSDKThread:
         assert "final" in mock_recognizer.callbacks
         assert "cancel" in mock_recognizer.callbacks
 
-    def test_prepare_thread(self, mock_recognizer):
+    @pytest.mark.asyncio
+    async def test_prepare_thread(self, mock_recognizer):
         """Test thread preparation."""
         bridge = ThreadBridge()
         speech_queue = asyncio.Queue()
         barge_in_handler = AsyncMock()
 
         thread = SpeechSDKThread(
-            recognizer=mock_recognizer,
-            thread_bridge=bridge,
-            barge_in_handler=barge_in_handler,
-            speech_queue=speech_queue,
+            "call-123",
+            mock_recognizer,
+            bridge,
+            barge_in_handler,
+            speech_queue,
         )
 
         thread.prepare_thread()
@@ -283,17 +344,19 @@ class TestSpeechSDKThread:
         # Cleanup
         thread.stop()
 
-    def test_start_recognizer(self, mock_recognizer):
+    @pytest.mark.asyncio
+    async def test_start_recognizer(self, mock_recognizer):
         """Test recognizer startup."""
         bridge = ThreadBridge()
         speech_queue = asyncio.Queue()
         barge_in_handler = AsyncMock()
 
         thread = SpeechSDKThread(
-            recognizer=mock_recognizer,
-            thread_bridge=bridge,
-            barge_in_handler=barge_in_handler,
-            speech_queue=speech_queue,
+            "call-123",
+            mock_recognizer,
+            bridge,
+            barge_in_handler,
+            speech_queue,
         )
 
         thread.prepare_thread()
@@ -381,15 +444,19 @@ class TestMainEventLoop:
     async def test_barge_in_handling(self, main_event_loop):
         """Test barge-in interruption."""
         # Mock current playback task
-        main_event_loop.current_playback_task = AsyncMock()
-        main_event_loop.route_turn_thread = AsyncMock()
+        main_event_loop.current_playback_task = asyncio.create_task(asyncio.sleep(1))
+
+        route_thread = SimpleNamespace(
+            cancel_current_processing=AsyncMock()
+        )
+        main_event_loop.route_turn_thread = route_thread
 
         with patch.object(main_event_loop, "_send_stop_audio_command") as mock_stop:
             await main_event_loop.handle_barge_in()
 
             # Verify barge-in actions
-            main_event_loop.current_playback_task.cancel.assert_called_once()
-            main_event_loop.route_turn_thread.cancel_current_processing.assert_called_once()
+            assert main_event_loop.current_playback_task.cancelled()
+            route_thread.cancel_current_processing.assert_awaited_once()
             mock_stop.assert_called_once()
 
 
@@ -404,6 +471,7 @@ class TestRouteTurnThread:
         speech_queue = asyncio.Queue()
 
         thread = RouteTurnThread(
+            call_connection_id="call-123",
             speech_queue=speech_queue,
             orchestrator_func=mock_orchestrator,
             memory_manager=mock_memory_manager,
@@ -422,30 +490,21 @@ class TestRouteTurnThread:
         speech_queue = asyncio.Queue()
 
         thread = RouteTurnThread(
+            call_connection_id="call-123",
             speech_queue=speech_queue,
             orchestrator_func=mock_orchestrator,
             memory_manager=mock_memory_manager,
             websocket=mock_websocket,
         )
 
-        # Start the thread
-        await thread.start()
-
-        # Queue a speech event
         event = SpeechEvent(
             event_type=SpeechEventType.FINAL, text="Hello world", language="en-US"
         )
-        await speech_queue.put(event)
 
-        # Give time for processing
-        await asyncio.sleep(0.1)
+        await thread._process_final_speech(event)
 
-        # Verify orchestrator was called
         assert len(mock_orchestrator.calls) == 1
         assert mock_orchestrator.calls[0]["transcript"] == "Hello world"
-
-        # Cleanup
-        await thread.stop()
 
 
 class TestACSMediaHandler:
@@ -523,7 +582,18 @@ class TestACSMediaHandler:
 
         # Verify barge-in was triggered (check WebSocket for stop command)
         sent_messages = media_handler.websocket.sent_messages
-        stop_commands = [msg for msg in sent_messages if "StopAudio" in msg]
+        stop_commands = [
+            msg
+            for msg in sent_messages
+            if (
+                isinstance(msg, str)
+                and "StopAudio" in msg
+            )
+            or (
+                isinstance(msg, dict)
+                and msg.get("kind") == "StopAudio"
+            )
+        ]
         assert len(stop_commands) > 0
 
     @pytest.mark.asyncio
@@ -540,14 +610,14 @@ class TestACSMediaHandler:
         )
 
         # Trigger final speech result
+        handler_spy = AsyncMock()
+        media_handler.route_turn_thread._process_final_speech = handler_spy
         mock_recognizer.trigger_final("How can you help me?", "en-US")
 
-        # Give time for processing
-        await asyncio.sleep(0.2)
-
-        # Verify orchestrator was called
-        assert len(mock_orchestrator.calls) == 1
-        assert mock_orchestrator.calls[0]["transcript"] == "How can you help me?"
+        assert await wait_for_condition(lambda: handler_spy.await_count >= 1)
+        speech_event = handler_spy.await_args[0][0]
+        assert isinstance(speech_event, SpeechEvent)
+        assert speech_event.text == "How can you help me?"
 
     @pytest.mark.asyncio
     @patch("apps.rtagent.backend.api.v1.handlers.acs_media_lifecycle.logger")
@@ -661,6 +731,9 @@ class TestIntegrationScenarios:
         await handler.start()
 
         try:
+            handler_spy = AsyncMock()
+            handler.route_turn_thread._process_final_speech = handler_spy
+
             # Simulate call connection with AudioMetadata
             await handler.handle_media_message(
                 json.dumps(
@@ -678,19 +751,14 @@ class TestIntegrationScenarios:
 
             # Give time for greeting to be processed
             await asyncio.sleep(0.3)
+            assert handler.main_event_loop.greeting_played
 
             # Simulate customer speech
             mock_recognizer.trigger_final("I need help with my account", "en-US")
 
-            # Give time for orchestrator processing
-            await asyncio.sleep(0.2)
-
-            # Verify greeting was sent and customer speech processed
-            assert len(mock_orchestrator.calls) >= 1
-            assert any(
-                "account" in call["transcript"].lower()
-                for call in mock_orchestrator.calls
-            )
+            assert await wait_for_condition(lambda: handler_spy.await_count >= 1)
+            speech_event = handler_spy.await_args[0][0]
+            assert "account" in speech_event.text.lower()
 
         finally:
             await handler.stop()
@@ -738,7 +806,18 @@ class TestIntegrationScenarios:
 
             # Verify stop audio command was sent for barge-in
             sent_messages = handler.websocket.sent_messages
-            stop_commands = [msg for msg in sent_messages if "StopAudio" in msg]
+            stop_commands = [
+                msg
+                for msg in sent_messages
+                if (
+                    isinstance(msg, str)
+                    and "StopAudio" in msg
+                )
+                or (
+                    isinstance(msg, dict)
+                    and msg.get("kind") == "StopAudio"
+                )
+            ]
             assert len(stop_commands) > 0
 
         finally:

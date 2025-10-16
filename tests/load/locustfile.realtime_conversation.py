@@ -24,8 +24,7 @@ WS_IGNORE_CLOSE_EXCEPTIONS = os.getenv("WS_IGNORE_CLOSE_EXCEPTIONS", "true").low
 
 #
 # --- Config ---
-WS_URL = os.getenv("WS_URL", "ws://127.0.0.1:8010/api/v1/realtime/conversation")
-# WS_URL = os.getenv("WS_URL", "ws://127.0.0.1:8010/api/v1/media/stream")
+DEFAULT_WS_URL = os.getenv("WS_URL")
 PCM_DIR = os.getenv(
     "PCM_DIR", "tests/load/audio_cache"
 )  # If set, iterate .pcm files in this directory per turn
@@ -89,6 +88,30 @@ def generate_silence_chunk(duration_ms: float = 100.0, sample_rate: int = 16000)
     return bytes(audio_data)
 
 class ACSUser(User):
+    def _resolve_ws_url(self) -> str:
+        candidate = (self.environment.host or DEFAULT_WS_URL or "").strip()
+        if not candidate:
+            raise RuntimeError(
+                "No websocket host configured. Provide --host/LOCUST_HOST or legacy WS_URL."
+            )
+
+        if candidate.startswith("https://"):
+            candidate = "wss://" + candidate[len("https://") :]
+        elif candidate.startswith("http://"):
+            candidate = "wss://" + candidate[len("http://") :]
+        elif candidate.startswith("ws://"):
+            candidate = "wss://" + candidate[len("ws://") :]
+        elif not candidate.startswith("wss://"):
+            candidate = f"wss://{candidate.lstrip('/')}"
+
+        parsed = urllib.parse.urlparse(candidate)
+        path = parsed.path or ""
+        if path in {"", "/"}:
+            parsed = parsed._replace(path="/api/v1/realtime/conversation")
+            candidate = urllib.parse.urlunparse(parsed)
+
+        return candidate
+
     def _get_ws_timeout(self) -> float:
         return getattr(self, "_ws_default_timeout", _safe_timeout_value(WS_OPERATION_TIMEOUT_SEC))
 
@@ -167,7 +190,7 @@ class ACSUser(User):
     def _connect_ws(self):
         # Emulate ACS headers that many servers expect for correlation
         self.call_connection_id = f"{uuid.uuid4()}"
-        url = f"{WS_URL}"
+        url = self._resolve_ws_url()
 
         self.correlation_id = str(uuid.uuid4())
 
@@ -188,11 +211,12 @@ class ACSUser(User):
                 "check_hostname": True,
                 "server_hostname": host,   # ensure SNI
             }
+        origin_scheme = "https" if url.startswith("wss://") else "http"
         # Explicitly disable proxies even if env vars are set
         self.ws = websocket.create_connection(
             url,
             header=headers,
-            origin=f"https://{host}",
+            origin=f"{origin_scheme}://{host}",
             enable_multithread=True,
             sslopt=sslopt,
             http_proxy_host=None,
