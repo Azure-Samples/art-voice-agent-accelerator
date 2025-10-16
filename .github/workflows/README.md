@@ -126,7 +126,7 @@ Customize where Terraform state is stored:
 - **Manual Approval**: Staging/prod require manual triggers
 - **Secret Management**: Azure Key Vault for application secrets
 
-## � Monitoring & Troubleshooting
+##  Monitoring & Troubleshooting
 
 ### Workflow Monitoring
 - **GitHub Actions**: Check Actions tab for deployment status

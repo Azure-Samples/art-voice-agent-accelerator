@@ -1,8 +1,8 @@
 site_name: Real-Time Voice Agent Documentation
 site_description: Azure-powered real-time voice agent with text-to-speech and speech recognition capabilities
-site_url: https://pablosalvador10.github.io/gbb-ai-audio-agent/
-repo_url: https://github.com/pablosalvador10/gbb-ai-audio-agent
-repo_name: pablosalvador10/gbb-ai-audio-agent
+# site_url: https://github.com/Azure-Samples/art-voice-agent-accelerator/
+repo_url: https://github.com/Azure-Samples/art-voice-agent-accelerator/
+repo_name: Azure-Samples/art-voice-agent-accelerator
 
 theme:
   name: material
@@ -33,6 +33,8 @@ theme:
 
 plugins:
   - search
+  - mermaid2
+  - neoteroi.mkdocsoad
   - mkdocstrings:
       handlers:
         python:
@@ -51,31 +53,57 @@ plugins:
 nav:
   - Home: index.md
   - Getting Started:
-    - Installation: getting-started/installation.md
-    - Quick Start: getting-started/quickstart.md
-    - Configuration: getting-started/configuration.md
-  - API Reference:
-    - Overview: api/overview.md
-    - Speech Synthesis: api/speech-synthesis.md
-    - Speech Recognition: api/speech-recognition.md
-    - Utilities: api/utilities.md
+    - Quick Start Guide: getting-started/README.md
+    - Local Development: getting-started/local-development.md
+    - Configuration Guide: getting-started/configuration.md
   - Architecture:
-    - Overview: architecture/overview.md
-    - Azure Integration: architecture/azure-integration.md
-    - Observability: architecture/observability.md
-  - Examples:
-    - Basic Usage: examples/basic-usage.md
-    - Advanced Scenarios: examples/advanced-scenarios.md
-    - Production Deployment: examples/production.md
-
+    - Overview: architecture/README.md
+    - LLM Orchestration: architecture/llm-orchestration.md
+    - ACS Flows: architecture/acs-flows.md
+    - Data Flows: architecture/data-flows.md
+    - Speech Recognition: architecture/speech-recognition.md
+    - Speech Synthesis: architecture/speech-synthesis.md
+    - Streaming Modes: architecture/streaming-modes.md
+    - Integrations: architecture/integrations.md
+  - Deployment:
+    - Deployment Guide: deployment/README.md
+    - Production: deployment/production.md
+    - CI/CD: deployment/cicd.md
+  - Security:
+    - Authentication: security/authentication.md
+  - Operations:
+    - Monitoring: operations/monitoring.md
+    - Troubleshooting: operations/troubleshooting.md
+    - Testing: operations/testing.md
+    - Load Testing: operations/load-testing.md
+  - API Reference:
+    - Overview: api/README.md
+    - API Reference: api/api-reference.md
+  - Industry Solutions:
+    - Healthcare: industry/healthcare.md
+  - Samples & Labs:
+    - Overview: samples/README.md
+  - Guides:
+    - Repository Structure: guides/repository-structure.md
+    - Utilities & Services: guides/utilities.md
+extra_css:
+  - assets/oad-styles.css
 markdown_extensions:
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - pymdownx.highlight:
       anchor_linenums: true
       line_spans: __span
       pygments_lang_class: true
   - pymdownx.inlinehilite
   - pymdownx.snippets
-  - pymdownx.superfences
+  - pymdownx.superfences:
+        # make exceptions to highlighting of code:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:mermaid2.fence_mermaid
   - pymdownx.tabbed:
       alternate_style: true
   - admonition
@@ -89,3 +117,6 @@ markdown_extensions:
   - md_in_html
   - tables
   - footnotes
+  - toc:
+      permalink: true
+      baselevel: 2

@@ -3,13 +3,44 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gbb-ai-audio-agent"
-version = "0.0.0"
-description = "Real-time voice app: FastAPI + Azure ACS/Speech/OpenAI"
+name = "art-voice-agent-accelerator"
+version = "1.0.0"
+description = "Real-time voice agent with Azure AI and Apps Service"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
-authors = [{ name = "Contributors" }]
+authors = [
+    { name = "Pablo Salvador", email = "pablosalvador11@gmail.com" },
+    { name = "Jin Lee" }
+]
+keywords = ["azure", "speech", "voice", "tts", "stt", "real-time", "audio", "ai", "communication-services"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Communications :: Telephony",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+
+[project.urls]
+Documentation = "https://azure-samples.github.io/art-voice-agent-accelerator/"
+Source = "https://github.com/Azure-Samples/art-voice-agent-accelerator"
+Tracker = "https://github.com/Azure-Samples/art-voice-agent-accelerator/issues"
+
+[project.optional-dependencies]
+docs = [
+    "mkdocs>=1.5.0",
+    "mkdocs-material>=9.0.0",
+    "mkdocstrings[python]>=0.20.0",
+    "pymdown-extensions>=10.0.0",
+]
+
+
 # Read dependencies from requirements.txt
 dynamic = ["dependencies"]
 
@@ -162,7 +193,7 @@ ignore-nested-functions = true
 ignore-private = true
 ignore-property-decorators = true
 fail-under = 70
-exclude = ["setup.py", "tests", "venv", ".venv", "build", "dist"]
+exclude = ["tests", "venv", ".venv", "build", "dist"]
 verbosity = 0
 color = true
 

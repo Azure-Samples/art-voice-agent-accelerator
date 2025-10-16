@@ -22,8 +22,8 @@ Create an issue for bugs, feature requests, or enhancements before starting work
 
 ### 2. Clone and Setup
 ```bash
-git clone https://github.com/pablosalvador10/gbb-ai-audio-agent.git
-cd gbb-ai-audio-agent
+git clone https://github.com/Azure-Samples/art-voice-agent-accelerator.git
+cd art-voice-agent-accelerator
 ```
 
 ### 3. Environment Setup
