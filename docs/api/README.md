@@ -41,7 +41,7 @@ Real-time **bidirectional audio streaming** following [Azure Communication Servi
 - **Transport**: WebSocket over TCP with full-duplex communication
 - **Latency**: Sub-50ms for voice activity detection and response generation
 
-**� [WebSocket Details](api-reference.md#websocket-endpoints)** - Complete protocol documentation
+** [WebSocket Details](api-reference.md#websocket-endpoints)** - Complete protocol documentation
 
 ## Observability
 
@@ -65,7 +65,7 @@ The API supports multiple streaming modes configured via `ACS_STREAMING_MODE`:
 
 **Three-Thread Design** - Optimized for real-time conversational AI with sub-10ms barge-in detection following [Azure Speech SDK best practices](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-recognize-speech).
 
-**� [Architecture Details](../architecture/acs-flows.md)** - Complete three-thread architecture documentation
+** [Architecture Details](../architecture/acs-flows.md)** - Complete three-thread architecture documentation
 
 ## Reliability
 

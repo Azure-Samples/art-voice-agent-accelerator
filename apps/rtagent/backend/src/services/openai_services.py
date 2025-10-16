@@ -24,7 +24,7 @@ from utils.azure_auth import get_credential
 
 logger = logging.getLogger(__name__)
 
-
+#TODO: Consolidate this service wrapper to reference the module already defined in src/aoai
 def create_azure_openai_client():
     """
     Create and configure Azure OpenAI client with appropriate authentication method.
