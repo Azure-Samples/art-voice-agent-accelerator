@@ -14,14 +14,14 @@ from typing import Any, Dict, List, Literal, Optional
 import numpy as np
 from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 # Load environment variables from .env file
 load_dotenv()
 
 from .transport import WebSocketTransport
 from .audio_io import MicSource, SpeakerSink, pcm_to_base64
-from utils.azure_auth import get_credential
+from src.tools.azure_auth import get_credential
 
 logger = get_logger(__name__)
 

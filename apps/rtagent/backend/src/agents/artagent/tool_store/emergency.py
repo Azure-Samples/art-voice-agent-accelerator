@@ -1,7 +1,7 @@
 from typing import Any, Dict, TypedDict
 
 from apps.rtagent.backend.src.agents.artagent.tool_store.functions_helper import _json
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger("tool_store.emergency")
 

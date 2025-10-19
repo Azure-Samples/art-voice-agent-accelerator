@@ -22,7 +22,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional, Set, Literal
 from fastapi import WebSocket
 from fastapi.websockets import WebSocketState
 
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger(__name__)
 

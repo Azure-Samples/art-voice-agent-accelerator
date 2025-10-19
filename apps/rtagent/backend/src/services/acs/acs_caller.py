@@ -22,7 +22,7 @@ from config import (
 )
 from apps.rtagent.backend.src.services.acs.acs_helpers import construct_websocket_url
 from src.acs.acs_helper import AcsCaller
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger("services.acs_caller")
 

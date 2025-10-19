@@ -67,7 +67,7 @@ from apps.rtagent.backend.src.ws_helpers.envelopes import (
 from src.speech.speech_recognizer import StreamingSpeechRecognizerFromBytes
 from src.postcall.push import build_and_flush
 from src.stateful.state_managment import MemoManager
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 # V1 components
 from ..dependencies.orchestrator import get_orchestrator

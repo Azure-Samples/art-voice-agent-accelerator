@@ -22,7 +22,7 @@ from typing import Callable, Any, Optional, List, Dict
 from azure.identity import DefaultAzureCredential
 from azure.ai.agents import AgentsClient
 from azure.ai.agents.models import FunctionTool, ToolSet
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger("foundry_agent_builder")
 

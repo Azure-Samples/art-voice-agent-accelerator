@@ -24,7 +24,7 @@ from opentelemetry.trace import SpanKind, Status, StatusCode
 # Import centralized span attributes enum
 from src.enums.monitoring import SpanAttr
 from src.speech.auth_manager import SpeechTokenManager, get_speech_token_manager
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 # Load environment variables from a .env file if present
 load_dotenv()

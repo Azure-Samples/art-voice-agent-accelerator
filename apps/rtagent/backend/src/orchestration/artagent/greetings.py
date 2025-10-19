@@ -14,7 +14,7 @@ from apps.rtagent.backend.src.ws_helpers.shared_ws import (
     send_response_to_acs,
 )
 from apps.rtagent.backend.src.ws_helpers.envelopes import make_status_envelope
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger(__name__)
 

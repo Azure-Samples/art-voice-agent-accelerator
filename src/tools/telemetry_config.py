@@ -17,7 +17,7 @@ except Exception:
     pass
 
 from azure.core.exceptions import HttpResponseError, ServiceResponseError
-from utils.azure_auth import get_credential, ManagedIdentityCredential
+from src.tools.azure_auth import get_credential, ManagedIdentityCredential
 from azure.monitor.opentelemetry import configure_azure_monitor
 from opentelemetry.sdk.resources import Resource, ResourceAttributes
 from opentelemetry.sdk.trace import TracerProvider

@@ -11,7 +11,7 @@ from apps.rtagent.backend.src.agents.artagent.tool_store.handoffs import (
 from apps.rtagent.backend.src.agents.artagent.tool_store.policies import (
     find_information_for_policy,
 )
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 log = get_logger("tools_helper")
 

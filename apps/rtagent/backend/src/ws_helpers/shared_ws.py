@@ -33,7 +33,7 @@ from apps.rtagent.backend.src.services.acs.acs_helpers import play_response_with
 from apps.rtagent.backend.src.ws_helpers.envelopes import make_status_envelope
 from apps.rtagent.backend.src.services.speech_services import SpeechSynthesizer
 from src.enums.stream_modes import StreamMode
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger("shared_ws")
 

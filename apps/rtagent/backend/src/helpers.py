@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 from fastapi import WebSocket
 
 from config import STOP_WORDS
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 import time
 from collections import deque
 from statistics import quantiles

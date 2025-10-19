@@ -23,7 +23,7 @@ _telemetry_disabled = os.getenv("DISABLE_CLOUD_TELEMETRY", "false").lower() == "
 if not _telemetry_disabled:
     from opentelemetry import trace
     from opentelemetry.sdk._logs import LoggingHandler
-    from utils.telemetry_config import (
+    from src.tools.telemetry_config import (
         setup_azure_monitor,
         is_azure_monitor_configured,
     )

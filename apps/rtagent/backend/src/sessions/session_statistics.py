@@ -19,7 +19,7 @@ from typing import Dict, Any, Optional
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind
 
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger(__name__)
 tracer = trace.get_tracer(__name__)

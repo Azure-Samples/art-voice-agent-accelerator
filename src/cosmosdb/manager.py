@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 import pymongo
 import yaml
-from utils.azure_auth import get_credential
+from src.tools.azure_auth import get_credential
 from dotenv import load_dotenv
 from pymongo.auth_oidc import OIDCCallback, OIDCCallbackContext, OIDCCallbackResult
 from pymongo.errors import DuplicateKeyError, NetworkTimeout, PyMongoError

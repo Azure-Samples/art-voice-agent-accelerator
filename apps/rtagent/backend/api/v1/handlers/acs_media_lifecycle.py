@@ -43,7 +43,7 @@ from apps.rtagent.backend.src.orchestration.artagent.orchestrator import route_t
 from src.enums.stream_modes import StreamMode
 from src.speech.speech_recognizer import StreamingSpeechRecognizerFromBytes
 from src.stateful.state_managment import MemoManager
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger("v1.handlers.acs_media_lifecycle")
 tracer = trace.get_tracer(__name__)

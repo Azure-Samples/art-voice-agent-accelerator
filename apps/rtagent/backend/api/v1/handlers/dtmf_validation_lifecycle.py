@@ -26,7 +26,7 @@ from azure.communication.callautomation import CallConnectionClient
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind
 
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 from ..events.types import CallEventContext
 
 logger = get_logger("v1.handlers.dtmf_validation_lifecycle")

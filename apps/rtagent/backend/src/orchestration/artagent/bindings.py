@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import WebSocket
 
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger(__name__)
 

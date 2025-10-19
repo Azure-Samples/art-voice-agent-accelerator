@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, Tuple, TYPE_CHECKING
 
 from fastapi import WebSocket
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger(__name__)
 

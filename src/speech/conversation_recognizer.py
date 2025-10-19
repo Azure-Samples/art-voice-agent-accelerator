@@ -14,13 +14,13 @@ import json
 import os
 from typing import Callable, List, Optional, Final
 
-from utils.azure_auth import get_credential
+from src.tools.azure_auth import get_credential
 from dotenv import load_dotenv
 
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
 from src.enums.monitoring import SpanAttr
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger(__name__)
 load_dotenv()

@@ -8,7 +8,7 @@ from .bindings import get_agent_instance
 from .cm_utils import cm_get, cm_set
 from .greetings import send_agent_greeting, sync_voice_from_agent
 from .latency import track_latency
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger(__name__)
 

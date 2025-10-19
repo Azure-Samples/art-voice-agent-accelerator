@@ -12,7 +12,7 @@ import httpx
 from fastapi import HTTPException, Request, WebSocket
 from fastapi.websockets import WebSocketState
 from functools import cache
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 from config import (
     ACS_JWKS_URL,
     ACS_ISSUER,

@@ -14,7 +14,7 @@ from opentelemetry import trace
 from src.stateful.state_managment import MemoManager
 from apps.rtagent.backend.src.orchestration.artagent.orchestrator import route_turn
 from apps.rtagent.backend.src.utils.tracing import trace_acs_operation
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger("api.v1.dependencies.orchestrator")
 tracer = trace.get_tracer(__name__)

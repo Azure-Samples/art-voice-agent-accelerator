@@ -14,7 +14,7 @@ import os
 from typing import Any, Dict, Optional
 
 from opentelemetry.trace import SpanKind, Status, StatusCode
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 # Default logger for fallback usage
 _default_logger = get_logger(__name__)

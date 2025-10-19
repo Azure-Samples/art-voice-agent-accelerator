@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 from src.tools.latency_helpers import PersistentLatency
 
 logger = get_logger("tools.latency")

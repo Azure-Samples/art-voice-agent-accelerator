@@ -19,7 +19,7 @@ from apps.rtagent.backend.src.utils.tracing import (
     create_service_dependency_attrs,
     create_service_handler_attrs,
 )
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger(__name__)
 tracer = trace.get_tracer(__name__)

@@ -19,8 +19,8 @@ from config import (
     AZURE_OPENAI_ENDPOINT,
     AZURE_OPENAI_KEY,
 )
-from utils.ml_logging import logging
-from utils.azure_auth import get_credential
+from src.tools.ml_logging import logging
+from src.tools.azure_auth import get_credential
 
 logger = logging.getLogger(__name__)
 

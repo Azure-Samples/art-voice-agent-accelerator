@@ -45,13 +45,13 @@ from apps.rtagent.backend.src.ws_helpers.shared_ws import (
     send_tts_audio,
 )
 from apps.rtagent.backend.src.ws_helpers.envelopes import make_assistant_streaming_envelope
-from utils.ml_logging import get_logger
-from utils.trace_context import create_trace_context
+from src.tools.ml_logging import get_logger
+from src.tools.trace_context import create_trace_context
 from apps.rtagent.backend.src.utils.tracing import (
     create_service_handler_attrs,
     create_service_dependency_attrs)
-from utils.ml_logging import get_logger
-from utils.trace_context import create_trace_context
+from src.tools.ml_logging import get_logger
+from src.tools.trace_context import create_trace_context
 
 if TYPE_CHECKING:  # pragma: no cover – typing-only import
     from src.stateful.state_managment import MemoManager  # noqa: F401

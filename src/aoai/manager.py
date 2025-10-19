@@ -14,14 +14,14 @@ import traceback
 from typing import Any, Dict, List, Literal, Optional, Union
 
 import openai
-from utils.azure_auth import get_credential, get_bearer_token_provider
+from src.tools.azure_auth import get_credential, get_bearer_token_provider
 from dotenv import load_dotenv
 from openai import AzureOpenAI
 from opentelemetry import trace
 
 from src.enums.monitoring import SpanAttr
-from utils.ml_logging import get_logger
-from utils.trace_context import TraceContext
+from src.tools.ml_logging import get_logger
+from src.tools.trace_context import TraceContext
 
 # Load environment variables from .env file
 load_dotenv()

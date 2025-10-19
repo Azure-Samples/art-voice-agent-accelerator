@@ -1,7 +1,7 @@
-# src/utils/azure_auth.py
+# src/tools/azure_auth.py
 import os, logging
 from functools import lru_cache
-from azure.identity import DefaultAzureCredential, ManagedIdentityCredential
+from azure.identity import DefaultAzureCredential, ManagedIdentityCredential, get_bearer_token_provider
 
 logging.getLogger("azure.identity").setLevel(logging.WARNING)
 

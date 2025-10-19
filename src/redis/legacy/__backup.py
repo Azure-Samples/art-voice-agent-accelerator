@@ -2,7 +2,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 import redis.asyncio as redis
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 
 class AzureRedisManager:
@@ -52,7 +52,7 @@ class AzureRedisManager:
             )
         else:
             try:
-                from utils.azure_auth import get_credential
+                from src.tools.azure_auth import get_credential
             except ImportError:
                 raise ImportError(
                     "azure-identity package is required for AAD authentication."

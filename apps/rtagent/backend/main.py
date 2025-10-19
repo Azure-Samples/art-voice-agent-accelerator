@@ -18,12 +18,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
 from src.pools.async_pool import AsyncPool
-from utils.telemetry_config import setup_azure_monitor
+from src.tools.telemetry_config import setup_azure_monitor
 
 # ---------------- Monitoring ------------------------------------------------
 setup_azure_monitor(logger_name="rtagent")
 
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger("main")
 

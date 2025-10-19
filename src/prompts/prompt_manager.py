@@ -12,7 +12,7 @@ import os
 
 from jinja2 import Environment, FileSystemLoader
 
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger(__name__)
 

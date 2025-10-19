@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import yaml  # PyYAML
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 from .base import (
     AzureLiveVoiceAgent,

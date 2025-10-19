@@ -20,7 +20,7 @@ import numpy as np
 from datetime import datetime, timezone
 from typing import Dict, Union, Literal, Optional, Set, Callable, Awaitable
 from typing_extensions import TypedDict, Required
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 from apps.rtagent.backend.src.agents.Lvagent.factory import build_lva_from_yaml
 from apps.rtagent.backend.src.agents.Lvagent.base import AzureLiveVoiceAgent
 

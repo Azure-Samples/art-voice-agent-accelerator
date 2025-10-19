@@ -6,7 +6,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, TypeVar
 
-from utils.azure_auth import get_credential
+from src.tools.azure_auth import get_credential
 
 import redis
 from redis.cluster import RedisCluster
@@ -18,7 +18,7 @@ from redis.exceptions import (
     MovedError,
     RedisClusterException,
 )
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 T = TypeVar("T")
 

@@ -8,7 +8,7 @@ from .cm_utils import cm_get, cm_set
 from .greetings import send_agent_greeting, sync_voice_from_agent
 from .registry import get_specialist
 from .config import SPECIALISTS
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger(__name__)
 

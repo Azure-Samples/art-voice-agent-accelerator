@@ -3,7 +3,7 @@ import os
 from typing import Any, Dict, List, Optional, Union
 
 import redis.asyncio as redis
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 from .key_manager import Component, DataType, RedisKeyManager
 
@@ -65,7 +65,7 @@ class AsyncAzureRedisManager:
                 "Azure Redis async connection initialized with access key."
             )
         else:
-            from utils.azure_auth import get_credential
+            from src.tools.azure_auth import get_credential
 
             cred = credential or get_credential()
             scope = scope or os.getenv(

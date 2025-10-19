@@ -9,7 +9,7 @@ from .greetings import send_agent_greeting
 from .latency import track_latency
 from .bindings import get_agent_instance
 from .tools import process_tool_response
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger(__name__)
 

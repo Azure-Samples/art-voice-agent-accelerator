@@ -7,7 +7,7 @@ from typing import Optional
 
 import numpy as np
 import sounddevice as sd  # type: ignore[import-untyped]
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger(__name__)
 

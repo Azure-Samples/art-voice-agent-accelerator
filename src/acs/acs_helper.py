@@ -20,7 +20,7 @@ from azure.communication.callautomation import (
 )
 from azure.communication.identity import CommunicationIdentityClient
 from azure.core.exceptions import HttpResponseError
-from utils.azure_auth import get_credential, ManagedIdentityCredential
+from src.tools.azure_auth import get_credential, ManagedIdentityCredential
 from azure.communication.callautomation import CallConnectionProperties
 from datetime import datetime, timedelta
 
@@ -28,7 +28,7 @@ from opentelemetry import trace
 from opentelemetry.trace import SpanKind
 
 from src.enums.stream_modes import StreamMode
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger("src.acs")
 tracer = trace.get_tracer(__name__)

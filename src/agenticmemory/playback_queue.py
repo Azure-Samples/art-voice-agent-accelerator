@@ -2,7 +2,7 @@ import asyncio
 from collections import deque
 from typing import Any, Deque, Dict, Optional
 
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger("orchestration.playback_messages_tts")
 

@@ -7,7 +7,7 @@ import asyncio
 from datetime import datetime
 from typing import Dict, Any
 
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger(__name__)
 

@@ -28,7 +28,7 @@ from apps.rtagent.backend.api.v1.schemas.health import (
     ServiceCheck,
     ReadinessResponse,
 )
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 from src.pools.aoai_pool import AOAI_POOL_ENABLED, get_aoai_pool
 
 logger = get_logger("v1.health")

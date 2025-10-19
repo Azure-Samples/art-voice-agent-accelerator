@@ -22,7 +22,7 @@ from typing import Dict, List, Optional, TypedDict
 
 from rapidfuzz import fuzz, process
 
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger("policy_lookup")
 

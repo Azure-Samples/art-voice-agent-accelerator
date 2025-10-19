@@ -10,7 +10,7 @@ from fastapi import WebSocket
 from fastapi.websockets import WebSocketState
 from azure.communication.callautomation import CallAutomationClient
 
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger("services.acs.session_terminator")
 

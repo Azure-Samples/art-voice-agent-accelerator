@@ -22,7 +22,7 @@ from opentelemetry import trace
 from opentelemetry.trace import SpanKind
 
 from apps.rtagent.backend.src.ws_helpers.shared_ws import broadcast_message
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 from .types import CallEventContext, ACSEventTypes
 
 from apps.rtagent.backend.api.v1.handlers.dtmf_validation_lifecycle import (

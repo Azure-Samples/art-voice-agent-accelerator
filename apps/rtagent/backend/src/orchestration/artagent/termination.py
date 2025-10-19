@@ -11,7 +11,7 @@ from apps.rtagent.backend.src.services.acs.session_terminator import (
     TerminationReason,
 )
 from apps.rtagent.backend.src.ws_helpers.envelopes import make_event_envelope
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger(__name__)
 

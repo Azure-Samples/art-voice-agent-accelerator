@@ -8,7 +8,7 @@ Simple documentation generator for the Real-Time Voice Agent API.
 import time
 from typing import Dict, List, Any
 
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger("dynamic_docs")
 

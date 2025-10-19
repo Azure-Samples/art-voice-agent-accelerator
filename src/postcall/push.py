@@ -3,7 +3,7 @@ import datetime
 
 from src.cosmosdb.manager import CosmosDBMongoCoreManager
 from src.stateful.state_managment import MemoManager
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 from pymongo.errors import NetworkTimeout
 
 logger = get_logger("postcall_analytics")

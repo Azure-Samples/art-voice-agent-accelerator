@@ -6,7 +6,7 @@ import uuid
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Tuple
 
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger("tools.latency_helpers")
 

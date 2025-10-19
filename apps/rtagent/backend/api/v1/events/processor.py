@@ -15,7 +15,7 @@ from azure.core.messaging import CloudEvent
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind
 
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 from .types import CallEventContext, CallEventHandler, ACSEventTypes
 
 logger = get_logger("v1.events.processor")

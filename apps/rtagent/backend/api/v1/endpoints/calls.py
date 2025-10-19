@@ -26,7 +26,7 @@ from apps.rtagent.backend.api.v1.schemas.call import (
     CallUpdateRequest,
 )
 from src.enums import SpanAttr
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 # V1 imports
 from ..handlers.acs_call_lifecycle import ACSLifecycleHandler

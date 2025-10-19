@@ -10,7 +10,7 @@ from .processor import get_call_event_processor
 from .handlers import CallEventHandlers
 from .types import ACSEventTypes, V1EventTypes
 from ..handlers.dtmf_validation_lifecycle import DTMFValidationLifecycle
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger("v1.events.registration")
 

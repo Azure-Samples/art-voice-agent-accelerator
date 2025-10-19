@@ -67,7 +67,7 @@ from src.enums.stream_modes import StreamMode
 from src.stateful.state_managment import MemoManager
 from apps.rtagent.backend.src.utils.tracing import log_with_context
 from apps.rtagent.backend.src.utils.auth import validate_acs_ws_auth, AuthError
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 from src.tools.latency_tool import LatencyTool
 from azure.communication.callautomation import PhoneNumberIdentifier
 
