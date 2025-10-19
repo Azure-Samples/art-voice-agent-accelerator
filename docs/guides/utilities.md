@@ -232,10 +232,10 @@ except AuthError as e:
 
 ## Observability and Monitoring
 
-### OpenTelemetry Integration (`utils.telemetry_config`)
+### OpenTelemetry Integration (`src.tools.telemetry_config`)
 
 ```python
-from utils.telemetry_config import configure_tracing
+from src.tools.telemetry_config import configure_tracing
 
 # Comprehensive distributed tracing
 configure_tracing(
@@ -252,10 +252,10 @@ configure_tracing(
 # - Orchestrator processing
 ```
 
-### Structured Logging (`utils.ml_logging`)
+### Structured Logging (`src.tools.ml_logging`)
 
 ```python
-from utils.ml_logging import get_logger
+from src.tools.ml_logging import get_logger
 
 logger = get_logger("api.v1.media")
 
