@@ -22,7 +22,7 @@
     "reactflow": "^11.11.4",
     "serve": "^14.2.4",
     "styled-components": "^6.1.19",
-    "vite": "^6.3.5"
+    "vite": "^6.4.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.21.0",
