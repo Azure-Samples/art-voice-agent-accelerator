@@ -191,7 +191,7 @@ class TracedOperation:
             if exc_type:
                 try:
                     self.span.set_status(Status(StatusCode.ERROR, str(exc_val)))
-                    self.log_error(f"Operation failed: {exc_val}")
+                    self.log_warning(f"Operation failed: {exc_val}")
                 except AttributeError:
                     # Handle NonRecordingSpan which doesn't have set_status
                     self.log_error(f"Operation failed (tracing disabled): {exc_val}")
@@ -199,7 +199,7 @@ class TracedOperation:
         elif self.span:
             # Handle spans that don't support set_status
             if exc_type:
-                self.log_error(f"Operation failed (span without status): {exc_val}")
+                self.log_warning(f"Operation failed (span without status): {exc_val}")
             try:
                 self.span.end()
             except AttributeError:

@@ -8,6 +8,7 @@ from locust import User, task, events, between
 import websocket
 from websocket import WebSocketConnectionClosedException
 import ssl, urllib.parse, certifi, websocket
+from ssl import SSLError, SSLEOFError, SSLZeroReturnError
 
 # Treat benign WebSocket closes as non-errors (1000/1001/1006 often benign in load)
 WS_IGNORE_CLOSE_EXCEPTIONS = os.getenv("WS_IGNORE_CLOSE_EXCEPTIONS", "true").lower() in {"1", "true", "yes"}
@@ -25,10 +26,14 @@ BYTES_PER_SAMPLE = int(os.getenv("BYTES_PER_SAMPLE", "2"))  # 1 => PCM8 unsigned
 CHANNELS = int(os.getenv("CHANNELS", "1"))
 CHUNK_MS = int(os.getenv("CHUNK_MS", "20"))  # 20 ms
 CHUNK_BYTES = int(SAMPLE_RATE * BYTES_PER_SAMPLE * CHANNELS * CHUNK_MS / 1000)  # default 640
-TURNS_PER_USER = int(os.getenv("TURNS_PER_USER", "3"))
+TURNS_PER_USER = int(os.getenv("TURNS_PER_USER", "60"))
 CHUNKS_PER_TURN = int(os.getenv("CHUNKS_PER_TURN", "100"))  # ~2s @20ms
 TURN_TIMEOUT_SEC = float(os.getenv("TURN_TIMEOUT_SEC", "15.0"))
 PAUSE_BETWEEN_TURNS_SEC = float(os.getenv("PAUSE_BETWEEN_TURNS_SEC", "1.5"))
+RETRY_BACKOFF_BASE = float(os.getenv("WS_RECONNECT_BACKOFF_BASE_SEC", "0.2"))
+RETRY_BACKOFF_FACTOR = float(os.getenv("WS_RECONNECT_BACKOFF_FACTOR", "1.8"))
+RETRY_BACKOFF_MAX = float(os.getenv("WS_RECONNECT_BACKOFF_MAX_SEC", "3.0"))
+MAX_SEQUENTIAL_SSL_FAILS = int(os.getenv("WS_MAX_SSL_FAILS", "4"))
 
 # If your endpoint requires explicit empty AudioData frames, use this (preferred for semantic VAD)
 FIRST_BYTE_TIMEOUT_SEC = float(os.getenv("FIRST_BYTE_TIMEOUT_SEC", "5.0"))  # max wait for first server byte
@@ -166,24 +171,34 @@ class ACSUser(User):
         sslopt = {}
         if url.startswith("wss://"):
             sslopt = {
+                "ssl_context": self._ssl_context,
                 "cert_reqs": ssl.CERT_REQUIRED,
-                "ca_certs": certifi.where(),
                 "check_hostname": True,
-                "server_hostname": host,   # ensure SNI
+                "server_hostname": host,
             }
         origin_scheme = "https" if url.startswith("wss://") else "http"
         # Explicitly disable proxies even if env vars are set
-        self.ws = websocket.create_connection(
-            url,
-            header=headers,
-            origin=f"{origin_scheme}://{host}",
-            enable_multithread=True,
-            sslopt=sslopt,
-            http_proxy_host=None,
-            http_proxy_port=None,
-            proxy_type=None,
-            # subprotocols=["your-protocol"]  # uncomment if your server requires one
-        )
+        backoff = RETRY_BACKOFF_BASE * (RETRY_BACKOFF_FACTOR ** min(self._sequential_ssl_fails, 5))
+        while True:
+            try:
+                self.ws = websocket.create_connection(
+                    url,
+                    header=headers,
+                    origin=f"{origin_scheme}://{host}",
+                    enable_multithread=True,
+                    sslopt=sslopt,
+                    http_proxy_host=None,
+                    http_proxy_port=None,
+                    proxy_type=None,
+                )
+                self._sequential_ssl_fails = 0
+                break
+            except (SSLError, SSLEOFError, SSLZeroReturnError, WebSocketConnectionClosedException) as err:
+                self._sequential_ssl_fails += 1
+                if self._sequential_ssl_fails > MAX_SEQUENTIAL_SSL_FAILS:
+                    raise RuntimeError(f"WS SSL handshake keeps failing ({self._sequential_ssl_fails}x): {err}") from err
+                sleep(min(backoff, RETRY_BACKOFF_MAX))
+                backoff *= RETRY_BACKOFF_FACTOR
 
         # Send initial AudioMetadata once per connection
         meta = {
@@ -222,6 +237,10 @@ class ACSUser(User):
         self.audio = b""
         self.offset = 0
 
+        self._ssl_context = ssl.create_default_context(cafile=certifi.where())
+        self._ssl_context.check_hostname = True
+        self._ssl_context.verify_mode = ssl.CERT_REQUIRED
+        self._sequential_ssl_fails = 0
         self._connect_ws()
 
     def on_stop(self):
@@ -266,8 +285,7 @@ class ACSUser(User):
         }
         try:
             self.ws.send(json.dumps(payload))
-        except WebSocketConnectionClosedException:
-            # Reconnect and resend metadata, then retry once
+        except (WebSocketConnectionClosedException, SSLError, SSLEOFError, SSLZeroReturnError):
             self._connect_ws()
             self.ws.send(json.dumps(payload))
 
@@ -348,10 +366,8 @@ class ACSUser(User):
                     exc=None if barge_ok else Exception("barge_end_timeout")
                 )
 
-            except WebSocketConnectionClosedException as e:
-                # Treat normal/idle WS closes as non-errors to reduce false positives in load reports
+            except (WebSocketConnectionClosedException, SSLError, SSLEOFError, SSLZeroReturnError) as e:
                 if WS_IGNORE_CLOSE_EXCEPTIONS:
-                    # Optionally record a benign close event as success for observability
                     self._record(name="websocket_closed", response_time_ms=(time.time() - t0) * 1000.0, exc=None)
                 else:
                     self._record(name=f"turn_error[{Path(file_used).name if 'file_used' in locals() else 'unknown'}]",

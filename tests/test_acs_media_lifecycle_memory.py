@@ -8,7 +8,6 @@ import pytest
 
 from apps.rtagent.backend.api.v1.handlers.acs_media_lifecycle import (
     ACSMediaHandler,
-    get_active_handlers_count,
 )
 
 
@@ -91,21 +90,6 @@ async def _create_start_stop_handler(loop: asyncio.AbstractEventLoop):
     await asyncio.sleep(0.02)
     return handler, ws, recog
 
-
-@pytest.mark.asyncio
-async def test_handler_registers_and_cleans_up():
-    """Start a handler and ensure it's registered then cleaned up on stop."""
-    before = get_active_handlers_count()
-    handler, ws, recog = await _create_start_stop_handler(asyncio.get_running_loop())
-
-    after = get_active_handlers_count()
-    # Should be same as before after full stop
-    assert (
-        after == before
-    ), f"active handlers should be cleaned up (before={before}, after={after})"
-    # websocket attribute should be removed/cleared or not reference running handler
-    # The implementation sets _acs_media_handler during start; after stop it may remain but handler.is_running must be False
-    assert not handler.is_running
 
 
 @pytest.mark.asyncio

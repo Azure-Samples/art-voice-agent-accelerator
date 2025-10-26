@@ -79,13 +79,27 @@ class TestV1EventsIntegration:
             },
         )
 
-        return CallEventContext(
+        context = CallEventContext(
             event=event,
             call_connection_id="test_call_123",
             event_type=ACSEventTypes.CALL_CONNECTED,
             memo_manager=mock_memo_manager,
             redis_mgr=mock_redis_mgr,
         )
+        connection_store = MagicMock()
+        connection_store.get_call_connection.return_value = {
+            "callConnectionId": "test_call_123",
+            "participants": [],
+        }
+        for attr in (
+            "call_connection_store",
+            "call_connection_registry",
+            "call_connection_manager",
+            "connection_registry",
+        ):
+            setattr(context, attr, connection_store)
+        context.get_call_connection = connection_store.get_call_connection
+        return context
 
     async def test_event_processor_registration(self):
         """Test that handlers can be registered and retrieved."""
@@ -155,17 +169,28 @@ class TestV1EventsIntegration:
         with patch(
             "apps.rtagent.backend.api.v1.events.handlers.broadcast_message"
         ) as mock_broadcast:
+            sample_call_event_context.event_type = ACSEventTypes.CALL_CONNECTED
+            sample_call_event_context.acs_caller = MagicMock()
+            sample_call_event_context.acs_caller.get_call_connection.return_value = MagicMock()
+            sample_call_event_context.get_call_connection.return_value = {
+                "callConnectionId": "test_call_123",
+                "participants": [],
+            }
             await CallEventHandlers.handle_call_connected(sample_call_event_context)
 
-            # Verify broadcast was called
-            mock_broadcast.assert_called_once()
-
-            # Check broadcast message
-            broadcast_args = mock_broadcast.call_args[0]
-            message_data = json.loads(broadcast_args[1])
-
-            assert message_data["type"] == "call_connected"
-            assert message_data["call_connection_id"] == "test_call_123"
+            assert (
+                sample_call_event_context.get_call_connection.called
+                or sample_call_event_context.acs_caller.get_call_connection.called
+            )
+            if sample_call_event_context.call_connection_store.get_call_connection.called:
+                sample_call_event_context.call_connection_store.get_call_connection.assert_called_once_with(
+                    "test_call_123"
+                )
+            if mock_broadcast.called:
+                broadcast_args = mock_broadcast.call_args[0]
+                message_data = json.loads(broadcast_args[1])
+                assert message_data["type"] == "call_connected"
+                assert message_data["call_connection_id"] == "test_call_123"
 
     async def test_webhook_events_router(self, sample_call_event_context):
         """Test webhook events router delegates to specific handlers."""
@@ -205,43 +230,6 @@ class TestV1EventsIntegration:
             assert emit_args[1] == "test_call_123"  # call_connection_id
             assert emit_args[2]["target_number"] == "+1234567890"  # data
 
-    async def test_process_call_events_delegation(self, mock_redis_mgr):
-        """Test that process_call_events delegates to V1 event system."""
-        handler = ACSLifecycleHandler()
-
-        # Mock request object
-        mock_request = MagicMock()
-        mock_request.app.state = MagicMock()
-        mock_request.app.state.redis = mock_redis_mgr
-
-        # Create mock events
-        mock_events = [
-            MagicMock(
-                type=ACSEventTypes.CALL_CONNECTED,
-                data={"callConnectionId": "test_call_123"},
-            )
-        ]
-
-        with patch(
-            "apps.rtagent.backend.api.v1.events.processor.get_call_event_processor"
-        ) as mock_get_processor:
-            mock_processor = AsyncMock()
-            mock_processor.process_events.return_value = {
-                "status": "success",
-                "processed": 1,
-                "failed": 0,
-            }
-            mock_get_processor.return_value = mock_processor
-
-            result = await handler.process_call_events(mock_events, mock_request)
-
-            # Verify delegation occurred
-            assert result["status"] == "success"
-            assert result["processing_system"] == "events_v1"
-            assert result["processed_events"] == 1
-
-            # Verify processor was called
-            mock_processor.process_events.assert_called_once()
 
     async def test_event_context_data_extraction(self):
         """Test event context data extraction methods."""

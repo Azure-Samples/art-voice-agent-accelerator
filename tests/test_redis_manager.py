@@ -1,6 +1,6 @@
 import pytest
 
-from redis.exceptions import MovedError
+from redis.exceptions import MovedError, RedisClusterException
 
 from src.redis import manager as redis_manager
 from src.redis.manager import AzureRedisManager
@@ -53,7 +53,7 @@ def test_get_session_data_switches_to_cluster(monkeypatch):
     assert data == {"foo": "bar"}
     assert single_node_client.hgetall_calls == 1
     assert cluster_client.hgetall_calls == 1
-    assert mgr._using_cluster is True
+    assert mgr.use_cluster is True
 
 
 def test_get_session_data_raises_without_cluster_support(monkeypatch):
@@ -64,7 +64,13 @@ def test_get_session_data_raises_without_cluster_support(monkeypatch):
         "Redis",
         lambda *args, **kwargs: single_node_client,
     )
-    monkeypatch.setattr(redis_manager, "RedisCluster", None, raising=False)
+    monkeypatch.setattr(
+        redis_manager,
+        "RedisCluster",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RedisClusterException("cluster unavailable")
+        ),
+    )
 
     mgr = AzureRedisManager(
         host="example.redis.local",
@@ -78,13 +84,19 @@ def test_get_session_data_raises_without_cluster_support(monkeypatch):
         mgr.get_session_data("session-123")
 
 
-def test_remap_cluster_address_to_domain(monkeypatch):
-    fake_client = object()
+def test_cluster_initialization_falls_back_to_standalone(monkeypatch):
+    standalone_client = _FakeClusterRedis()
     monkeypatch.setattr(
-        redis_manager.redis, "Redis", lambda *args, **kwargs: fake_client
+        redis_manager.redis,
+        "Redis",
+        lambda *args, **kwargs: standalone_client,
     )
     monkeypatch.setattr(
-        redis_manager, "RedisCluster", lambda *args, **kwargs: fake_client
+        redis_manager,
+        "RedisCluster",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RedisClusterException("cluster unavailable")
+        ),
     )
 
     mgr = AzureRedisManager(
@@ -93,15 +105,8 @@ def test_remap_cluster_address_to_domain(monkeypatch):
         access_key="dummy",
         ssl=False,
         credential=object(),
+        use_cluster=True,
     )
 
-    # IP addresses remap to canonical host
-    assert mgr._remap_cluster_address(("51.8.10.248", 8501)) == (
-        "example.redis.local",
-        8501,
-    )
-    # Hostnames remain unchanged
-    assert mgr._remap_cluster_address(("cache.contoso.redis", 8501)) == (
-        "cache.contoso.redis",
-        8501,
-    )
+    assert mgr.redis_client is standalone_client
+    assert mgr.use_cluster is False

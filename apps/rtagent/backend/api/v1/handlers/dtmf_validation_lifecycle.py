@@ -32,6 +32,11 @@ from ..events.types import CallEventContext
 logger = get_logger("v1.handlers.dtmf_validation_lifecycle")
 tracer = trace.get_tracer(__name__)
 
+try:
+    from apps.rtagent.backend.src.services.acs.session_terminator import SessionTerminator
+except ImportError:  # pragma: no cover
+    SessionTerminator = None
+
 
 class DTMFValidationLifecycle:
     """
@@ -198,147 +203,6 @@ class DTMFValidationLifecycle:
             logger.error(f"❌ Error handling DTMF tone: {e}")
 
     @staticmethod
-    async def _handle_aws_connect_validation_tone(
-        context: CallEventContext, tone: str
-    ) -> None:
-        """Handle DTMF tones during AWS Connect validation phase."""
-        try:
-            if not context.memo_manager:
-                return
-
-            # Get expected digits and current input
-            expected_digits = context.memo_manager.get_context(
-                "aws_connect_validation_digits", ""
-            )
-            input_sequence = context.memo_manager.get_context(
-                "aws_connect_input_sequence", ""
-            )
-
-            if tone == "#":
-                # Complete validation
-                await DTMFValidationLifecycle._complete_aws_connect_validation(
-                    context, input_sequence, expected_digits
-                )
-            else:
-                # Add tone to sequence
-                input_sequence += tone
-                context.memo_manager.set_context(
-                    "aws_connect_input_sequence", input_sequence
-                )
-                logger.info(f"🔢 AWS Connect input sequence: {input_sequence}")
-                await context.memo_manager.persist_to_redis_async(
-                    redis_mgr=context.redis_mgr
-                )
-
-        except Exception as e:
-            logger.error(f"❌ Error handling AWS Connect validation tone: {e}")
-
-    @staticmethod
-    async def _complete_aws_connect_validation(
-        context: CallEventContext, input_sequence: str, expected_digits: str
-    ) -> None:
-        """Complete AWS Connect validation attempt."""
-        try:
-            if not context.memo_manager:
-                return
-
-            # Check if validation is successful
-            is_valid = input_sequence == expected_digits
-
-            if is_valid:
-                # Success - unblock conversation flow
-                logger.info(f"✅ AWS Connect validation SUCCESS: {input_sequence}")
-                context.memo_manager.set_context(
-                    "aws_connect_validation_pending", False
-                )
-                context.memo_manager.set_context("dtmf_validated", True)
-                context.memo_manager.set_context("dtmf_validation_gate_open", True)
-
-                # Trigger validation completion event if Redis available
-                if context.redis_mgr:
-                    stream_key = DTMFValidationLifecycle.DTMF_VALIDATION_STREAM_KEY_FORMAT.format(
-                        call_connection_id=context.call_connection_id
-                    )
-                    await context.redis_mgr.add_event_async(
-                        stream_key=stream_key,
-                        data={"validation_status": "completed", "result": "success"},
-                    )
-                    await context.memo_manager.persist_to_redis_async(context.redis_mgr)
-            else:
-                # Failure - retry or fail
-                logger.warning(
-                    f"❌ AWS Connect validation FAILED: expected={expected_digits}, got={input_sequence}"
-                )
-                context.memo_manager.set_context(
-                    "aws_connect_validation_pending", False
-                )
-                context.memo_manager.set_context("dtmf_validated", False)
-
-        except Exception as e:
-            logger.error(f"❌ Error completing AWS Connect validation: {e}")
-
-    # ============================================================================
-    # DTMF Validation Blocking Logic
-    # ============================================================================
-
-    @staticmethod
-    async def wait_for_dtmf_validation_completion(
-        redis_mgr, call_connection_id: str, timeout_ms: int = 30000
-    ) -> bool:
-        """
-        Wait for DTMF validation to complete by listening to Redis stream events.
-
-        Args:
-            redis_mgr: Redis manager instance
-            call_connection_id: Call connection ID
-            timeout_ms: Timeout in milliseconds (default 30 seconds)
-
-        Returns:
-            bool: True if validation completed successfully, False if timeout or error
-        """
-        try:
-            stream_key = (
-                DTMFValidationLifecycle.DTMF_VALIDATION_STREAM_KEY_FORMAT.format(
-                    call_connection_id=call_connection_id
-                )
-            )
-            logger.info(
-                f"🛑 Waiting for DTMF validation to complete on stream: {stream_key}"
-            )
-
-            event = await redis_mgr.read_events_blocking_async(
-                stream_key=stream_key, last_id="$", block_ms=timeout_ms
-            )
-
-            if event:
-                logger.info("✅ DTMF validation completed successfully")
-                return True
-            else:
-                logger.warning("⏰ DTMF validation timeout")
-                # Attempt to hang up the call if validation times out
-                try:
-                    # Get the call connection client and hang up
-
-                    if hasattr(redis_mgr, "get_call_connection"):
-                        call_conn = call_connection_id
-                        if call_conn:
-                            await asyncio.get_event_loop().run_in_executor(
-                                None, lambda: call_conn.hang_up(is_for_everyone=True)
-                            )
-                            logger.info(
-                                f"Call {call_connection_id} hung up due to DTMF validation timeout"
-                            )
-                except Exception as hangup_error:
-                    logger.error(
-                        f"❌ Error hanging up call {call_connection_id}: {hangup_error}"
-                    )
-                return False
-
-        except Exception as e:
-            logger.error(f"❌ Error waiting for DTMF validation completion: {e}")
-            return False
-
-    @staticmethod
     def get_fresh_dtmf_validation_status(
         memory_manager, call_connection_id: str
     ) -> bool:
@@ -483,3 +347,121 @@ class DTMFValidationLifecycle:
 
         except Exception as e:
             logger.error(f"❌ Error starting DTMF recognition: {e}")
+
+    @classmethod
+    async def cancel_call_for_dtmf_failure(
+        cls,
+        call_connection_id: str,
+        acs_caller: Optional[Any],
+        reason: str,
+    ) -> bool:
+        """Public entry point for tests and handlers to cancel the call on DTMF failure."""
+        return await cls._cancel_call_for_validation_failure(
+            call_connection_id, acs_caller, reason
+        )
+
+    @classmethod
+    async def _cancel_call_for_validation_failure(
+        cls,
+        call_connection_id: str,
+        acs_caller: Optional[Any],
+        reason: str,
+    ) -> bool:
+        """Hang up the active call when validation fails or times out."""
+        if not acs_caller:
+            logger.warning(
+                "⚠️ Cannot cancel call %s: ACS caller unavailable (%s)",
+                call_connection_id,
+                reason,
+            )
+            return False
+
+        terminator = getattr(acs_caller, "session_terminator", None)
+        if terminator is None and SessionTerminator:
+            try:
+                terminator = SessionTerminator(acs_caller)
+            except Exception as exc:  # pragma: no cover
+                logger.debug(
+                    "SessionTerminator initialization failed for %s: %s",
+                    call_connection_id,
+                    exc,
+                )
+                terminator = None
+
+        if terminator and await cls._try_session_termination(
+            terminator, call_connection_id, reason
+        ):
+            return True
+
+        try:
+            call_conn = acs_caller.get_call_connection(call_connection_id)
+        except Exception as exc:
+            logger.error(
+                "❌ Failed to resolve call connection %s for cancellation: %s",
+                call_connection_id,
+                exc,
+            )
+            return False
+
+        if not call_conn:
+            logger.warning(
+                "⚠️ No active call connection for %s – nothing to cancel", call_connection_id
+            )
+            return False
+
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(
+                None, lambda: call_conn.hang_up(is_for_everyone=True)
+            )
+            logger.info(
+                "☎️ Call %s cancelled via direct hang-up: %s",
+                call_connection_id,
+                reason,
+            )
+            return True
+        except Exception as exc:
+            logger.error(
+                "❌ Failed to cancel call %s after validation failure: %s",
+                call_connection_id,
+                exc,
+            )
+            return False
+
+    @staticmethod
+    async def _try_session_termination(terminator: Any, call_connection_id: str, reason: str) -> bool:
+        """Attempt session termination using the provided terminator."""
+        try:
+            cancel = getattr(terminator, "cancel_call_with_reason", None)
+            if callable(cancel):
+                maybe = cancel(call_connection_id, reason)
+                if asyncio.iscoroutine(maybe):
+                    await maybe
+                logger.info(
+                    "☎️ Call %s cancelled via SessionTerminator.cancel_call_with_reason",
+                    call_connection_id,
+                )
+                return True
+
+            end_async = getattr(terminator, "end_call_async", None)
+            if callable(end_async):
+                maybe = end_async(call_connection_id, reason=reason)
+                if asyncio.iscoroutine(maybe):
+                    await maybe
+                logger.info(
+                    "☎️ Call %s cancelled via SessionTerminator.end_call_async",
+                    call_connection_id,
+                )
+                return True
+        except Exception as exc:
+            logger.debug(
+                "Session terminator cancellation failed for %s: %s",
+                call_connection_id,
+                exc,
+            )
+        return False
+
+    @classmethod
+    def _validate_sequence(cls, sequence: Optional[str]) -> bool:
+        """Return True when the DTMF sequence is non-empty and contains only digits."""
+        return bool(sequence) and sequence.isdigit()

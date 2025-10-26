@@ -24,6 +24,7 @@ import json
 import threading
 import base64
 import time
+import inspect
 
 from dataclasses import dataclass, field
 from typing import Optional, Callable, Union, Set
@@ -32,7 +33,15 @@ from enum import Enum
 from fastapi import WebSocket
 from fastapi.websockets import WebSocketState
 from opentelemetry import trace
-from opentelemetry.trace import SpanKind, Status, StatusCode
+from opentelemetry.trace import (
+    SpanKind,
+    Status,
+    StatusCode,
+    NonRecordingSpan,
+    SpanContext,
+    TraceFlags,
+    TraceState,
+)
 
 from config import GREETING, STT_PROCESSING_TIMEOUT
 from apps.rtagent.backend.src.ws_helpers.shared_ws import (
@@ -81,6 +90,10 @@ class SpeechEvent:
     speaker_id: Optional[str] = None
     confidence: Optional[float] = None
     timestamp: Optional[float] = field(default_factory=time.time)
+    trace_id: Optional[int] = None
+    span_id: Optional[int] = None
+    trace_flags: Optional[int] = None
+    trace_state: Optional[str] = None
 
 
 class ThreadBridge:
@@ -176,6 +189,22 @@ class ThreadBridge:
         except Exception as e:
             logger.error(f"[{self.call_connection_id}] Failed to schedule barge-in: {e}")
 
+    def _attach_current_span(self, event: SpeechEvent) -> None:
+        span = trace.get_current_span()
+        span_context = span.get_span_context() if span else None
+        if span_context and span_context.is_valid:
+            event.trace_id = span_context.trace_id
+            event.span_id = span_context.span_id
+            event.trace_flags = int(span_context.trace_flags)
+            try:
+                event.trace_state = (
+                    span_context.trace_state.to_header()
+                    if span_context.trace_state is not None
+                    else None
+                )
+            except Exception:
+                event.trace_state = None
+
     def queue_speech_result(self, speech_queue: asyncio.Queue, event: SpeechEvent) -> None:
         """
         Queue final speech recognition result for Route Turn Thread processing.
@@ -202,6 +231,7 @@ class ThreadBridge:
             )
             return
 
+        self._attach_current_span(event)
         try:
             speech_queue.put_nowait(event)
             if event.event_type != SpeechEventType.PARTIAL:
@@ -209,7 +239,33 @@ class ThreadBridge:
                     f"[{self.call_connection_id}] Enqueued speech event type={event.event_type.value} qsize={speech_queue.qsize()}"
                 )
         except asyncio.QueueFull:
-            logger.warning(f"[{self.call_connection_id}] Speech queue full, dropping event")
+            enqueued = False
+            dropped_event = None
+            max_attempts = max(1, speech_queue.maxsize or 1)
+            for _ in range(max_attempts):
+                try:
+                    dropped_event = speech_queue.get_nowait()
+                    if isinstance(dropped_event, SpeechEvent):
+                        logger.warning(
+                            f"[{self.call_connection_id}] Evicted stale speech event type={dropped_event.event_type.value}"
+                        )
+                except asyncio.QueueEmpty:
+                    dropped_event = None
+                try:
+                    speech_queue.put_nowait(event)
+                except asyncio.QueueFull:
+                    continue
+                else:
+                    enqueued = True
+                    if event.event_type != SpeechEventType.PARTIAL:
+                        logger.info(
+                            f"[{self.call_connection_id}] Enqueued speech event type={event.event_type.value} qsize={speech_queue.qsize()} after eviction"
+                        )
+                    break
+            if not enqueued:
+                logger.error(
+                    f"[{self.call_connection_id}] Speech queue still full; dropping newest event type={event.event_type.value}"
+                )
         except Exception:
             # Fallback to run_coroutine_threadsafe
             if self.main_loop and not self.main_loop.is_closed():
@@ -552,94 +608,101 @@ class RouteTurnThread:
                 logger.error(f"[{self.call_connection_id}] Processing loop error: {e}")
                 break
 
+    @staticmethod
+    def _format_trace_component(value: Optional[int], width: int) -> Optional[str]:
+        if value is None:
+            return None
+        return format(value, f"0{width}x")
+
+    def _event_parent_context(self, event: SpeechEvent) -> Optional[any]:
+        if event.trace_id is None or event.span_id is None:
+            return None
+        try:
+            trace_state = (
+                TraceState.from_header(event.trace_state)
+                if event.trace_state
+                else TraceState()
+            )
+        except Exception:
+            trace_state = TraceState()
+        try:
+            trace_flags = (
+                TraceFlags(event.trace_flags)
+                if event.trace_flags is not None
+                else TraceFlags(TraceFlags.SAMPLED)
+            )
+        except Exception:
+            trace_flags = TraceFlags(TraceFlags.SAMPLED)
+        span_context = SpanContext(
+            trace_id=event.trace_id,
+            span_id=event.span_id,
+            is_remote=True,
+            trace_flags=trace_flags,
+            trace_state=trace_state,
+        )
+        return trace.set_span_in_context(NonRecordingSpan(span_context))
+
     async def _process_final_speech(self, event: SpeechEvent):
-        """Process final speech through orchestrator."""
+        parent_context = self._event_parent_context(event)
         with tracer.start_as_current_span(
             "route_turn_thread.process_speech",
             kind=SpanKind.CLIENT,
             attributes={"speech.text": event.text, "speech.language": event.language},
-        ):
-            coro = None
+            context=parent_context,
+        ) as span:
+            if event.trace_id is not None:
+                span.set_attribute(
+                    "speech.event.trace_id",
+                    self._format_trace_component(event.trace_id, 32),
+                )
+            if event.span_id is not None:
+                span.set_attribute(
+                    "speech.event.span_id",
+                    self._format_trace_component(event.span_id, 16),
+                )
+            # Injected orchestrator execution with dynamic argument filtering
+            handler = self.orchestrator_func or route_turn
+            candidate_kwargs = {
+                "cm": self.memory_manager,
+                "transcript": event.text,
+                "ws": self.websocket,
+                "call_connection_id": self.call_connection_id,
+                "speech_language": event.language,
+            }
             try:
-                if not self.memory_manager:
-                    logger.error(f"[{self.call_connection_id}] No memory manager available")
-                    return
-
-                # Broadcast user transcription to dashboard
-                if (
-                    hasattr(self.memory_manager, "session_id")
-                    and self.memory_manager.session_id
-                ):
-                    try:
-                        await broadcast_message(
-                            connected_clients=None,  # Ignored for safety
-                            message=event.text,
-                            sender="User",
-                            app_state=self.websocket.app.state,
-                            session_id=self.memory_manager.session_id,
-                        )
-                        logger.info(
-                            f"[{self.call_connection_id}] Broadcasting user transcript: '{event.text[:50]}...' to session: {self.memory_manager.session_id}"
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"[{self.call_connection_id}] Failed to broadcast user transcript: {e}"
-                        )
-
-                if self.orchestrator_func:
-                    coro = self.orchestrator_func(
-                        cm=self.memory_manager,
-                        transcript=event.text,
-                        ws=self.websocket,
-                        call_id=getattr(self.websocket, "_call_connection_id", None),
-                        is_acs=True,
-                    )
-                else:
-                    coro = route_turn(
-                        cm=self.memory_manager,
-                        transcript=event.text,
-                        ws=self.websocket,
-                        is_acs=True,
-                    )
-
-                if coro is None:
-                    return
-
-                self.current_response_task = asyncio.create_task(coro)
-                await self.current_response_task
-            except asyncio.CancelledError:
-                logger.info(f"[{self.call_connection_id}] Orchestrator processing cancelled")
-                raise
-            except Exception as e:
-                logger.error(f"[{self.call_connection_id}] Error while processing speech with orchestrator: {e}")
+                params = inspect.signature(handler).parameters
+                filtered_kwargs = {
+                    key: value
+                    for key, value in candidate_kwargs.items()
+                    if key in params and value is not None
+                }
+            except (ValueError, TypeError):
+                filtered_kwargs = {
+                    key: value for key, value in candidate_kwargs.items() if value is not None
+                }
+            self.current_response_task = asyncio.create_task(handler(**filtered_kwargs))
+            try:
+                orchestrator_result = await self.current_response_task
             finally:
-                if (
-                    self.current_response_task
-                    and not self.current_response_task.done()
-                ):
-                    self.current_response_task.cancel()
                 self.current_response_task = None
 
     async def _process_direct_text_playback(self, event: SpeechEvent):
-        """
-        Process direct text playback through send_response_to_acs (bypasses orchestrator).
-
-        Generic method for sending text directly to ACS for TTS playback. Can be used for:
-        - Greeting messages
-        - System announcements
-        - Error messages
-        - Status updates
-        - Any direct text-to-speech scenarios
-
-        :param event: SpeechEvent containing the text to play
-        :type event: SpeechEvent
-        :param playback_type: Type of playback for logging/tracing (e.g., "greeting", "announcement", "error")
-        :type playback_type: str
-        :raises asyncio.CancelledError: When playback is cancelled by barge-in
-        """
+        parent_context = self._event_parent_context(event)
         with tracer.start_as_current_span(
-            "route_turn_thread.process_direct_text_playback", kind=SpanKind.CLIENT
-        ):
+            "route_turn_thread.process_direct_text_playback",
+            kind=SpanKind.CLIENT,
+            context=parent_context,
+        ) as span:
+            if event.trace_id is not None:
+                span.set_attribute(
+                    "speech.event.trace_id",
+                    self._format_trace_component(event.trace_id, 32),
+                )
+            if event.span_id is not None:
+                span.set_attribute(
+                    "speech.event.span_id",
+                    self._format_trace_component(event.span_id, 16),
+                )
             try:
                 playback_type = event.event_type.value
                 # Only log significant text or greeting
@@ -672,20 +735,21 @@ class RouteTurnThread:
                         stream_mode=StreamMode.MEDIA,
                     )
                 )
+                playback_task = self.current_response_task
                 try:
-                    await asyncio.wait_for(self.current_response_task, timeout=8.0)
+                    await asyncio.wait_for(playback_task, timeout=8.0)
                 except asyncio.TimeoutError:
                     logger.error(
                         f"[{self.call_connection_id}] {playback_type} playback timed out waiting for TTS pipeline"
                     )
-                    if not self.current_response_task.done():
-                        self.current_response_task.cancel()
+                    if playback_task and not playback_task.done():
+                        playback_task.cancel()
                 except Exception as e:
                     logger.error(
                         f"[{self.call_connection_id}] {playback_type} playback failed: {e}"
                     )
-                    if not self.current_response_task.done():
-                        self.current_response_task.cancel()
+                    if playback_task and not playback_task.done():
+                        playback_task.cancel()
                 if event.event_type == SpeechEventType.GREETING:
                     logger.info(
                         f"[{self.call_connection_id}] Greeting playback dispatched"
@@ -892,7 +956,11 @@ class MainEventLoop:
                             < self.max_concurrent_audio_tasks
                         ):
                             task = asyncio.create_task(
-                                self._process_audio_chunk_async(audio_bytes, recognizer)
+                                self._process_audio_chunk_async(
+                                    audio_bytes,
+                                    recognizer,
+                                    getattr(acs_handler, "speech_sdk_thread", None),
+                                )
                             )
                             self.active_audio_tasks.add(task)
                             task.add_done_callback(
@@ -919,10 +987,33 @@ class MainEventLoop:
             logger.error(f"[{self.call_connection_id}] Media message error: {e}")
 
     async def _process_audio_chunk_async(
-        self, audio_bytes: Union[str, bytes], recognizer
+        self,
+        audio_bytes: Union[str, bytes],
+        recognizer,
+        speech_thread: Optional["SpeechSDKThread"] = None,
     ) -> None:
         """Process audio chunk asynchronously."""
         try:
+            if speech_thread:
+                if not speech_thread.thread_running:
+                    speech_thread.prepare_thread()
+                if not speech_thread.recognizer_started:
+                    try:
+                        speech_thread.start_recognizer()
+                    except Exception as exc:
+                        logger.debug(
+                            f"[{self.call_connection_id}] Recognizer start retry failed: {exc}"
+                        )
+                if not speech_thread.recognizer_started:
+                    waited = 0.0
+                    while waited < 0.3 and not speech_thread.recognizer_started:
+                        await asyncio.sleep(0.02)
+                        waited += 0.02
+                if not speech_thread.recognizer_started:
+                    logger.debug(
+                        f"[{self.call_connection_id}] Skipping audio chunk; recognizer not ready"
+                    )
+                    return
             # Handle base64 decoding if needed
             original_type = type(audio_bytes).__name__
             if isinstance(audio_bytes, str):
@@ -938,7 +1029,7 @@ class MainEventLoop:
                     asyncio.get_event_loop().run_in_executor(
                         None, recognizer.write_bytes, audio_bytes
                     ),
-                    timeout=0.5,  # Reasonable timeout for audio chunk processing
+                    timeout=0.5,
                 )
                 logger.debug(
                     f"[{self.call_connection_id}] Audio chunk sent to recognizer successfully"
@@ -1212,6 +1303,27 @@ class ACSMediaHandler:
             SpeechEventType.STATUS_UPDATE,
             SpeechEventType.ERROR_MESSAGE,
         }
+        if playback_type not in valid_types:
+            logger.warning(
+                f"[{self.call_connection_id}] Invalid playback type: {playback_type}"
+            )
+            return False
+
+        try:
+            event = SpeechEvent(
+                event_type=playback_type,
+                text=text,
+                language=language,
+                speaker_id=self.call_connection_id,
+            )
+            self.thread_bridge.queue_speech_result(self.speech_queue, event)
+            logger.info(
+                f"[{self.call_connection_id}] Queued direct text playback: {playback_type} '{text[:50]}...'"
+            )
+
+        except Exception as e:
+            logger.error(f"[{self.call_connection_id}] Failed to queue text: {e}")
+            return False
 
         if playback_type not in valid_types:
             logger.error(
@@ -1228,6 +1340,3 @@ class ACSMediaHandler:
         except Exception as e:
             logger.error(f"[{self.call_connection_id}] Failed to queue text: {e}")
             return False
-
-
-# Utility functions removed - handler tracking now managed by ConnectionManager

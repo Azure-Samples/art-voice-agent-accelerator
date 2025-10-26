@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 import statistics
 from pathlib import Path
 
-from utils.conversation_simulator import (
+from tests.load.utils.conversation_simulator import (
     ConversationSimulator, 
     ConversationTemplates, 
     ConversationMetrics,

@@ -10,13 +10,17 @@ It integrates with OpenTelemetry for observability, enabling detailed tracing an
 
 import json
 import os
+import socket
 from typing import Callable, List, Optional, Final
+from uuid import uuid4
 
 import azure.cognitiveservices.speech as speechsdk
 from dotenv import load_dotenv
+from opentelemetry import trace
+from opentelemetry.sdk.resources import Resource, SERVICE_NAME, SERVICE_INSTANCE_ID
+from opentelemetry.sdk.trace import TracerProvider
 
 # OpenTelemetry imports for tracing
-from opentelemetry import trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
 # Import centralized span attributes enum
@@ -29,6 +33,34 @@ logger = get_logger(__name__)
 
 # Load environment variables from .env file
 load_dotenv()
+
+
+def _ensure_tracer_provider_configured() -> None:
+    service_name = os.getenv("OTEL_SERVICE_NAME", "rt-voice-agent")
+    instance_id = os.getenv(
+        "OTEL_SERVICE_INSTANCE_ID", f"{socket.gethostname()}-{uuid4().hex[:8]}"
+    )
+    resource = Resource.create(
+        {
+            SERVICE_NAME: service_name,
+            SERVICE_INSTANCE_ID: instance_id,
+        }
+    )
+    provider = trace.get_tracer_provider()
+    if isinstance(provider, TracerProvider):
+        current_resource = getattr(provider, "resource", None)
+        missing = {SERVICE_NAME, SERVICE_INSTANCE_ID}
+        if current_resource:
+            missing -= set(current_resource.attributes.keys())
+            if missing:
+                provider._resource = current_resource.merge(resource)
+        else:
+            provider._resource = resource
+    else:
+        trace.set_tracer_provider(TracerProvider(resource=resource))
+
+
+_ensure_tracer_provider_configured()
 
 
 class StreamingSpeechRecognizerFromBytes:
@@ -318,7 +350,6 @@ class StreamingSpeechRecognizerFromBytes:
             1. API Key: Uses subscription key and region (traditional method)
             2. Default Credentials: Uses managed identity, service principal,
                or developer credentials (recommended for production)
-
         Returns:
             speechsdk.SpeechConfig: Configured Speech SDK instance ready for
                 use with recognition services.
@@ -652,7 +683,7 @@ class StreamingSpeechRecognizerFromBytes:
         Application Map for service dependency visualization.
 
         Tracing Features:
-            - Session-level span for complete recognition lifecycle
+            - Session-level span for the entire speech recognition lifecycle
             - Call correlation with connection ID attributes
             - Azure Monitor Application Map integration
             - Service dependency visualization
