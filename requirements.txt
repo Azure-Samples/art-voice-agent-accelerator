@@ -69,5 +69,3 @@ pyaudio>=0.2.11
 pymongo>=4.6.0
 rapidfuzz>=3.13.0
 
-# Testing and linting tools
-locust
