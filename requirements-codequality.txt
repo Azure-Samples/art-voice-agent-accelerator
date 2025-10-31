@@ -14,3 +14,6 @@ types-PyYAML
 anyio
 pytest-asyncio
 pytest-twisted
+
+# Testing and linting tools
+locust
