@@ -1,0 +1,60 @@
+name: CI Tests
+
+on:
+    push:
+        branches: [ main, develop, hotfix/media-queue-cleanup ]
+    pull_request:
+        branches: [ main, develop ]
+
+jobs:
+    test:
+        runs-on: ubuntu-latest
+        strategy:
+            matrix:
+                python-version: ["3.11"]
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Set up Python ${{ matrix.python-version }}
+              uses: actions/setup-python@v4
+              with:
+                  python-version: ${{ matrix.python-version }}
+
+            - name: Cache pip dependencies
+              uses: actions/cache@v3
+              with:
+                  path: ~/.cache/pip
+                  key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt', '**/pyproject.toml') }}
+                  restore-keys: |
+                      ${{ runner.os }}-pip-
+
+            - name: Install dependencies
+              run: |
+                  python -m pip install --upgrade pip
+                  if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+                  if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+                  if [ -f pyproject.toml ]; then pip install -e .; fi
+                  # Install pytest if not in requirements
+                  pip install pytest pytest-asyncio pytest-cov
+
+            - name: Create test environment file
+              run: |
+                  echo "# Test environment variables" > .env.test
+                  echo "ENVIRONMENT=test" >> .env.test
+
+            - name: Run tests with pytest
+              run: |
+                  pytest tests/ -v --tb=short --cov=. --cov-report=xml --cov-report=term-missing
+              env:
+                  PYTHONPATH: ${{ github.workspace }}
+
+            - name: Upload coverage to Codecov
+              uses: codecov/codecov-action@v3
+              if: success()
+              with:
+                  file: ./coverage.xml
+                  flags: unittests
+                  name: codecov-umbrella
+                  fail_ci_if_error: false
