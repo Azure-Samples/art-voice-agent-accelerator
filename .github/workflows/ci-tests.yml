@@ -1,10 +1,8 @@
 name: CI Tests
 
 on:
-    push:
-        branches: [ main, develop, feature/ci-cleanedup-unit-tests ]
     pull_request:
-        branches: [ main, develop ]
+        branches: [ main, staging ]
 
 jobs:
     test:
