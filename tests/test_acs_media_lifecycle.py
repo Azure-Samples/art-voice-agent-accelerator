@@ -32,8 +32,26 @@ class _SpeechSynthesizerStub:
     def split_pcm_to_base64_frames(pcm_bytes: bytes, sample_rate: int) -> list[str]:
         return [base64.b64encode(pcm_bytes).decode("ascii")] if pcm_bytes else []
 speech_services_stub.SpeechSynthesizer = _SpeechSynthesizerStub
-from src.speech.speech_recognizer import StreamingSpeechRecognizerFromBytes as _RealStreamingRecognizer
-speech_services_stub.StreamingSpeechRecognizerFromBytes = _RealStreamingRecognizer
+
+# Mock StreamingSpeechRecognizerFromBytes to avoid Azure Speech SDK dependencies
+class _MockStreamingSpeechRecognizer:
+    def __init__(self, *args, **kwargs):
+        self.is_recognizing = False
+        self.recognition_result = None
+    
+    async def start_continuous_recognition_async(self):
+        self.is_recognizing = True
+    
+    async def stop_continuous_recognition_async(self):
+        self.is_recognizing = False
+        
+    def __enter__(self):
+        return self
+        
+    def __exit__(self, *args):
+        pass
+
+speech_services_stub.StreamingSpeechRecognizerFromBytes = _MockStreamingSpeechRecognizer
 sys.modules.setdefault("apps.rtagent.backend.src.services.speech_services", speech_services_stub)
 
 config_stub = ModuleType("config")

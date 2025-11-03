@@ -7,6 +7,11 @@ os.environ.setdefault("DISABLE_CLOUD_TELEMETRY", "true")
 # Also ensure Application Insights connection string is not set (prevents other code paths)
 os.environ.pop("APPLICATIONINSIGHTS_CONNECTION_STRING", None)
 
+# Set required Azure OpenAI environment variables for CI
+os.environ.setdefault("AZURE_OPENAI_ENDPOINT", "https://test.openai.azure.com")
+os.environ.setdefault("AZURE_OPENAI_API_KEY", "test-key")
+os.environ.setdefault("AZURE_OPENAI_CHAT_DEPLOYMENT_ID", "test-deployment")
+
 import asyncio
 import json
 import pytest
