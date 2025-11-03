@@ -347,14 +347,20 @@ async def lifespan(app: FastAPI):
 
     async def start_aoai_client() -> None:
         session_manager = getattr(app.state, "session_manager", None)
+        
+        # Handle case where AzureOpenAIClient import might have failed in CI
+        initial_client = AzureOpenAIClient if AzureOpenAIClient is not None else None
+        if initial_client is None:
+            logger.warning("AzureOpenAIClient not available, creating client manager without initial client")
+        
         aoai_manager = AoaiClientManager(
             session_manager=session_manager,
-            initial_client=AzureOpenAIClient,
+            initial_client=initial_client,
         )
         app.state.aoai_client_manager = aoai_manager
         # Expose the underlying client for legacy call-sites while we migrate.
         app.state.aoai_client = await aoai_manager.get_client()
-        logger.info("Azure OpenAI client attached", extra={"manager_enabled": True})
+        logger.info("Azure OpenAI client attached", extra={"manager_enabled": True, "initial_client_available": initial_client is not None})
 
     add_step("aoai", start_aoai_client)
 
