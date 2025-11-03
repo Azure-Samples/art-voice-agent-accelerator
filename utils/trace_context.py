@@ -1,4 +1,5 @@
 import os
+import random
 import time
 from typing import Optional
 
@@ -148,6 +149,11 @@ class TraceContext:
         """Add an event to the span if tracing is enabled."""
         if self._should_trace and self._span:
             self._span.add_event(name, attributes or {})
+
+    def record_exception(self, exception) -> None:
+        """Record an exception on the span if tracing is enabled."""
+        if self._should_trace and self._span:
+            self._span.record_exception(exception)
 
     @staticmethod
     def _extract_component_from_span_name(span_name: str) -> str:
