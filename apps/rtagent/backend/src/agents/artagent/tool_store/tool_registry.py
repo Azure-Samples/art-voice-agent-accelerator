@@ -11,6 +11,9 @@ from apps.rtagent.backend.src.agents.artagent.tool_store.handoffs import (
 from apps.rtagent.backend.src.agents.artagent.tool_store.policies import (
     find_information_for_policy,
 )
+from apps.rtagent.backend.src.agents.artagent.tool_store.voicemail import (
+    detect_voicemail_and_end_call,
+)
 from utils.ml_logging import get_logger
 
 log = get_logger("tools_helper")
@@ -23,6 +26,7 @@ from apps.rtagent.backend.src.agents.artagent.tool_store.schemas import (
     handoff_claim_schema,
     handoff_general_schema,
     record_fnol_schema,
+    detect_voicemail_schema,
 )
 
 function_mapping: Dict[str, Callable[..., Any]] = {
@@ -33,6 +37,7 @@ function_mapping: Dict[str, Callable[..., Any]] = {
     "escalate_human": escalate_human,
     "handoff_claim_agent": handoff_claim_agent,
     "find_information_for_policy": find_information_for_policy,
+    "detect_voicemail_and_end_call": detect_voicemail_and_end_call,
 }
 
 
@@ -44,6 +49,7 @@ available_tools: List[Dict[str, Any]] = [
     {"type": "function", "function": escalate_human_schema},
     {"type": "function", "function": handoff_claim_schema},
     {"type": "function", "function": find_information_schema},
+    {"type": "function", "function": detect_voicemail_schema},
 ]
 
 TOOL_REGISTRY: dict[str, dict] = {t["function"]["name"]: t for t in available_tools}

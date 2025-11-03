@@ -12,10 +12,12 @@ WebSocket helpers for both realtime and ACS routers:
 from __future__ import annotations
 
 import asyncio
+from functools import partial
 import json
+import time
 import uuid
 from contextlib import suppress
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
@@ -37,7 +39,6 @@ from utils.ml_logging import get_logger
 
 logger = get_logger("shared_ws")
 
-
 def _mirror_ws_state(ws: WebSocket, key: str, value) -> None:
     """Store a copy of connection metadata on websocket.state for barge-in fallbacks."""
     try:
@@ -48,35 +49,43 @@ def _mirror_ws_state(ws: WebSocket, key: str, value) -> None:
 
 
 def _get_connection_metadata(ws: WebSocket, key: str, default=None):
-    """Helper to get metadata from connection manager safely with websocket.state fallback."""
-    try:
-        conn_id = getattr(ws.state, "conn_id", None)
-        if conn_id and hasattr(ws.app.state, "conn_manager"):
-            connection = ws.app.state.conn_manager._conns.get(conn_id)
-            if connection and connection.meta.handler:
-                if key in connection.meta.handler:
-                    value = connection.meta.handler[key]
-                    _mirror_ws_state(ws, key, value)
-                    return value
-    except Exception:
-        logger.debug("Metadata lookup failed for %s; using websocket.state fallback", key)
-    return getattr(ws.state, key, default)
+    """Helper to get metadata using session context with websocket.state fallback."""
+    sentinel = object()
+    session_context = getattr(ws.state, "session_context", None)
+    if session_context:
+        value = session_context.get_metadata_nowait(key, sentinel)
+        if value is not sentinel:
+            _mirror_ws_state(ws, key, value)
+            return value
+
+    value = getattr(ws.state, key, sentinel)
+    if value is not sentinel:
+        return value
+
+    return default
+
+
+def get_connection_metadata(ws: WebSocket, key: str, default=None):
+    """Public accessor for connection metadata with fallback support."""
+    return _get_connection_metadata(ws, key, default)
 
 
 def _set_connection_metadata(ws: WebSocket, key: str, value) -> bool:
-    """Helper to set metadata in connection manager safely, mirroring websocket.state."""
-    try:
-        conn_id = getattr(ws.state, "conn_id", None)
-        if conn_id and hasattr(ws.app.state, "conn_manager"):
-            connection = ws.app.state.conn_manager._conns.get(conn_id)
-            if connection and connection.meta.handler:
-                connection.meta.handler[key] = value
-                _mirror_ws_state(ws, key, value)
-                return True
-    except Exception as exc:
-        logger.debug("Failed to set metadata %s on connection: %s", key, exc)
+    """Helper to set metadata using session context, mirroring websocket.state."""
+    updated = False
+
+    session_context = getattr(ws.state, "session_context", None)
+    if session_context:
+        session_context.set_metadata_nowait(key, value)
+        updated = True
+    else:
+        logger.debug(
+            "No session_context available when setting metadata '%s'; websocket.state fallback only.",
+            key,
+        )
+
     _mirror_ws_state(ws, key, value)
-    return False
+    return updated
 
 
 def _lt_stop(latency_tool: Optional[LatencyTool], stage: str, ws: WebSocket, meta=None):
@@ -104,6 +113,102 @@ def _ws_is_connected(ws: WebSocket) -> bool:
         ws.client_state == WebSocketState.CONNECTED
         and ws.application_state == WebSocketState.CONNECTED
     )
+
+
+async def send_session_envelope(
+    ws: WebSocket,
+    envelope: Dict[str, Any],
+    *,
+    session_id: Optional[str] = None,
+    conn_id: Optional[str] = None,
+    event_label: str = "unspecified",
+    broadcast_only: bool = False,
+) -> bool:
+    """Deliver payload via connection manager with broadcast fallback.
+
+    Args:
+        ws: Active websocket instance managing the session.
+        envelope: JSON-serialisable payload to deliver to the frontend.
+        session_id: Optional override for session correlation.
+        conn_id: Optional override for connection id.
+        event_label: Context string for logging when fallbacks trigger.
+
+    Returns:
+        bool: True when direct connection delivery succeeds, False otherwise.
+
+    This helper protects against stale connection identifiers by attempting
+    a session-scoped broadcast when the targeted connection is unavailable.
+    As a final safeguard it falls back to sending directly on the websocket
+    if the connection manager is inaccessible.
+    """
+
+    manager = getattr(ws.app.state, "conn_manager", None)
+    resolved_conn_id = conn_id or getattr(ws.state, "conn_id", None)
+    resolved_session_id = session_id or getattr(ws.state, "session_id", None)
+
+    if manager and resolved_conn_id and not broadcast_only:
+        try:
+            sent = await manager.send_to_connection(resolved_conn_id, envelope)
+            if sent:
+                return True
+            logger.debug(
+                "Direct send skipped; connection missing",
+                extra={
+                    "session_id": resolved_session_id,
+                    "conn_id": resolved_conn_id,
+                    "event": event_label,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Direct send failed; switching to broadcast",
+                extra={
+                    "session_id": resolved_session_id,
+                    "conn_id": resolved_conn_id,
+                    "event": event_label,
+                    "error": str(exc),
+                },
+            )
+
+    if manager and resolved_session_id:
+        try:
+            await manager.broadcast_session(resolved_session_id, envelope)
+            return False
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "Session broadcast fallback failed",
+                extra={
+                    "session_id": resolved_session_id,
+                    "conn_id": resolved_conn_id,
+                    "event": event_label,
+                    "error": str(exc),
+                },
+            )
+
+    if _ws_is_connected(ws):
+        try:
+            await ws.send_json(envelope)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "Final websocket fallback failed",
+                extra={
+                    "session_id": resolved_session_id,
+                    "conn_id": resolved_conn_id,
+                    "event": event_label,
+                    "error": str(exc),
+                },
+            )
+        return False
+
+    logger.debug(
+        "No delivery path available for envelope",
+        extra={
+            "session_id": resolved_session_id,
+            "conn_id": resolved_conn_id,
+            "event": event_label,
+        },
+    )
+    return False
 
 
 async def send_tts_audio(
@@ -141,6 +246,10 @@ async def send_tts_audio(
     cancel_event: Optional[asyncio.Event] = _get_connection_metadata(
         ws, "tts_cancel_event"
     )
+
+    voice_to_use = voice_name or GREETING_VOICE_TTS
+    style = voice_style or "conversational"
+    eff_rate = rate or "medium"
 
     try:
         (
@@ -181,6 +290,8 @@ async def send_tts_audio(
             cancel_event.clear()
             return
 
+        now = time.monotonic()
+
         if not _set_connection_metadata(ws, "is_synthesizing", True):
             logger.debug("[%s] Unable to flag is_synthesizing=True", session_id)
         if not _set_connection_metadata(ws, "audio_playing", True):
@@ -191,17 +302,72 @@ async def send_tts_audio(
         except Exception:
             pass
 
-        # Use voice settings
-        voice_to_use = voice_name or GREETING_VOICE_TTS
-        style = voice_style or "conversational"
-        eff_rate = rate or "medium"
+        _set_connection_metadata(ws, "last_tts_start_ts", now)
+
+        # One-time voice warm-up to avoid first-response decoder stalls
+        warm_signature = (voice_to_use, style, eff_rate)
+        prepared_voices: set[tuple[str, str, str]] = getattr(
+            synth, "_prepared_voices", None
+        )
+        if prepared_voices is None:
+            prepared_voices = set()
+            setattr(synth, "_prepared_voices", prepared_voices)
+
+        if warm_signature not in prepared_voices:
+            warm_partial = partial(
+                synth.synthesize_to_pcm,
+                text=" .",
+                voice=voice_to_use,
+                sample_rate=TTS_SAMPLE_RATE_UI,
+                style=style,
+                rate=eff_rate,
+            )
+            try:
+                loop = asyncio.get_running_loop()
+                executor = getattr(ws.app.state, "speech_executor", None)
+                if executor:
+                    await asyncio.wait_for(
+                        loop.run_in_executor(executor, warm_partial), timeout=4.0
+                    )
+                else:
+                    await asyncio.wait_for(
+                        loop.run_in_executor(None, warm_partial), timeout=4.0
+                    )
+                prepared_voices.add(warm_signature)
+                logger.debug(
+                    "[%s] Warmed TTS voice=%s style=%s rate=%s (run=%s)",
+                    session_id,
+                    voice_to_use,
+                    style,
+                    eff_rate,
+                    run_id,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[%s] TTS warm-up timed out for voice=%s style=%s (run=%s)",
+                    session_id,
+                    voice_to_use,
+                    style,
+                    run_id,
+                )
+            except Exception as warm_exc:
+                logger.warning(
+                    "[%s] TTS warm-up failed for voice=%s style=%s: %s (run=%s)",
+                    session_id,
+                    voice_to_use,
+                    style,
+                    warm_exc,
+                    run_id,
+                )
 
         logger.debug(
             f"TTS synthesis: voice={voice_to_use}, style={style}, rate={eff_rate} (run={run_id})"
         )
 
         async def _synthesize() -> bytes:
-            return await asyncio.to_thread(
+            loop = asyncio.get_running_loop()
+            executor = getattr(ws.app.state, "speech_executor", None)
+            synth_partial = partial(
                 synth.synthesize_to_pcm,
                 text=text,
                 voice=voice_to_use,
@@ -209,6 +375,9 @@ async def send_tts_audio(
                 style=style,
                 rate=eff_rate,
             )
+            if executor:
+                return await loop.run_in_executor(executor, synth_partial)
+            return await loop.run_in_executor(None, synth_partial)
 
         synthesis_task = asyncio.create_task(_synthesize())
         cancel_wait: Optional[asyncio.Task[None]] = None
@@ -230,6 +399,7 @@ async def send_tts_audio(
                         session_id,
                         run_id,
                     )
+                    _set_connection_metadata(ws, "last_tts_end_ts", time.monotonic())
                     return
 
             pcm_bytes = await synthesis_task
@@ -248,6 +418,7 @@ async def send_tts_audio(
                 session_id,
                 run_id,
             )
+            _set_connection_metadata(ws, "last_tts_end_ts", time.monotonic())
             return
 
         _lt_stop(
@@ -378,6 +549,7 @@ async def send_tts_audio(
             pass
         if cancel_event:
             cancel_event.clear()
+        _set_connection_metadata(ws, "last_tts_end_ts", time.monotonic())
 
         # Enhanced pool management with dedicated clients
         if session_id:
@@ -409,6 +581,20 @@ async def send_response_to_acs(
     rate: Optional[str] = None,
 ) -> Optional[asyncio.Task]:
     """Send TTS response to ACS phone call."""
+
+    def _record_status(status: str) -> None:
+        try:
+            _set_connection_metadata(ws, "acs_last_playback_status", status)
+        except Exception as exc:
+            # Log and continue: failure to set metadata is non-fatal, but should be traceable.
+            logger.warning(
+                "Failed to set ACS playback status metadata (status=%s, run_id=%s): %s",
+                status,
+                getattr(ws, "callConnectionId", None),
+                exc,
+            )
+    _record_status("pending")
+    playback_status = "pending"
     run_id = str(uuid.uuid4())[:8]
     voice_to_use = voice_name or GREETING_VOICE_TTS
     style_candidate = (voice_style or DEFAULT_VOICE_STYLE or "chat").strip()
@@ -460,6 +646,8 @@ async def send_response_to_acs(
             except Exception as e:
                 logger.error(f"ACS MEDIA: Unable to acquire TTS synthesizer (run={run_id}): {e}")
                 _lt_stop(latency_tool, "tts", ws, meta={"run_id": run_id, "mode": "acs", "error": "acquire_failed"})
+                playback_status = "acquire_failed"
+                _record_status(playback_status)
                 return None
 
         try:
@@ -469,6 +657,7 @@ async def send_response_to_acs(
                 voice_to_use,
                 len(text),
             )
+            playback_status = "started"
             playback_task = asyncio.current_task()
             if main_event_loop and playback_task:
                 main_event_loop.current_playback_task = playback_task
@@ -556,6 +745,8 @@ async def send_response_to_acs(
                         run_id,
                         sequence_id,
                     )
+                    playback_status = "cancelled"
+                    _record_status(playback_status)
                     raise
                 except Exception as e:
                     if not _ws_is_connected(ws):
@@ -570,6 +761,8 @@ async def send_response_to_acs(
                             e,
                             (text[:40] + "...") if len(text) > 40 else text,
                         )
+                    playback_status = "failed"
+                    _record_status(playback_status)
                     break
 
             logger.info(
@@ -586,6 +779,8 @@ async def send_response_to_acs(
                         "ACS MEDIA: WebSocket closing; skipping StopAudio send (run=%s)",
                         run_id,
                     )
+                    playback_status = "interrupted"
+                    _record_status(playback_status)
                 else:
                     try:
                         await ws.send_json(
@@ -594,6 +789,8 @@ async def send_response_to_acs(
                         logger.debug(
                             "ACS MEDIA: Sent StopAudio after playback (run=%s)", run_id
                         )
+                        playback_status = "completed"
+                        _record_status(playback_status)
                     except Exception as e:
                         if not _ws_is_connected(ws):
                             logger.debug(
@@ -606,6 +803,11 @@ async def send_response_to_acs(
                                 run_id,
                                 e,
                             )
+                        playback_status = "interrupted"
+                        _record_status(playback_status)
+            else:
+                playback_status = "no_audio"
+                _record_status(playback_status)
 
         except asyncio.TimeoutError:
             logger.error(
@@ -615,11 +817,15 @@ async def send_response_to_acs(
                 (text[:40] + "...") if len(text) > 40 else text,
             )
             frames = []
+            playback_status = "timeout"
+            _record_status(playback_status)
         except asyncio.CancelledError:
             logger.info(
                 "ACS MEDIA: Playback cancelled by barge-in (run=%s)",
                 run_id,
             )
+            playback_status = "cancelled"
+            _record_status(playback_status)
             raise
         except Exception as e:
             frames = []
@@ -629,6 +835,8 @@ async def send_response_to_acs(
                 e,
                 (text[:40] + "...") if len(text) > 40 else text,
             )
+            playback_status = "failed"
+            _record_status(playback_status)
         finally:
             if (
                 main_event_loop
@@ -668,6 +876,8 @@ async def send_response_to_acs(
                 meta={"run_id": run_id, "mode": "acs", "error": "no_acs_caller"},
             )
             logger.error("ACS caller not available for TRANSCRIPTION mode")
+            playback_status = "no_caller"
+            _record_status(playback_status)
             return None
 
         call_conn = _get_connection_metadata(ws, "call_conn")
@@ -679,6 +889,8 @@ async def send_response_to_acs(
                 meta={"run_id": run_id, "mode": "acs", "error": "no_call_connection"},
             )
             logger.error("Call connection not available")
+            playback_status = "no_call_connection"
+            _record_status(playback_status)
             return None
 
         # Queue with ACS
@@ -692,11 +904,15 @@ async def send_response_to_acs(
             ws,
             meta={"run_id": run_id, "mode": "acs", "queued": True},
         )
+        playback_status = "queued"
+        _record_status(playback_status)
 
         return task
 
     else:
         logger.error(f"Unknown stream mode: {stream_mode}")
+        playback_status = "invalid_mode"
+        _record_status(playback_status)
         return None
 
 
@@ -709,17 +925,27 @@ async def push_final(
 ) -> None:
     """Push final message (close bubble helper)."""
     try:
+        envelope = {
+            "type": "assistant_final",
+            "content": content,
+            "speaker": role,
+            "sender": role,
+            "message": content,
+        }
+        conn_id = None if is_acs else getattr(ws.state, "conn_id", None)
+        await send_session_envelope(
+            ws,
+            envelope,
+            session_id=getattr(ws.state, "session_id", None),
+            conn_id=conn_id,
+            event_label="assistant_final",
+            broadcast_only=is_acs,
+        )
         if is_acs:
-            # For ACS, just log - the call flow handles final messages
-            logger.debug(f"ACS final message: {role}: {content[:50]}...")
-        else:
-            # For browser, send final message
-            await ws.send_json(
-                {
-                    "type": "assistant_final",
-                    "content": content,
-                    "speaker": role,
-                }
+            logger.debug(
+                "ACS final message broadcast only: %s: %s...",
+                role,
+                content[:50],
             )
     except Exception as e:
         logger.error(f"Error pushing final message: {e}")
@@ -771,4 +997,6 @@ __all__ = [
     "send_response_to_acs",
     "push_final",
     "broadcast_message",
+    "send_session_envelope",
+    "get_connection_metadata",
 ]

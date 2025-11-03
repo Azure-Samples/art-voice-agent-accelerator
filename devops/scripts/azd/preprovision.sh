@@ -136,12 +136,12 @@ case "$PROVIDER" in
         echo "Deployer identity set to: $DEPLOYER_NAME"
         # Validate required variables
         if [ -z "$AZURE_ENV_NAME" ]; then
-            echo "Error: AZURE_ENV_NAME environment variable is not set"
+            log_warning "Warn: AZURE_ENV_NAME environment variable is not set"
             exit 1
         fi
 
         if [ -z "$AZURE_LOCATION" ]; then
-            echo "Error: AZURE_LOCATION environment variable is not set"
+            log_warning "Warn: AZURE_LOCATION environment variable is not set"
             exit 1
         fi
         

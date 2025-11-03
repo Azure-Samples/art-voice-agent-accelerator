@@ -40,6 +40,13 @@
     
     *Voice live orchestration architecture showing real-time audio processing, conversation management, and agent coordination patterns.*
 
+=== "🧩 Dynamics IVR Bridge"
+    **Low-code intent mapping with Dynamics and ACS orchestration**
+    
+    ![Dynamics IVR Bridge](../assets/RTAgent_Dynamics.png)
+    
+    *Dynamics 365 handles IVR intent mapping and automated workflows, then performs a SIP transfer bridge into Azure Communication Services for custom real-time orchestration with the RT Agent.*
+
 !!! note "Infrastructure Deployment Approach"
     The Terraform deployment intentionally excludes App Gateway, API Management, and private networking to provide a **malleable foundation** that consumers can extend based on their specific requirements. Production enterprise features are available through separate Bicep templates.
 

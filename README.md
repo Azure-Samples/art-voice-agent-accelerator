@@ -115,7 +115,7 @@ Pick one of three ways to run the voice inference layer—the rest of the framew
 ## **Getting started**
 
 > [!TIP]
-> Not an Infrastructure-as-Code person? Start by skimming `docs/DeploymentGuide.md`. You've got two easy deployment paths—azd (one-command) or Terraform + Makefile—but you could also deploy the infrastructure from the Azure Portal UI or reuse your current infrastructure if it matches the requirements. Once your cloud resources are up, follow `docs/quickstart-local-development.md` for a step-by-step local run.
+> Not an Infrastructure-as-Code person? Start by skimming the [deployment guide](docs/deployment/README.md). You've got two easy deployment paths—azd (one-command) or Terraform + Makefile—but you could also deploy the infrastructure from the Azure Portal UI or reuse your current infrastructure if it matches the requirements. Once your cloud resources are up, follow [`docs/getting-started/local-development.md`](docs/getting-started/local-development.md) for a step-by-step local run.
 
 ### **Understand the Repository map (high‑level)**
 
@@ -135,11 +135,11 @@ Pick one of three ways to run the voice inference layer—the rest of the framew
 ```
 
 > [!NOTE]
-> Need a deeper map (up to 5 levels) and exact local run steps? See [`docs/repo-structure.md`](docs/repo-structure.md).
+> Need a deeper map (up to 5 levels) and exact local run steps? See [`docs/guides/repository-structure.md`](docs/guides/repository-structure.md).
 
 ### **Deploy and Customize the Demo App Using the ARTAgent Framework**
 
-Already have infra deployed? You can skip azd and run locally using the Quickstart — see `docs/quickstart-local-development.md`.
+Already have infra deployed? You can skip azd and run locally using the Quickstart — see [`docs/getting-started/local-development.md`](docs/getting-started/local-development.md).
 
 > [!IMPORTANT]
 > Prerequisites for azd deployment:
@@ -154,10 +154,10 @@ azd auth login
 azd up   # ~15 min for complete infra and code deployment
 ```
 
-For a detailed deployment walkthrough, see [`docs/DeploymentGuide.md`](docs/DeploymentGuide.md).
+For a detailed deployment walkthrough, see [`docs/deployment/README.md`](docs/deployment/README.md).
 
 ## **Contributing**
-PRs & issues welcome—see `CONTRIBUTING.md` before pushing.
+PRs & issues welcome—see [`CONTRIBUTING.md`](CONTRIBUTING.md) before pushing.
 
 ## **License & Disclaimer**
 Released under MIT. This sample is **not** an official Microsoft product—validate compliance (HIPAA, PCI, GDPR, etc.) before production use.

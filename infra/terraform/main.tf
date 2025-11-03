@@ -95,7 +95,7 @@ locals {
     log_analytics      = "log-${local.resource_token}"
     app_insights       = "ai-${local.resource_token}"
     container_env      = "cae-${var.name}-${var.environment_name}-${local.resource_token}"
-    foundry_account    = "aif${var.name}${var.environment_name}"
+    foundry_account    = substr(replace("aif${var.name}${var.environment_name}", "/[^a-zA-Z0-9]/", ""), 0, 24)
     foundry_project    = "aif${var.name}${var.environment_name}proj"
   }
 

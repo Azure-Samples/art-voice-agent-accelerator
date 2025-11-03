@@ -36,6 +36,7 @@ def make_envelope(
         "sender": sender,
         "ts": datetime.now(timezone.utc).isoformat(),
         "payload": payload,
+        "speaker_id": sender
     }
 
 

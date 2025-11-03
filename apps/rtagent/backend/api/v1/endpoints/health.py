@@ -18,6 +18,10 @@ from config import (
     ACS_CONNECTION_STRING,
     ACS_ENDPOINT,
     ACS_SOURCE_PHONE_NUMBER,
+    AZURE_SPEECH_ENDPOINT,
+    AZURE_SPEECH_KEY,
+    AZURE_SPEECH_REGION,
+    AZURE_SPEECH_RESOURCE_ID,
     BACKEND_AUTH_CLIENT_ID,
     AZURE_TENANT_ID,
     ALLOWED_CLIENT_IDS,
@@ -29,7 +33,6 @@ from apps.rtagent.backend.api.v1.schemas.health import (
     ReadinessResponse,
 )
 from utils.ml_logging import get_logger
-from src.pools.aoai_pool import AOAI_POOL_ENABLED, get_aoai_pool
 
 logger = get_logger("v1.health")
 
@@ -409,26 +412,19 @@ async def readiness_check(
     )
     health_checks.append(redis_status)
 
-    # Check Azure OpenAI
-    # openai_status = await fast_ping(
-    #     _check_azure_openai_fast,
-    #     request.app.state.azureopenai_client,
-    #     component="azure_openai",
-    # )
-    # health_checks.append(openai_status)
-    # Check Azure OpenAI pool
+    # Check Azure OpenAI client
     aoai_status = await fast_ping(
-        _check_azure_openai_pool_fast,
-        request.app.state.aoai_pool,
-        component="azure_openai_pool",
+        _check_azure_openai_fast,
+        request.app.state.aoai_client,
+        component="azure_openai",
     )
     health_checks.append(aoai_status)
 
-    # Check Speech Services (pools)
+    # Check Speech Services (configuration & pool readiness)
     speech_status = await fast_ping(
-        _check_speech_services_fast,
-        request.app.state.tts_pool,
-        request.app.state.stt_pool,
+        _check_speech_configuration_fast,
+        getattr(request.app.state, "stt_pool", None),
+        getattr(request.app.state, "tts_pool", None),
         component="speech_services",
     )
     health_checks.append(speech_status)
@@ -520,116 +516,89 @@ async def _check_azure_openai_fast(openai_client) -> ServiceCheck:
             error="not initialized",
             check_time_ms=round((time.time() - start) * 1000, 2),
         )
+
+    ready_attributes = []
+    if hasattr(openai_client, "api_version"):
+        ready_attributes.append(f"api_version={openai_client.api_version}")
+    if hasattr(openai_client, "deployment"):
+        ready_attributes.append(f"deployment={getattr(openai_client, 'deployment', 'n/a')}")
+
     return ServiceCheck(
         component="azure_openai",
         status="healthy",
         check_time_ms=round((time.time() - start) * 1000, 2),
-        details="client initialized",
-    )
-
-
-async def _check_azure_openai_pool_fast(aoai_pool) -> ServiceCheck:
-    """Fast Azure OpenAI pool check using pool manager."""
-    start = time.time()
-    if not AOAI_POOL_ENABLED:
-        return ServiceCheck(
-            component="azure_openai_pool",
-            status="healthy",
-            details="pool disabled",
-            check_time_ms=round((time.time() - start) * 1000, 2),
-        )
-
-    try:
-        pool = aoai_pool or await get_aoai_pool()
-    except Exception as exc:
-        return ServiceCheck(
-            component="azure_openai_pool",
-            status="unhealthy",
-            error=f"initialization failed: {exc}",
-            check_time_ms=round((time.time() - start) * 1000, 2),
-        )
-
-    if not pool:
-        return ServiceCheck(
-            component="azure_openai_pool",
-            status="unhealthy",
-            error="pool unavailable",
-            check_time_ms=round((time.time() - start) * 1000, 2),
-        )
-
-    # Check pool statistics and client health
-    try:
-        stats = pool.get_pool_stats()
-    except Exception as exc:
-        return ServiceCheck(
-            component="azure_openai_pool",
-            status="unhealthy",
-            error=f"stats inspection failed: {exc}",
-            check_time_ms=round((time.time() - start) * 1000, 2),
-        )
-
-    unhealthy_clients = [
-        client["client_index"]
-        for client in stats.get("clients", [])
-        if not client.get("healthy", True)
-    ]
-
-    status = "healthy" if not unhealthy_clients else "degraded"
-    details_parts = [
-        f"size={stats.get('pool_size', 0)}",
-        f"active_sessions={stats.get('active_sessions', 0)}",
-    ]
-    if unhealthy_clients:
-        details_parts.append(
-            "unhealthy_clients=" + ",".join(map(str, unhealthy_clients))
-        )
-
-    return ServiceCheck(
-        component="azure_openai_pool",
-        status=status,
-        check_time_ms=round((time.time() - start) * 1000, 2),
-        details=", ".join(details_parts),
+        details=", ".join(ready_attributes) if ready_attributes else "client initialized",
     )
 
 
 
-async def _check_speech_services_fast(tts_pool, stt_pool) -> ServiceCheck:
-    """Fast Speech Services check using pools.
-
-    Checks that both TTS and STT pools are initialized and ready.
-    """
+async def _check_speech_configuration_fast(stt_pool, tts_pool) -> ServiceCheck:
+    """Validate speech configuration values and pool readiness without external calls."""
     start = time.time()
-    if not tts_pool or not stt_pool:
-        return ServiceCheck(
-            component="speech_services",
-            status="unhealthy",
-            error="pools not initialized",
-            check_time_ms=round((time.time() - start) * 1000, 2),
-        )
 
-    # Check if pools are properly configured
-    try:
-        pool_info = {
-            "tts_pool_size": tts_pool._size,
-            "tts_pool_queue_size": tts_pool._q.qsize(),
-            "tts_pool_ready": tts_pool._ready.is_set(),
-            "stt_pool_size": stt_pool._size,
-            "stt_pool_queue_size": stt_pool._q.qsize(),
-            "stt_pool_ready": stt_pool._ready.is_set(),
+    missing: List[str] = []
+    config_summary = {
+        "region": bool(AZURE_SPEECH_REGION),
+        "endpoint": bool(AZURE_SPEECH_ENDPOINT),
+        "key_present": bool(AZURE_SPEECH_KEY),
+        "resource_id_present": bool(AZURE_SPEECH_RESOURCE_ID),
+    }
+
+    if not config_summary["region"]:
+        missing.append("AZURE_SPEECH_REGION")
+
+    if not (config_summary["key_present"] or config_summary["resource_id_present"]):
+        missing.append("AZURE_SPEECH_KEY or AZURE_SPEECH_RESOURCE_ID")
+
+    pool_snapshots: Dict[str, Dict[str, Any]] = {}
+    for label, pool in (("stt_pool", stt_pool), ("tts_pool", tts_pool)):
+        if pool is None:
+            missing.append(f"{label} not initialized")
+            continue
+
+        snapshot_fn = getattr(pool, "snapshot", None)
+        if not callable(snapshot_fn):
+            missing.append(f"{label} missing snapshot")
+            continue
+
+        snapshot = snapshot_fn()
+        pool_snapshots[label] = {
+            "name": snapshot.get("name", label),
+            "ready": bool(snapshot.get("ready")),
+            "session_awareness": snapshot.get("session_awareness", False),
         }
-    except Exception as e:
+
+        if not pool_snapshots[label]["ready"]:
+            missing.append(f"{label} not ready")
+
+    detail_parts = [
+        f"region={'set' if config_summary['region'] else 'missing'}",
+        f"endpoint={'set' if config_summary['endpoint'] else 'missing'}",
+        f"key={'present' if config_summary['key_present'] else 'absent'}",
+        f"managed_identity={'present' if config_summary['resource_id_present'] else 'absent'}",
+    ]
+
+    for label, snapshot in pool_snapshots.items():
+        detail_parts.append(
+            f"{label}_ready={snapshot['ready']}|session_awareness={snapshot['session_awareness']}"
+        )
+
+    elapsed_ms = round((time.time() - start) * 1000, 2)
+
+    if missing:
         return ServiceCheck(
             component="speech_services",
             status="unhealthy",
-            error=f"pool introspection failed: {e}",
-            check_time_ms=round((time.time() - start) * 1000, 2),
+            error="; ".join(missing),
+            check_time_ms=elapsed_ms,
+            details="; ".join(detail_parts),
         )
 
     return ServiceCheck(
         component="speech_services",
         status="healthy",
-        check_time_ms=round((time.time() - start) * 1000, 2),
-        details=f"pools ready: TTS={pool_info['tts_pool_ready']}, STT={pool_info['stt_pool_ready']}",
+        check_time_ms=elapsed_ms,
+        details="; ".join(detail_parts),
     )
 
 

@@ -447,11 +447,14 @@ async def _create_media_handler(
     if ACS_STREAMING_MODE == StreamMode.MEDIA:
         # Use the V1 ACS media handler - acquire recognizer from pool
         try:
-            # Defensive pool monitoring to prevent deadlocks
-            stt_queue_size = websocket.app.state.stt_pool._q.qsize()
-            tts_queue_size = websocket.app.state.tts_pool._q.qsize()
+            stt_snapshot = websocket.app.state.stt_pool.snapshot()
+            tts_snapshot = websocket.app.state.tts_pool.snapshot()
             logger.info(
-                f"Pool status before acquire: STT={stt_queue_size}, TTS={tts_queue_size}"
+                "Speech providers before acquire: STT ready=%s active_sessions=%s | TTS ready=%s active_sessions=%s",
+                stt_snapshot.get("ready"),
+                stt_snapshot.get("active_sessions"),
+                tts_snapshot.get("ready"),
+                tts_snapshot.get("active_sessions"),
             )
 
             (

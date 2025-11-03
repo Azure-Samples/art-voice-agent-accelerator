@@ -20,6 +20,7 @@ class TerminationReason(Enum):
 
     HUMAN_HANDOFF = auto()
     NORMAL = auto()
+    VOICEMAIL = auto()
     ERROR = auto()
     IDLE_TIMEOUT = auto()
 
@@ -258,6 +259,7 @@ def _get_goodbye_message(reason: TerminationReason) -> Optional[str]:
     goodbye_messages = {
         TerminationReason.HUMAN_HANDOFF: "Thank you for calling. I'm now transferring you to a live agent who will assist you further. Please hold while I connect you.",
         TerminationReason.NORMAL: "Thank you for calling. Have a great day! Goodbye.",
+        TerminationReason.VOICEMAIL: "It sounds like we reached a voicemail greeting, so I'll end the call now. Please call back if you need further assistance. Goodbye.",
         TerminationReason.ERROR: "I apologize, but we're experiencing technical difficulties. Please call back in a few minutes. Goodbye.",
         TerminationReason.IDLE_TIMEOUT: "Thank you for calling. Due to inactivity, I'm ending this call. Please call back if you need further assistance. Goodbye.",
     }

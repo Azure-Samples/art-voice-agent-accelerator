@@ -31,7 +31,7 @@ from apps.rtagent.backend.src.agents.artagent.tool_store.tools_helper import (
     push_tool_start,
 )
 from apps.rtagent.backend.src.helpers import add_space
-from apps.rtagent.backend.src.services.openai_services import client as az_openai_client
+from src.aoai.client import client as az_openai_client
 from apps.rtagent.backend.src.ws_helpers.shared_ws import (
     broadcast_message,
     push_final,

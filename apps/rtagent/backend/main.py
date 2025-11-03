@@ -17,7 +17,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from src.pools.async_pool import AsyncPool
+from src.pools.on_demand_pool import OnDemandResourcePool
 from utils.telemetry_config import setup_azure_monitor
 
 # ---------------- Monitoring ------------------------------------------------
@@ -42,6 +42,8 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 from src.pools.connection_manager import ThreadSafeConnectionManager
 from src.pools.session_metrics import ThreadSafeSessionMetrics
+from .src.services import AzureOpenAIClient, CosmosDBMongoCoreManager, AzureRedisManager, SpeechSynthesizer, StreamingSpeechRecognizerFromBytes
+from src.aoai.client_manager import AoaiClientManager
 from config.app_config import AppConfig
 from config.app_settings import (
     AGENT_AUTH_CONFIG,
@@ -139,11 +141,7 @@ def _build_startup_dashboard(
         f" Auth Guard  : {auth_status}",
         f" Telemetry   : {telemetry_line}",
         f" ACS         : {acs_line}",
-        (
-            " Speech Pools: "
-            f"TTS={app_config.speech_pools.tts_pool_size}, "
-            f"STT={app_config.speech_pools.stt_pool_size}"
-        ),
+        " Speech Mode : on-demand resource factories",
     ]
 
     if docs_enabled:
@@ -318,48 +316,22 @@ async def lifespan(app: FastAPI):
                 candidate_languages=RECOGNIZED_LANGUAGE,
                 audio_format=AUDIO_FORMAT,
             )
+        logger.info("Initializing on-demand speech providers")
 
-        logger.info("Initializing Speech pools")
-        # STT Pool: Session-agnostic design for maximum flexibility
-        # Speech-to-text recognizers can float between sessions since they only
-        # consume audio input and produce text transcriptions. Each STT instance
-        # is stateless and can be safely shared across different call sessions
-        # without resource conflicts or session-specific state contamination.
-        app.state.stt_pool = AsyncPool(
+        app.state.stt_pool = OnDemandResourcePool(
             factory=make_stt,
-            size=app_config.speech_pools.stt_pool_size,
-            enable_session_awareness=False,  # STT instances can serve any session
-            enable_prewarming=False,  # Simple on-demand allocation
-            enable_cleanup=False,     # Minimal lifecycle management
-            acquire_timeout=2.0,
+            session_awareness=False,
+            name="speech-stt",
         )
-        
-        # TTS Pool: Session-aware design for voice consistency and state preservation
-        # Text-to-speech synthesizers maintain voice characteristics, prosody state,
-        # and conversation context that must remain consistent within a session.
-        # Dedicated session assignment prevents voice drift and ensures natural
-        # conversation flow by preserving speaker-specific synthesis parameters.
-        app.state.tts_pool = AsyncPool(
+
+        app.state.tts_pool = OnDemandResourcePool(
             factory=make_tts,
-            size=app_config.speech_pools.tts_pool_size,
-            enable_session_awareness=True,  # Each session gets dedicated TTS instance
-            max_dedicated_resources=app_config.connections.max_connections,
-            enable_prewarming=True,         # Pre-allocate for low latency
-            prewarming_batch_size=5,
-            enable_cleanup=True,            # Manage long-lived session resources
-            cleanup_interval_seconds=180,
-            resource_max_age_seconds=1800,
-            acquire_timeout=2.0,
+            session_awareness=True,
+            name="speech-tts",
         )
 
         await asyncio.gather(app.state.tts_pool.prepare(), app.state.stt_pool.prepare())
-        logger.info(
-            "speech pools prepared",
-            extra={
-                "tts_pool": app_config.speech_pools.tts_pool_size,
-                "stt_pool": app_config.speech_pools.stt_pool_size,
-            },
-        )
+        logger.info("speech providers ready")
 
     async def stop_speech_pools() -> None:
         shutdown_tasks = []
@@ -373,23 +345,18 @@ async def lifespan(app: FastAPI):
 
     add_step("speech", start_speech_pools, stop_speech_pools)
 
-    async def start_aoai_pool() -> None:
-        from src.pools.aoai_pool import get_aoai_pool
+    async def start_aoai_client() -> None:
+        session_manager = getattr(app.state, "session_manager", None)
+        aoai_manager = AoaiClientManager(
+            session_manager=session_manager,
+            initial_client=AzureOpenAIClient,
+        )
+        app.state.aoai_client_manager = aoai_manager
+        # Expose the underlying client for legacy call-sites while we migrate.
+        app.state.aoai_client = await aoai_manager.get_client()
+        logger.info("Azure OpenAI client attached", extra={"manager_enabled": True})
 
-        if os.getenv("AOAI_POOL_ENABLED", "true").lower() != "true":
-            app.state.aoai_pool = None
-            logger.info("AOAI pool disabled")
-            return
-
-        aoai_pool = await get_aoai_pool()
-        if aoai_pool:
-            app.state.aoai_pool = aoai_pool
-            logger.info("AOAI pool initialized", extra={"clients": len(aoai_pool.clients)})
-        else:
-            app.state.aoai_pool = None
-            logger.warning("AOAI pool initialization returned None")
-
-    add_step("aoai", start_aoai_pool)
+    add_step("aoai", start_aoai_client)
 
     async def start_external_services() -> None:
         app.state.cosmos = CosmosDBMongoCoreManager(

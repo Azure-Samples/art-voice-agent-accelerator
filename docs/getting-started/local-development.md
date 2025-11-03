@@ -325,17 +325,35 @@ python -m pytest tests/test_dtmf_validation.py -v
 ```
 
 ### Load Testing (Advanced)
-Test WebSocket performance with realistic conversation scenarios:
+Validate ACS media relay and real-time conversation paths with the maintained Locust scripts and Make targets:
 
 ```bash
-# Generate realistic audio for testing
+# Generate or refresh PCM fixtures shared by both load tests
 make generate_audio
 
-# Run WebSocket load test locally
-locust -f tests/load/locustfile.py --web-host 127.0.0.1 --web-port 8089
+# ACS media relay flow (/api/v1/media/stream)
+make run_load_test_acs_media HOST=wss://<your-backend-host>
+
+# Real-time conversation flow (/api/v1/realtime/conversation)
+make run_load_test_realtime_conversation HOST=wss://<your-backend-host>
+```
+
+Adjust concurrency via `USERS`, `SPAWN_RATE`, `TIME`, and pass extra Locust flags with `EXTRA_ARGS='--headless --html report.html'`.
+
+Metrics reported in Locust:
+- `ttfb[...]` — time-to-first-byte after the client stops streaming audio.
+- `barge_latency[...]` — recovery time after simulated barge-in traffic.
+- `turn_complete[...]` — end-to-end latency covering audio send, response, and barge handling.
+
+The targets wrap `tests/load/locustfile.acs_media.py` and `tests/load/locustfile.realtime_conversation.py`. To run them manually:
+
+```bash
+locust -f tests/load/locustfile.acs_media.py --host wss://<backend-host> --users 10 --spawn-rate 2 --run-time 5m --headless
+locust -f tests/load/locustfile.realtime_conversation.py --host wss://<backend-host> --users 10 --spawn-rate 2 --run-time 5m --headless
 ```
 
 **What the load tests validate:**
+
 - ✅ **Real-time audio streaming** - 20ms PCM chunks via WebSocket
 - ✅ **Multi-turn conversations** - Insurance inquiries and quick questions
 - ✅ **Response timing** - TTFB (Time-to-First-Byte) measurement

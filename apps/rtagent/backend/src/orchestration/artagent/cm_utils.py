@@ -17,6 +17,7 @@ def get_correlation_context(ws: WebSocket, cm: "MemoManager") -> Tuple[str, str]
         logger.warning("MemoManager is None in get_correlation_context, using fallbacks")
         call_connection_id = (
             getattr(ws.state, "call_connection_id", None)
+            or ws.headers.get("x-ms-call-connection-id")
             or ws.headers.get("x-call-connection-id")
             or "unknown"
         )
@@ -29,6 +30,7 @@ def get_correlation_context(ws: WebSocket, cm: "MemoManager") -> Tuple[str, str]
 
     call_connection_id = (
         getattr(ws.state, "call_connection_id", None)
+        or ws.headers.get("x-ms-call-connection-id")
         or ws.headers.get("x-call-connection-id")
         or cm.session_id
     )

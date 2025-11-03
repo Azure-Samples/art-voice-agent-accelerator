@@ -204,7 +204,6 @@ override.tf.json
 .terraformrc
 terraform.rc
 # Terraform backend config (contains environment-specific values)
-main.tfvars.json
 .deploy
 backend.tf
 infra/terraform/backend.tf
@@ -430,3 +429,4 @@ _back
 baseline_results/
 tests/load/sessions/
 tests/load/results/
+infra/terraform/main.tfvars.json

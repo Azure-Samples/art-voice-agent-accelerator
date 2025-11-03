@@ -41,7 +41,8 @@ This deployment uses **Terraform** as Infrastructure as Code with **Azure Contai
     Your Azure account needs these permissions in the target subscription:
     
     - **Owner** or **Contributor** + **User Access Administrator**
-    - Permission to create service principals and managed identities
+    - Permission to create managed identities and assign their roles
+    - Permission to create service principals (only needed when enabling EasyAuth)
     - Permission to assign roles to resources
 
 ```bash title="Verify Azure permissions"
@@ -258,6 +259,42 @@ make monitor_backend_deployment
 make monitor_frontend_deployment
 ```
 
+#### Build and Publish Container Images
+Before running `make deploy_*` or Terraform application modules, build and push your containers to the Azure Container Registry created earlier.
+
+```bash
+# From repo root
+ACR_NAME=$(terraform output -raw container_registry_name)   # or azd env get-value
+ACR_LOGIN_SERVER="$ACR_NAME.azurecr.io"
+
+az acr login --name $ACR_NAME
+
+# Backend image (Dockerfile: apps/rtagent/backend/Dockerfile)
+docker build \
+  -f apps/rtagent/backend/Dockerfile \
+  -t $ACR_LOGIN_SERVER/voice-agent-backend:$(git rev-parse --short HEAD) \
+  apps/rtagent/backend
+docker push $ACR_LOGIN_SERVER/voice-agent-backend:$(git rev-parse --short HEAD)
+
+# Frontend image (Dockerfile: apps/rtagent/frontend/Dockerfile)
+docker build \
+  -f apps/rtagent/frontend/Dockerfile \
+  -t $ACR_LOGIN_SERVER/voice-agent-frontend:$(git rev-parse --short HEAD) \
+  apps/rtagent/frontend
+docker push $ACR_LOGIN_SERVER/voice-agent-frontend:$(git rev-parse --short HEAD)
+```
+
+Update your Terraform variables (for example, `backend_image_tag` and `frontend_image_tag`) to match the tags you pushed so the Container Apps pick up the correct images.
+
+Need a local integration pass before pushing? Use the root [`docker-compose.yml`](../../docker-compose.yml) to build and validate the services together:
+
+```bash
+docker compose build
+docker compose up
+```
+
+Stop the compose stack when finished, publish fresh images, then re-run your Terraform or Make-based deployment.
+
 ### 4. Phone Number Configuration
 
 Configure an Azure Communication Services phone number for voice calls:
@@ -283,6 +320,20 @@ azd env set ACS_SOURCE_PHONE_NUMBER "+1234567890"
 6. Configure webhook endpoints for incoming call handling
 
 > **Detailed Guide**: [Get a phone number for Azure Communication Services](https://learn.microsoft.com/en-us/azure/communication-services/quickstarts/telephony/get-phone-number)
+
+
+#### Configure Inbound Call Webhook
+1. Open your Azure Communication Services resource in the Azure Portal.
+2. Select **Events** → **+ Event Subscription**.
+3. Choose **Inbound Call** as the event type.
+4. Set the endpoint type to **Web Hook** and provide the callback URL:
+   - Local development: `https://<your-devtunnel-host>/api/v1/calls/answer`
+   - Deployed backend: `https://<backend-container-app-endpoint>/api/v1/calls/answer`
+5. Complete the subscription wizard to enable webhook delivery for inbound calls.
+
+> ***Optional: Secure Event Grid Delivery with Microsoft Entra ID***
+>
+>    If you need authenticated delivery, configure the Event Grid subscription to use Microsoft Entra ID for webhook validation. Follow the [Entra ID authentication guidance](https://learn.microsoft.com/azure/event-grid/authenticate-with-microsoft-entra-id) and grant your event handler the required app registration and role assignments before enabling the subscription.
 
 ### 5. Connectivity Testing
 

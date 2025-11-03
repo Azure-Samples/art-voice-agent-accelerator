@@ -6,7 +6,7 @@ Optimized for low latency and minimal resource usage.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 import logging
 import asyncio
 from opentelemetry import trace
@@ -42,26 +42,21 @@ async def get_dedicated_tts_health(
     Optimized for minimal latency - returns essential health indicators only.
     """
     try:
-        # Fast metrics collection - no complex calculations
-        metrics = await manager.get_metrics()
-
-        # Simplified health indicators for speed
-        dedicated_count = metrics.get("dedicated_client_count", 0)
-        warm_count = metrics.get("warm_pool_size", 0)
-
-        # Binary health status for speed
-        is_healthy = dedicated_count >= 0 and warm_count >= 0
+        snapshot = manager.snapshot()  # type: ignore[attr-defined]
+        active_sessions = snapshot.get("active_sessions", 0)
+        ready = snapshot.get("ready", False)
 
         health_status = {
-            "status": "healthy" if is_healthy else "degraded",
-            "dedicated_clients": dedicated_count,
-            "warm_pool_size": warm_count,
-            "timestamp": metrics.get("timestamp"),
+            "status": "healthy" if ready else "degraded",
+            "active_sessions": active_sessions,
+            "session_awareness": snapshot.get("session_awareness"),
+            "timestamp": snapshot.get("metrics", {}).get("timestamp"),
         }
 
         logger.info(
-            f"[PERF] TTS Health: {health_status['status']}, "
-            f"dedicated={dedicated_count}, warm={warm_count}"
+            "[PERF] TTS Health: %s active_sessions=%s",
+            health_status["status"],
+            active_sessions,
         )
 
         return health_status
@@ -79,19 +74,18 @@ async def get_tts_metrics(manager=Depends(get_dedicated_tts_manager)) -> Dict[st
     Returns core metrics needed for performance monitoring.
     """
     try:
-        # Get raw metrics only - no expensive calculations
-        metrics = await manager.get_metrics()
+        snapshot = manager.snapshot()  # type: ignore[attr-defined]
+        metrics = snapshot.get("metrics", {})
 
-        # Return minimal set for performance
         essential_metrics = {
-            "dedicated_client_count": metrics.get("dedicated_client_count", 0),
-            "warm_pool_size": metrics.get("warm_pool_size", 0),
-            "total_allocations": metrics.get("total_allocations", 0),
-            "allocation_failures": metrics.get("allocation_failures", 0),
+            "active_sessions": snapshot.get("active_sessions", 0),
+            "allocations_total": metrics.get("allocations_total", 0),
+            "allocations_cached": metrics.get("allocations_cached", 0),
+            "allocations_new": metrics.get("allocations_new", 0),
             "timestamp": metrics.get("timestamp"),
         }
 
-        logger.info(f"[PERF] TTS metrics collected: {essential_metrics}")
+        logger.info("[PERF] TTS metrics collected: %s", essential_metrics)
         return essential_metrics
 
     except Exception as e:
@@ -109,10 +103,11 @@ async def get_simple_status(
     Minimal overhead endpoint for external monitoring systems.
     """
     try:
-        # Ultra-fast check - just verify manager is responsive
-        metrics = await asyncio.wait_for(manager.get_metrics(), timeout=1.0)
+        snapshot = await asyncio.wait_for(
+            asyncio.to_thread(manager.snapshot), timeout=1.0
+        )
 
-        return {"status": "ok", "timestamp": metrics.get("timestamp")}
+        return {"status": "ok", "timestamp": snapshot.get("metrics", {}).get("timestamp")}
 
     except asyncio.TimeoutError:
         return {"status": "timeout"}

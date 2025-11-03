@@ -39,7 +39,7 @@ pip install -r requirements.txt
 pip install -r requirements-codequality.txt
 ```
 
-For local development, also see `docs/quickstart-local-development.md`.
+For local development, also see [`docs/getting-started/local-development.md`](docs/getting-started/local-development.md).
 
 ### 4. Create a Feature Branch
 ```bash

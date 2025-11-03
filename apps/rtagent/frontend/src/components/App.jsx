@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import "reactflow/dist/style.css";
+import useBargeIn from '../hooks/useBargeIn.js';
+import logger from '../utils/logger.js';
 
 // Environment configuration
 const backendPlaceholder = '__BACKEND_URL__';
@@ -18,10 +20,8 @@ const getOrCreateSessionId = () => {
     const tabId = Math.random().toString(36).substr(2, 6);
     sessionId = `session_${Date.now()}_${tabId}`;
     sessionStorage.setItem(sessionKey, sessionId);
-    console.log('Created NEW tab-specific session ID:', sessionId);
-  } else {
-    console.log('Retrieved existing tab session ID:', sessionId);
   }
+  
   
   return sessionId;
 };
@@ -31,9 +31,26 @@ const createNewSessionId = () => {
   const tabId = Math.random().toString(36).substr(2, 6);
   const sessionId = `session_${Date.now()}_${tabId}`;
   sessionStorage.setItem(sessionKey, sessionId);
-  console.log('Created NEW session ID for reset:', sessionId);
+  logger.info('Created NEW session ID for reset:', sessionId);
   return sessionId;
 };
+
+const createMetricsState = () => ({
+  sessionStart: null,
+  sessionStartIso: null,
+  sessionId: null,
+  firstTokenTs: null,
+  ttftMs: null,
+  turnCounter: 0,
+  turns: [],
+  bargeInEvents: [],
+  pendingBargeIn: null,
+  lastAudioFrameTs: null,
+  currentTurnId: null,
+  awaitingAudioTurnId: null,
+});
+
+const toMs = (value) => (typeof value === "number" ? Math.round(value) : undefined);
 
 // Component styles
 const styles = {
@@ -266,7 +283,7 @@ const styles = {
     hyphens: "auto",
     whiteSpace: "pre-wrap",
   },
-  
+
   // Agent name label (appears above specialist bubbles)
   agentNameLabel: {
     fontSize: "10px",
@@ -1036,7 +1053,7 @@ const BackendIndicator = ({ url, onConfigureClick, onStatusChange }) => {
         throw new Error("Invalid response structure");
       }
     } catch (err) {
-      console.error("Readiness check failed:", err);
+      logger.error("Readiness check failed:", err);
       setIsConnected(false);
       setError(err.message);
       setReadinessData(null);
@@ -1060,7 +1077,7 @@ const BackendIndicator = ({ url, onConfigureClick, onStatusChange }) => {
         throw new Error("Invalid agents response structure");
       }
     } catch (err) {
-      console.error("Agents check failed:", err);
+      logger.error("Agents check failed:", err);
       setAgentsData(null);
     }
   };
@@ -1083,7 +1100,7 @@ const BackendIndicator = ({ url, onConfigureClick, onStatusChange }) => {
         throw new Error("Invalid health response structure");
       }
     } catch (err) {
-      console.error("Health check failed:", err);
+      logger.error("Health check failed:", err);
       setHealthData(null);
     }
   };
@@ -1123,7 +1140,7 @@ const BackendIndicator = ({ url, onConfigureClick, onStatusChange }) => {
       
       return data;
     } catch (err) {
-      console.error("Agent config update failed:", err);
+      logger.error("Agent config update failed:", err);
       setUpdateStatus({...updateStatus, [agentName]: 'error'});
       
       // Clear error status after 5 seconds
@@ -1956,6 +1973,8 @@ const ChatBubble = ({ message }) => {
     );
   }
   
+  const bubbleStyle = isUser ? styles.userBubble : styles.assistantBubble;
+
   return (
     <div style={isUser ? styles.userMessage : styles.assistantMessage}>
       {/* Show agent name for specialist agents and auth agent */}
@@ -1964,7 +1983,7 @@ const ChatBubble = ({ message }) => {
           {speaker}
         </div>
       )}
-      <div style={isUser ? styles.userBubble : styles.assistantBubble}>
+      <div style={bubbleStyle}>
         {text.split("\n").map((line, i) => (
           <div key={i}>{line}</div>
         ))}
@@ -2071,9 +2090,17 @@ function RealTimeVoiceApp() {
   // Audio playback refs for AudioWorklet
   const playbackAudioContextRef = useRef(null);
   const pcmSinkRef = useRef(null);
+  const playbackActiveRef = useRef(false);
+  const assistantStreamGenerationRef = useRef(0);
+  const terminationReasonRef = useRef(null);
+  const resampleWarningRef = useRef(false);
+  const shouldReconnectRef = useRef(false);
+  const reconnectTimeoutRef = useRef(null);
+  const reconnectAttemptsRef = useRef(0);
   
   const [audioLevel, setAudioLevel] = useState(0);
   const audioLevelRef = useRef(0);
+  const metricsRef = useRef(createMetricsState());
 
   const workletSource = `
     class PcmSink extends AudioWorkletProcessor {
@@ -2086,12 +2113,10 @@ function RealTimeVoiceApp() {
           if (e.data?.type === 'push') {
             // payload is Float32Array
             this.queue.push(e.data.payload);
-            console.log('AudioWorklet: Received audio chunk, queue length:', this.queue.length);
           } else if (e.data?.type === 'clear') {
             // Clear all queued audio data for immediate interruption
             this.queue = [];
             this.readIndex = 0;
-            console.log('AudioWorklet: Audio queue cleared for barge-in');
           }
         };
       }
@@ -2122,6 +2147,30 @@ function RealTimeVoiceApp() {
     registerProcessor('pcm-sink', PcmSink);
   `;
 
+  const resampleFloat32 = useCallback((input, fromRate, toRate) => {
+    if (!input || fromRate === toRate || !Number.isFinite(fromRate) || !Number.isFinite(toRate) || fromRate <= 0 || toRate <= 0) {
+      return input;
+    }
+
+    const resampleRatio = toRate / fromRate;
+    if (!Number.isFinite(resampleRatio) || resampleRatio <= 0) {
+      return input;
+    }
+
+    const newLength = Math.max(1, Math.round(input.length * resampleRatio));
+    const output = new Float32Array(newLength);
+    for (let i = 0; i < newLength; i += 1) {
+      const sourceIndex = i / resampleRatio;
+      const index0 = Math.floor(sourceIndex);
+      const index1 = Math.min(input.length - 1, index0 + 1);
+      const frac = sourceIndex - index0;
+      const sample0 = input[index0] ?? 0;
+      const sample1 = input[index1] ?? sample0;
+      output[i] = sample0 + (sample1 - sample0) * frac;
+    }
+    return output;
+  }, []);
+
   // Initialize playback audio context and worklet (call on user gesture)
   const initializeAudioPlayback = async () => {
     if (playbackAudioContextRef.current) return; // Already initialized
@@ -2151,15 +2200,200 @@ function RealTimeVoiceApp() {
       pcmSinkRef.current = sink;
       
       appendLog("🔊 Audio playback initialized");
-      console.log("AudioWorklet playback system initialized, context sample rate:", audioCtx.sampleRate);
+      logger.info("AudioWorklet playback system initialized, context sample rate:", audioCtx.sampleRate);
     } catch (error) {
-      console.error("Failed to initialize audio playback:", error);
+      logger.error("Failed to initialize audio playback:", error);
       appendLog("❌ Audio playback init failed");
     }
   };
 
 
-  const appendLog = m => setLog(p => `${p}\n${new Date().toLocaleTimeString()} - ${m}`);
+  const appendLog = useCallback((message) => {
+    setLog(prev => `${prev}\n${new Date().toLocaleTimeString()} - ${message}`);
+  }, []);
+
+  const publishMetricsSummary = useCallback(
+    (label, detail) => {
+      if (!label) {
+        return;
+      }
+
+      let formatted = null;
+      if (typeof detail === "string") {
+        formatted = detail;
+        logger.info(`[Metrics] ${label}: ${detail}`);
+      } else if (detail && typeof detail === "object") {
+        const entries = Object.entries(detail).filter(([, value]) => value !== undefined && value !== null && value !== "");
+        formatted = entries
+          .map(([key, value]) => `${key}=${value}`)
+          .join(" • ");
+        logger.info(`[Metrics] ${label}`, detail);
+      } else {
+        logger.info(`[Metrics] ${label}`, metricsRef.current);
+      }
+
+      appendLog(formatted ? `📈 ${label} — ${formatted}` : `📈 ${label}`);
+    },
+    [appendLog],
+  );
+
+  const {
+    interruptAssistantOutput,
+    recordBargeInEvent,
+    finalizeBargeInClear,
+  } = useBargeIn({
+    appendLog,
+    setActiveSpeaker,
+    assistantStreamGenerationRef,
+    pcmSinkRef,
+    playbackActiveRef,
+    metricsRef,
+    publishMetricsSummary,
+  });
+
+  const resetMetrics = useCallback(
+    (sessionId) => {
+      metricsRef.current = createMetricsState();
+      const metrics = metricsRef.current;
+      metrics.sessionStart = performance.now();
+      metrics.sessionStartIso = new Date().toISOString();
+      metrics.sessionId = sessionId;
+      publishMetricsSummary("Session metrics reset", {
+        sessionId,
+        at: metrics.sessionStartIso,
+      });
+    },
+    [publishMetricsSummary],
+  );
+
+  const registerUserTurn = useCallback(
+    (text) => {
+      const metrics = metricsRef.current;
+      const now = performance.now();
+      const turnId = metrics.turnCounter + 1;
+      metrics.turnCounter = turnId;
+      const turn = {
+        id: turnId,
+        userTs: now,
+        userTextPreview: text.slice(0, 80),
+      };
+      metrics.turns.push(turn);
+      metrics.currentTurnId = turnId;
+      metrics.awaitingAudioTurnId = turnId;
+      const elapsed = metrics.sessionStart != null ? toMs(now - metrics.sessionStart) : undefined;
+      publishMetricsSummary(`Turn ${turnId} user`, {
+        elapsedSinceStartMs: elapsed,
+      });
+    },
+    [publishMetricsSummary],
+  );
+
+  const registerAssistantStreaming = useCallback(
+    (speaker) => {
+      const metrics = metricsRef.current;
+      const now = performance.now();
+      let turn = metrics.turns.slice().reverse().find((t) => !t.firstTokenTs || !t.audioEndTs);
+      if (!turn) {
+        const turnId = metrics.turnCounter + 1;
+        metrics.turnCounter = turnId;
+        turn = {
+          id: turnId,
+          userTs: metrics.sessionStart ?? now,
+          synthetic: true,
+          userTextPreview: "[synthetic]",
+        };
+        metrics.turns.push(turn);
+        metrics.currentTurnId = turnId;
+      }
+
+      if (!turn.firstTokenTs) {
+        turn.firstTokenTs = now;
+        turn.firstTokenLatencyMs = turn.userTs != null ? now - turn.userTs : undefined;
+        if (metrics.firstTokenTs == null) {
+          metrics.firstTokenTs = now;
+        }
+        if (metrics.sessionStart != null && metrics.ttftMs == null) {
+          metrics.ttftMs = now - metrics.sessionStart;
+          publishMetricsSummary("TTFT captured", {
+            ttftMs: toMs(metrics.ttftMs),
+          });
+        }
+        publishMetricsSummary(`Turn ${turn.id} first token`, {
+          latencyMs: toMs(turn.firstTokenLatencyMs),
+          speaker,
+        });
+      }
+      metrics.currentTurnId = turn.id;
+    },
+    [publishMetricsSummary],
+  );
+
+  const registerAssistantFinal = useCallback(
+    (speaker) => {
+      const metrics = metricsRef.current;
+      const now = performance.now();
+      const turn = metrics.turns.slice().reverse().find((t) => !t.finalTextTs);
+      if (!turn) {
+        return;
+      }
+
+      if (!turn.finalTextTs) {
+        turn.finalTextTs = now;
+        turn.finalLatencyMs = turn.userTs != null ? now - turn.userTs : undefined;
+        metrics.awaitingAudioTurnId = turn.id;
+        publishMetricsSummary(`Turn ${turn.id} final text`, {
+          latencyMs: toMs(turn.finalLatencyMs),
+          speaker,
+        });
+        if (turn.audioStartTs != null) {
+          turn.finalToAudioMs = turn.audioStartTs - turn.finalTextTs;
+          publishMetricsSummary(`Turn ${turn.id} final→audio`, {
+            deltaMs: toMs(turn.finalToAudioMs),
+          });
+        }
+      }
+    },
+    [publishMetricsSummary],
+  );
+
+  const registerAudioFrame = useCallback(
+    (frameIndex, isFinal) => {
+      const metrics = metricsRef.current;
+      const now = performance.now();
+      metrics.lastAudioFrameTs = now;
+
+      const preferredId = metrics.awaitingAudioTurnId ?? metrics.currentTurnId;
+      let turn = preferredId != null ? metrics.turns.find((t) => t.id === preferredId) : undefined;
+      if (!turn) {
+        turn = metrics.turns.slice().reverse().find((t) => !t.audioEndTs);
+      }
+      if (!turn) {
+        return;
+      }
+
+      if ((frameIndex ?? 0) === 0 && turn.audioStartTs == null) {
+        turn.audioStartTs = now;
+        const deltaFromFinal = turn.finalTextTs != null ? now - turn.finalTextTs : undefined;
+        turn.finalToAudioMs = deltaFromFinal;
+        publishMetricsSummary(`Turn ${turn.id} audio start`, {
+          afterFinalMs: toMs(deltaFromFinal),
+          elapsedMs: turn.userTs != null ? toMs(now - turn.userTs) : undefined,
+        });
+      }
+
+      if (isFinal) {
+        turn.audioEndTs = now;
+        turn.audioPlaybackDurationMs = turn.audioStartTs != null ? now - turn.audioStartTs : undefined;
+        turn.totalLatencyMs = turn.userTs != null ? now - turn.userTs : undefined;
+        metrics.awaitingAudioTurnId = null;
+        publishMetricsSummary(`Turn ${turn.id} audio complete`, {
+          playbackDurationMs: toMs(turn.audioPlaybackDurationMs),
+          totalMs: toMs(turn.totalLatencyMs),
+        });
+      }
+    },
+    [publishMetricsSummary],
+  );
 
   useEffect(()=>{
     if(messageContainerRef.current) {
@@ -2181,29 +2415,37 @@ function RealTimeVoiceApp() {
         try { 
           processorRef.current.disconnect(); 
         } catch (e) {
-          console.warn("Cleanup error:", e);
+          logger.warn("Cleanup error:", e);
         }
       }
       if (audioContextRef.current) {
         try { 
           audioContextRef.current.close(); 
         } catch (e) {
-          console.warn("Cleanup error:", e);
+          logger.warn("Cleanup error:", e);
         }
       }
       if (playbackAudioContextRef.current) {
         try { 
           playbackAudioContextRef.current.close(); 
         } catch (e) {
-          console.warn("Cleanup error:", e);
+          logger.warn("Cleanup error:", e);
         }
+      }
+      playbackActiveRef.current = false;
+      shouldReconnectRef.current = false;
+      reconnectAttemptsRef.current = 0;
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
       }
       if (socketRef.current) {
         try { 
           socketRef.current.close(); 
         } catch (e) {
-          console.warn("Cleanup error:", e);
+          logger.warn("Cleanup error:", e);
         }
+        socketRef.current = null;
       }
     };
   }, []);
@@ -2220,26 +2462,77 @@ function RealTimeVoiceApp() {
       await initializeAudioPlayback();
 
       const sessionId = getOrCreateSessionId();
-      console.log('🔗 [FRONTEND] Starting conversation WebSocket with session_id:', sessionId);
+      resetMetrics(sessionId);
+      assistantStreamGenerationRef.current = 0;
+      terminationReasonRef.current = null;
+      resampleWarningRef.current = false;
+      shouldReconnectRef.current = true;
+      reconnectAttemptsRef.current = 0;
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+      logger.info('🔗 [FRONTEND] Starting conversation WebSocket with session_id:', sessionId);
 
-      // 1) open WS with session ID
-      const socket = new WebSocket(`${WS_URL}/api/v1/realtime/conversation?session_id=${sessionId}`);
-      socket.binaryType = "arraybuffer";
+      const connectSocket = (isReconnect = false) => {
+        const ws = new WebSocket(`${WS_URL}/api/v1/realtime/conversation?session_id=${sessionId}`);
+        ws.binaryType = "arraybuffer";
 
-      socket.onopen = () => {
-        appendLog("🔌 WS open - Connected to backend!");
-        console.log("WebSocket connection OPENED to backend at:", `${WS_URL}/api/v1/realtime/conversation`);
+        ws.onopen = () => {
+          appendLog(isReconnect ? "🔌 WS reconnected - Connected to backend!" : "🔌 WS open - Connected to backend!");
+          logger.info(
+            "WebSocket connection %s to backend at:",
+            isReconnect ? "RECONNECTED" : "OPENED",
+            `${WS_URL}/api/v1/realtime/conversation`,
+          );
+          reconnectAttemptsRef.current = 0;
+        };
+
+        ws.onclose = (event) => {
+          appendLog(`🔌 WS closed - Code: ${event.code}, Reason: ${event.reason}`);
+          logger.info("WebSocket connection CLOSED. Code:", event.code, "Reason:", event.reason);
+
+          if (socketRef.current === ws) {
+            socketRef.current = null;
+          }
+
+          if (!shouldReconnectRef.current) {
+            if (terminationReasonRef.current === "HUMAN_HANDOFF") {
+              appendLog("🔌 WS closed after live agent transfer");
+            }
+            return;
+          }
+
+          const attempt = reconnectAttemptsRef.current + 1;
+          reconnectAttemptsRef.current = attempt;
+          const delay = Math.min(5000, 250 * Math.pow(2, attempt - 1));
+          appendLog(`🔄 WS reconnect scheduled in ${Math.round(delay)} ms (attempt ${attempt})`);
+
+          if (reconnectTimeoutRef.current) {
+            clearTimeout(reconnectTimeoutRef.current);
+          }
+
+          reconnectTimeoutRef.current = window.setTimeout(() => {
+            reconnectTimeoutRef.current = null;
+            if (!shouldReconnectRef.current) {
+              return;
+            }
+            appendLog("🔄 Attempting WS reconnect…");
+            connectSocket(true);
+          }, delay);
+        };
+
+        ws.onerror = (err) => {
+          appendLog("❌ WS error - Check if backend is running");
+          logger.error("WebSocket error - backend might not be running:", err);
+        };
+
+        ws.onmessage = handleSocketMessage;
+        socketRef.current = ws;
+        return ws;
       };
-      socket.onclose = (event) => {
-        appendLog(`🔌 WS closed - Code: ${event.code}, Reason: ${event.reason}`);
-        console.log("WebSocket connection CLOSED. Code:", event.code, "Reason:", event.reason);
-      };
-      socket.onerror = (err) => {
-        appendLog("❌ WS error - Check if backend is running");
-        console.error("WebSocket error - backend might not be running:", err);
-      };
-      socket.onmessage = handleSocketMessage;
-      socketRef.current = socket;
+
+      connectSocket(false);
 
       // 2) setup Web Audio for raw PCM @16 kHz
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -2279,7 +2572,6 @@ function RealTimeVoiceApp() {
         setAudioLevel(level);
 
         // Debug: Log a sample of mic data
-        console.log("Mic data sample:", float32.slice(0, 10)); // Should show non-zero values if your mic is hot
 
         const int16 = new Int16Array(float32.length);
         for (let i = 0; i < float32.length; i++) {
@@ -2287,14 +2579,15 @@ function RealTimeVoiceApp() {
         }
 
         // Debug: Show size before send
-        console.log("Sending int16 PCM buffer, length:", int16.length);
+        // logger.debug("Sending int16 PCM buffer, length:", int16.length);
 
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(int16.buffer);
+        const activeSocket = socketRef.current;
+        if (activeSocket && activeSocket.readyState === WebSocket.OPEN) {
+          activeSocket.send(int16.buffer);
           // Debug: Confirm data sent
-          console.log("PCM audio chunk sent to backend!");
+          // logger.debug("PCM audio chunk sent to backend!");
         } else {
-          console.log("WebSocket not open, did not send audio.");
+          logger.debug("WebSocket not open, did not send audio.");
         }
       };
 
@@ -2308,7 +2601,7 @@ function RealTimeVoiceApp() {
         try { 
           processorRef.current.disconnect(); 
         } catch (e) {
-          console.warn("Error disconnecting processor:", e);
+          logger.warn("Error disconnecting processor:", e);
         }
         processorRef.current = null;
       }
@@ -2316,16 +2609,24 @@ function RealTimeVoiceApp() {
         try { 
           audioContextRef.current.close(); 
         } catch (e) {
-          console.warn("Error closing audio context:", e);
+          logger.warn("Error closing audio context:", e);
         }
         audioContextRef.current = null;
       }
+      playbackActiveRef.current = false;
       
+      shouldReconnectRef.current = false;
+      reconnectAttemptsRef.current = 0;
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+
       if (socketRef.current) {
         try { 
-          socketRef.current.close(); 
+          socketRef.current.close(1000, "client stop"); 
         } catch (e) {
-          console.warn("Error closing socket:", e);
+          logger.warn("Error closing socket:", e);
         }
         socketRef.current = null;
       }
@@ -2352,12 +2653,13 @@ function RealTimeVoiceApp() {
       if (typeof event.data === "string") {
         try {
           const msg = JSON.parse(event.data);
-          console.log("📨 WebSocket message received:", msg.type || "unknown", msg);
+          logger.debug("📨 WebSocket message received:", msg.type || "unknown", msg);
         } catch (e) {
-          console.log("📨 Non-JSON WebSocket message:", event.data);
+          logger.debug("📨 Non-JSON WebSocket message:", event.data);
+          logger.debug(e)
         }
       } else {
-        console.log("📨 Binary WebSocket message received, length:", event.data.byteLength);
+        logger.debug("📨 Binary WebSocket message received, length:", event.data.byteLength);
       }
 
       if (typeof event.data !== "string") {
@@ -2383,7 +2685,7 @@ function RealTimeVoiceApp() {
       // --- NEW: Handle envelope format from backend ---
       // If message is in envelope format, extract the actual payload
       if (payload.type && payload.sender && payload.payload && payload.ts) {
-        console.log("📨 Received envelope message:", {
+        logger.debug("📨 Received envelope message:", {
           type: payload.type,
           sender: payload.sender,
           topic: payload.topic,
@@ -2431,19 +2733,145 @@ function RealTimeVoiceApp() {
           };
         }
         
-        console.log("📨 Transformed envelope to legacy format:", payload);
+        logger.debug("📨 Transformed envelope to legacy format:", payload);
+      }
+
+      if (payload.type === "session_end") {
+        const reason = payload.reason || "UNKNOWN";
+        terminationReasonRef.current = reason;
+        if (reason === "HUMAN_HANDOFF") {
+          shouldReconnectRef.current = false;
+        }
+        const normalizedReason =
+          typeof reason === "string" ? reason.split("_").join(" ") : String(reason);
+        const reasonText =
+          reason === "HUMAN_HANDOFF"
+            ? "Transferring you to a live agent. Please stay on the line."
+            : `Session ended (${normalizedReason})`;
+        setMessages((prev) =>
+          pushIfChanged(prev, { speaker: "System", text: reasonText })
+        );
+        setActiveSpeaker("System");
+        appendLog(`⚠️ Session ended (${reason})`);
+        playbackActiveRef.current = false;
+        if (pcmSinkRef.current) {
+          pcmSinkRef.current.port.postMessage({ type: "clear" });
+        }
+        return;
+      }
+
+      if (payload.event_type === "stt_partial" && payload.data) {
+        const partialData = payload.data;
+        const partialText = (partialData.content || "").trim();
+        const partialMeta = {
+          reason: partialData.reason || "stt_partial",
+          trigger: partialData.streaming_type || "stt_partial",
+          at: partialData.stage || "partial",
+          action: "stt_partial",
+          sequence: partialData.sequence,
+        };
+
+        logger.debug("📝 STT partial detected:", {
+          text: partialText,
+          sequence: partialData.sequence,
+          trigger: partialMeta.trigger,
+        });
+
+        const bargeInEvent = recordBargeInEvent("stt_partial", partialMeta);
+        const shouldClearPlayback =
+          playbackActiveRef.current === true || !bargeInEvent?.clearIssuedTs;
+
+        if (shouldClearPlayback) {
+          interruptAssistantOutput(partialMeta, {
+            logMessage: "🔇 Audio cleared due to live speech (partial transcription)",
+          });
+
+          if (bargeInEvent) {
+            finalizeBargeInClear(bargeInEvent, { keepPending: true });
+          }
+        }
+
+        if (partialText) {
+          let registeredTurn = false;
+          setMessages((prev) => {
+            const last = prev.at(-1);
+            if (last?.speaker === "User" && last?.streaming) {
+              if (last.text === partialText) {
+                return prev;
+              }
+              const updated = prev.slice();
+              updated[updated.length - 1] = {
+                ...last,
+                text: partialText,
+                streamingType: "stt_partial",
+                sequence: partialData.sequence,
+                language: partialData.language || last.language,
+              };
+              return updated;
+            }
+            registeredTurn = true;
+            return [
+              ...prev,
+              {
+                speaker: "User",
+                text: partialText,
+                streaming: true,
+                streamingType: "stt_partial",
+                sequence: partialData.sequence,
+                language: partialData.language,
+              },
+            ];
+          });
+
+          if (registeredTurn) {
+            registerUserTurn(partialText);
+          }
+        }
+
+        setActiveSpeaker("User");
+        return;
+      }
+
+      if (payload.event_type === "live_agent_transfer") {
+        terminationReasonRef.current = "HUMAN_HANDOFF";
+        shouldReconnectRef.current = false;
+        playbackActiveRef.current = false;
+        if (pcmSinkRef.current) {
+          pcmSinkRef.current.port.postMessage({ type: "clear" });
+        }
+        const reasonDetail =
+          payload.data?.reason ||
+          payload.data?.escalation_reason ||
+          payload.data?.message;
+        const transferText = reasonDetail
+          ? `Escalating to a live agent: ${reasonDetail}`
+          : "Escalating you to a live agent. Please hold while we connect.";
+        setMessages((prev) =>
+          pushIfChanged(prev, { speaker: "System", text: transferText })
+        );
+        setActiveSpeaker("System");
+        appendLog("🤝 Escalated to live agent");
+        return;
       }
       
       // Handle audio_data messages from backend TTS
       if (payload.type === "audio_data" && payload.data) {
         try {
-          console.log("🔊 Received audio_data message:", {
+          logger.debug("🔊 Received audio_data message:", {
             frame_index: payload.frame_index,
             total_frames: payload.total_frames,
             sample_rate: payload.sample_rate,
             data_length: payload.data.length,
             is_final: payload.is_final
           });
+
+          registerAudioFrame(payload.frame_index, payload.is_final === true);
+
+          const isFinalChunk =
+            payload.is_final === true ||
+            (Number.isFinite(payload.total_frames) &&
+              Number.isFinite(payload.frame_index) &&
+              payload.frame_index + 1 >= payload.total_frames);
 
           // Decode base64 -> Int16 -> Float32 [-1, 1]
           const bstr = atob(payload.data);
@@ -2454,29 +2882,50 @@ function RealTimeVoiceApp() {
           const float32 = new Float32Array(int16.length);
           for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 0x8000;
 
-          console.log(`🔊 Processing TTS audio chunk: ${float32.length} samples, sample_rate: ${payload.sample_rate || 16000}`);
-          console.log("🔊 Audio data preview:", float32.slice(0, 10));
+          logger.debug(`🔊 Processing TTS audio chunk: ${float32.length} samples, sample_rate: ${payload.sample_rate || 16000}`);
+          logger.debug("🔊 Audio data preview:", float32.slice(0, 10));
 
           // Push to the worklet queue
           if (pcmSinkRef.current) {
-            pcmSinkRef.current.port.postMessage({ type: 'push', payload: float32 });
+            let samples = float32;
+            const playbackCtx = playbackAudioContextRef.current;
+            const sourceRate = payload.sample_rate;
+            if (playbackCtx && Number.isFinite(sourceRate) && sourceRate && playbackCtx.sampleRate !== sourceRate) {
+              samples = resampleFloat32(float32, sourceRate, playbackCtx.sampleRate);
+              if (!resampleWarningRef.current) {
+                appendLog(`🎚️ Resampling audio ${sourceRate}Hz → ${playbackCtx.sampleRate}Hz`);
+                resampleWarningRef.current = true;
+              }
+            }
+            pcmSinkRef.current.port.postMessage({ type: 'push', payload: samples });
             appendLog(`🔊 TTS audio frame ${payload.frame_index + 1}/${payload.total_frames}`);
           } else {
-            console.warn("Audio playback not initialized, attempting init...");
+            logger.warn("Audio playback not initialized, attempting init...");
             appendLog("⚠️ Audio playback not ready, initializing...");
             // Try to initialize if not done yet
             await initializeAudioPlayback();
             if (pcmSinkRef.current) {
-              pcmSinkRef.current.port.postMessage({ type: 'push', payload: float32 });
+              let samples = float32;
+              const playbackCtx = playbackAudioContextRef.current;
+              const sourceRate = payload.sample_rate;
+              if (playbackCtx && Number.isFinite(sourceRate) && sourceRate && playbackCtx.sampleRate !== sourceRate) {
+                samples = resampleFloat32(float32, sourceRate, playbackCtx.sampleRate);
+                if (!resampleWarningRef.current) {
+                  appendLog(`🎚️ Resampling audio ${sourceRate}Hz → ${playbackCtx.sampleRate}Hz`);
+                  resampleWarningRef.current = true;
+                }
+              }
+              pcmSinkRef.current.port.postMessage({ type: 'push', payload: samples });
               appendLog("🔊 TTS audio playing (after init)");
             } else {
-              console.error("Failed to initialize audio playback");
+              logger.error("Failed to initialize audio playback");
               appendLog("❌ Audio init failed");
             }
           }
+          playbackActiveRef.current = !isFinalChunk;
           return; // handled
         } catch (error) {
-          console.error("Error processing audio_data:", error);
+          logger.error("Error processing audio_data:", error);
           appendLog("❌ Audio processing failed: " + error.message);
         }
       }
@@ -2494,31 +2943,81 @@ function RealTimeVoiceApp() {
 
       if (msgType === "user" || speaker === "User") {
         setActiveSpeaker("User");
-        setMessages(prev => [...prev, { speaker: "User", text: txt }]);
-
+        setMessages((prev) => {
+          const last = prev.at(-1);
+          if (last?.speaker === "User" && last?.streaming) {
+            return prev.map((m, i) =>
+              i === prev.length - 1 ? { ...m, text: txt, streaming: false } : m,
+            );
+          }
+          return [...prev, { speaker: "User", text: txt }];
+        });
         appendLog(`User: ${txt}`);
         return;
       }
 
       if (type === "assistant_streaming") {
         const streamingSpeaker = speaker || "Assistant";
+        const streamGeneration = assistantStreamGenerationRef.current;
+        registerAssistantStreaming(streamingSpeaker);
         setActiveSpeaker(streamingSpeaker);
         setMessages(prev => {
-          if (prev.at(-1)?.streaming && prev.at(-1)?.speaker === streamingSpeaker) {
-            return prev.map((m,i)=> i===prev.length-1 ? {...m, text: m.text + txt} : m);
+          const latest = prev.at(-1);
+          if (
+            latest?.streaming &&
+            latest?.speaker === streamingSpeaker &&
+            latest?.streamGeneration === streamGeneration
+          ) {
+            return prev.map((m, i) =>
+              i === prev.length - 1
+                ? {
+                    ...m,
+                    text: m.text + txt,
+                  }
+                : m,
+            );
           }
-          return [...prev, { speaker:streamingSpeaker, text:txt, streaming:true }];
+          return [
+            ...prev,
+            {
+              speaker: streamingSpeaker,
+              text: txt,
+              streaming: true,
+              streamGeneration,
+            },
+          ];
         });
+        const pending = metricsRef.current?.pendingBargeIn;
+        if (pending) {
+          finalizeBargeInClear(pending);
+        }
         return;
       }
 
       if (msgType === "assistant" || msgType === "status" || speaker === "Assistant") {
+        const assistantSpeaker = speaker || "Assistant";
+        registerAssistantFinal(assistantSpeaker);
         setActiveSpeaker("Assistant");
         setMessages(prev => {
-          if (prev.at(-1)?.streaming) {
-            return prev.map((m,i)=> i===prev.length-1 ? {...m, text:txt, streaming:false} : m);
+          const latest = prev.at(-1);
+          if (
+            latest?.streaming &&
+            latest?.speaker === assistantSpeaker
+          ) {
+            return prev.map((m, i) =>
+              i === prev.length - 1
+                ? {
+                    ...m,
+                    text: txt,
+                    streaming: false,
+                  }
+                : m,
+            );
           }
-          return pushIfChanged(prev, { speaker:"Assistant", text:txt });
+          return pushIfChanged(prev, {
+            speaker: assistantSpeaker,
+            text: txt,
+          });
         });
 
         appendLog("🤖 Assistant responded");
@@ -2580,21 +3079,25 @@ function RealTimeVoiceApp() {
 
       if (type === "control") {
         const { action } = payload;
-        console.log("🎮 Control message received:", action);
+        logger.debug("🎮 Control message received:", action);
         
-        if (action === "tts_cancelled") {
-          console.log("🔇 TTS cancelled - clearing audio queue");
-          appendLog("🔇 Audio interrupted by user speech");
-          
-          if (pcmSinkRef.current) {
-            pcmSinkRef.current.port.postMessage({ type: 'clear' });
+        if (action === "tts_cancelled" || action === "audio_stop") {
+          logger.debug(`🔇 Control audio stop received (${action}) - clearing audio queue`);
+          const meta = {
+            reason: payload.reason,
+            trigger: payload.trigger,
+            at: payload.at,
+            action,
+          };
+          const event = recordBargeInEvent(action, meta);
+          interruptAssistantOutput(meta);
+          if (action === "audio_stop" && event) {
+            finalizeBargeInClear(event);
           }
-          
-          setActiveSpeaker(null);
           return;
         }
-        
-        console.log("🎮 Unknown control action:", action);
+
+        logger.debug("🎮 Unknown control action:", action);
         return;
       }
     };
@@ -2614,8 +3117,8 @@ function RealTimeVoiceApp() {
     try {
       // Get the current session ID for this browser session
       const currentSessionId = getOrCreateSessionId();
-      console.log('📞 [FRONTEND] Initiating phone call with session_id:', currentSessionId);
-      console.log('📞 [FRONTEND] This session_id will be sent to backend for call mapping');
+      logger.info('📞 [FRONTEND] Initiating phone call with session_id:', currentSessionId);
+      logger.debug('📞 [FRONTEND] This session_id will be sent to backend for call mapping');
       
       const res = await fetch(`${API_BASE_URL}/api/v1/calls/initiate`, {
         method:"POST",
@@ -2640,7 +3143,7 @@ function RealTimeVoiceApp() {
       appendLog("📞 Call initiated");
 
       // relay WS WITH session_id to monitor THIS session (including phone calls)
-      console.log('🔗 [FRONTEND] Starting dashboard relay WebSocket to monitor session:', currentSessionId);
+      logger.info('🔗 [FRONTEND] Starting dashboard relay WebSocket to monitor session:', currentSessionId);
       const relay = new WebSocket(`${WS_URL}/api/v1/realtime/dashboard/relay?session_id=${currentSessionId}`);
       relay.onopen = () => appendLog("Relay WS connected");
       relay.onmessage = ({data}) => {
@@ -2650,7 +3153,7 @@ function RealTimeVoiceApp() {
           // Handle envelope format for relay messages
           let processedObj = obj;
           if (obj.type && obj.sender && obj.payload && obj.ts) {
-            console.log("📨 Relay received envelope message:", {
+            logger.debug("📨 Relay received envelope message:", {
               type: obj.type,
               sender: obj.sender,
               topic: obj.topic
@@ -2677,7 +3180,7 @@ function RealTimeVoiceApp() {
                 message: JSON.stringify(obj.payload)
               };
             }
-            console.log("📨 Transformed relay envelope:", processedObj);
+            logger.debug("📨 Transformed relay envelope:", processedObj);
           }
           
           if (processedObj.type?.startsWith("tool_")) {
@@ -2691,7 +3194,7 @@ function RealTimeVoiceApp() {
             appendLog(`[Relay] ${sender}: ${message}`);
           }
         } catch (error) {
-          console.error("Relay parse error:", error);
+          logger.error("Relay parse error:", error);
           appendLog("Relay parse error");
         }
       };
@@ -2783,7 +3286,7 @@ function RealTimeVoiceApp() {
                   
                   // Close existing WebSocket if connected
                   if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-                    console.log('🔌 Closing WebSocket for session reset...');
+                    logger.info('🔌 Closing WebSocket for session reset...');
                     socketRef.current.close();
                   }
                   

@@ -1,14 +1,14 @@
 from .cosmosdb_services import CosmosDBMongoCoreManager
-from .openai_services import client
 from .redis_services import AzureRedisManager
+from .openai_services import AzureOpenAIClient
 from .speech_services import (
     SpeechSynthesizer,
     StreamingSpeechRecognizerFromBytes,
 )
 
 __all__ = [
+    "AzureOpenAIClient",
     "CosmosDBMongoCoreManager",
-    "client",
     "AzureRedisManager",
     "SpeechSynthesizer",
     "StreamingSpeechRecognizerFromBytes",

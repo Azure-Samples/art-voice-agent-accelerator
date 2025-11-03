@@ -559,7 +559,9 @@ class StreamingSpeechRecognizerFromBytes:
         """
         self.partial_callback = callback
 
-    def set_final_result_callback(self, callback: Callable[[str, str], None]) -> None:
+    def set_final_result_callback(
+        self, callback: Callable[[str, str, Optional[str]], None]
+    ) -> None:
         """
         Set callback function for final recognition results.
 
@@ -1433,11 +1435,16 @@ class StreamingSpeechRecognizerFromBytes:
                             },
                         )
 
+            speaker_id = self._extract_speaker_id(evt)
+
             if self.final_callback and evt.result.text:
                 logger.debug(
-                    f"Calling final_callback with: '{evt.result.text}', '{detected_lang}'"
+                    "Calling final_callback with: '%s', '%s', speaker=%s",
+                    evt.result.text,
+                    detected_lang,
+                    speaker_id,
                 )
-                self.final_callback(evt.result.text, detected_lang)
+                self.final_callback(evt.result.text, detected_lang, speaker_id)
             elif evt.result.text:
                 logger.debug(
                     f"⚠️ Got final text but no final_callback: '{evt.result.text}'"
