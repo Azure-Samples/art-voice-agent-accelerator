@@ -9,7 +9,7 @@ from .speech_services import (
 __all__ = [
     "AzureOpenAIClient",
     "CosmosDBMongoCoreManager",
-    "AzureRedisManager",
+    "AzureRedisManager", 
     "SpeechSynthesizer",
     "StreamingSpeechRecognizerFromBytes",
 ]
