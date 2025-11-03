@@ -53,9 +53,14 @@ def _ensure_tracer_provider_configured() -> None:
         if current_resource:
             missing -= set(current_resource.attributes.keys())
             if missing:
-                provider._resource = current_resource.merge(resource)
+                # Create a new TracerProvider with merged resource instead of mutating private attribute
+                merged_resource = current_resource.merge(resource)
+                new_provider = TracerProvider(resource=merged_resource)
+                trace.set_tracer_provider(new_provider)
         else:
-            provider._resource = resource
+            # Create a new TracerProvider with the resource
+            new_provider = TracerProvider(resource=resource)
+            trace.set_tracer_provider(new_provider)
     else:
         trace.set_tracer_provider(TracerProvider(resource=resource))
 
