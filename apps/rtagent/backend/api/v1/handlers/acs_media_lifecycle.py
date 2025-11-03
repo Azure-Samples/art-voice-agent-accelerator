@@ -682,7 +682,7 @@ class RouteTurnThread:
                 }
             self.current_response_task = asyncio.create_task(handler(**filtered_kwargs))
             try:
-                orchestrator_result = await self.current_response_task
+                await self.current_response_task
             finally:
                 self.current_response_task = None
 
