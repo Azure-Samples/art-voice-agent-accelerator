@@ -885,44 +885,43 @@ async def _initialize_conversation_session(
                     send_exc,
                 )
         request_barge_in = get_metadata("request_barge_in")
-        try:
-            now = time.monotonic()
-            is_synth = get_metadata("is_synthesizing", False)
-            audio_playing = get_metadata("audio_playing", False)
-            cancel_requested = get_metadata("tts_cancel_requested", False)
-            last_tts_start = get_metadata("last_tts_start_ts", 0.0) or 0.0
-            last_tts_end = get_metadata("last_tts_end_ts", 0.0) or 0.0
+        now = time.monotonic()
+        is_synth = get_metadata("is_synthesizing", False)
+        audio_playing = get_metadata("audio_playing", False)
+        cancel_requested = get_metadata("tts_cancel_requested", False)
+        last_tts_start = get_metadata("last_tts_start_ts", 0.0) or 0.0
+        last_tts_end = get_metadata("last_tts_end_ts", 0.0) or 0.0
 
-            recent_tts = False
-            if last_tts_start:
-                within_active_window = (now - last_tts_start) <= 1.2
-                no_recorded_end = last_tts_end <= last_tts_start
-                ended_recently = last_tts_end and (now - last_tts_end) <= 0.25
-                recent_tts = within_active_window and (no_recorded_end or ended_recently)
+        recent_tts = False
+        if last_tts_start:
+            within_active_window = (now - last_tts_start) <= 1.2
+            no_recorded_end = last_tts_end <= last_tts_start
+            ended_recently = last_tts_end and (now - last_tts_end) <= 0.25
+            recent_tts = within_active_window and (no_recorded_end or ended_recently)
 
-            if is_synth or audio_playing or recent_tts:
-                signal_tts_cancel()
+        if is_synth or audio_playing or recent_tts:
+            signal_tts_cancel()
 
-                set_metadata_threadsafe("tts_cancel_requested", True)
-                set_metadata_threadsafe("audio_playing", False)
-                set_metadata_threadsafe("is_synthesizing", False)
-            elif cancel_requested:
-                set_metadata_threadsafe("tts_cancel_requested", False)
+            set_metadata_threadsafe("tts_cancel_requested", True)
+            set_metadata_threadsafe("audio_playing", False)
+            set_metadata_threadsafe("is_synthesizing", False)
+        elif cancel_requested:
+            set_metadata_threadsafe("tts_cancel_requested", False)
 
-            if callable(request_barge_in):
+        if callable(request_barge_in):
+            try:
                 request_barge_in("stt_partial", "partial")
-        except Exception as exc:  # noqa: BLE001
-            logger.debug(
-                "[%s] Failed to dispatch barge-in request from partial: %s",
-                session_id,
-                exc,
-            )
-        else:
-            if not callable(request_barge_in):
+            except Exception as exc:  # noqa: BLE001
                 logger.debug(
-                    "[%s] No barge-in handler registered; skipping realtime barge-in",
+                    "[%s] Failed to dispatch barge-in request from partial: %s",
                     session_id,
+                    exc,
                 )
+        else:
+            logger.debug(
+                "[%s] No barge-in handler registered; skipping realtime barge-in",
+                session_id,
+            )
 
     def on_cancel(evt) -> None:
         try:
