@@ -28,9 +28,7 @@ class PromptManager:
         current_dir = os.path.dirname(os.path.abspath(__file__))
         template_path = os.path.join(current_dir, template_dir)
 
-        self.env = Environment(
-            loader=FileSystemLoader(searchpath=template_path), autoescape=True
-        )
+        self.env = Environment(loader=FileSystemLoader(searchpath=template_path), autoescape=True)
 
         templates = self.env.list_templates()
         print(f"Templates found: {templates}")

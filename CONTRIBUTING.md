@@ -27,16 +27,21 @@ cd art-voice-agent-accelerator
 ```
 
 ### 3. Environment Setup
-The project uses Python 3.11 and Conda for environment management.
+The project uses Python 3.11 and [uv](https://docs.astral.sh/uv/) for fast package management.
 
 ```bash
-# Create and activate environment
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Sync all dependencies (creates .venv automatically)
+uv sync
+```
+
+Alternatively, use Conda:
+```bash
 conda env create -f environment.yaml
 conda activate audioagent
-
-# Install dependencies
-pip install -r requirements.txt
-pip install -r requirements-codequality.txt
+uv sync
 ```
 
 For local development, also see [`docs/getting-started/local-development.md`](docs/getting-started/local-development.md).
@@ -59,7 +64,7 @@ git checkout -b bugfix/issue-description
 - Follow the FastAPI and Python 3.11 patterns established in the codebase
 - Ensure compatibility with Azure services (ACS, Speech, OpenAI)
 
-### 6. Quality Checks
+### 6. Quality Checks (WIP)
 ```bash
 # Run all quality checks
 make run_code_quality_checks
@@ -118,7 +123,7 @@ This sets up automated code quality checks that run before commits.
 
 ### Key Directories
 - `src/` → Core application modules (ACS, Speech, AI, etc.)
-- `apps/rtagent/` → Main application code
+- `apps/artagent/` → Main application code
 - `infra/` → Infrastructure as Code (Bicep/Terraform)
 - `docs/` → Documentation and guides
 

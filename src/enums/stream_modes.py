@@ -5,9 +5,7 @@ class StreamMode(Enum):
     """Enumeration for different audio streaming modes in the voice agent system"""
 
     MEDIA = "media"  # Direct Bi-directional media PCM audio streaming to ACS WebSocket
-    TRANSCRIPTION = (
-        "transcription"  # ACS <-> Azure AI Speech realtime transcription streaming
-    )
+    TRANSCRIPTION = "transcription"  # ACS <-> Azure AI Speech realtime transcription streaming
     VOICE_LIVE = "voice_live"  # Azure AI Voice Live streaming mode
     REALTIME = "realtime"  # Real-time WebRTC streaming for browser clients
 
@@ -21,6 +19,4 @@ class StreamMode(Enum):
         for mode in cls:
             if mode.value == value:
                 return mode
-        raise ValueError(
-            f"Invalid stream mode: {value}. Valid options: {[m.value for m in cls]}"
-        )
+        raise ValueError(f"Invalid stream mode: {value}. Valid options: {[m.value for m in cls]}")

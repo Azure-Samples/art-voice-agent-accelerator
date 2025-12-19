@@ -185,7 +185,7 @@ Run the same Locust test on your machine for quick, iterative validation.
 
 ### Install dependencies
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
 
 ### 1) Generate audio files

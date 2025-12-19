@@ -12,12 +12,12 @@ Usage:
     python conversation_playback.py --session-id load-test-abc123
 """
 
-import json
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Any
 
 
 class ConversationPlayer:
@@ -29,9 +29,7 @@ class ConversationPlayer:
 
     def list_available_conversations(self):
         """List all available recorded conversations."""
-        conversation_files = list(
-            self.results_dir.glob("recorded_conversations_*.json")
-        )
+        conversation_files = list(self.results_dir.glob("recorded_conversations_*.json"))
 
         if not conversation_files:
             print("No recorded conversations found in tests/load/results/")
@@ -40,20 +38,18 @@ class ConversationPlayer:
         print("Available recorded conversations:")
         for i, file in enumerate(conversation_files, 1):
             try:
-                with open(file, "r") as f:
+                with open(file) as f:
                     data = json.load(f)
                 print(f"{i}. {file.name}")
                 print(f"   Conversations: {len(data)}")
                 if data:
-                    templates = set(
-                        conv.get("template_name", "unknown") for conv in data
-                    )
+                    templates = set(conv.get("template_name", "unknown") for conv in data)
                     print(f"   Templates: {', '.join(templates)}")
                 print()
             except Exception as e:
                 print(f"{i}. {file.name} (error reading: {e})")
 
-    def load_conversation_file(self, file_path: str) -> List[Dict[str, Any]]:
+    def load_conversation_file(self, file_path: str) -> list[dict[str, Any]]:
         """Load conversations from JSON file."""
         file_path = Path(file_path)
 
@@ -64,13 +60,13 @@ class ConversationPlayer:
         if not file_path.exists():
             raise FileNotFoundError(f"Conversation file not found: {file_path}")
 
-        with open(file_path, "r") as f:
+        with open(file_path) as f:
             return json.load(f)
 
-    def display_conversation_flow(self, conversation: Dict[str, Any]):
+    def display_conversation_flow(self, conversation: dict[str, Any]):
         """Display the text flow of a conversation."""
         print(f"\n{'='*80}")
-        print(f"CONVERSATION FLOW ANALYSIS")
+        print("CONVERSATION FLOW ANALYSIS")
         print(f"{'='*80}")
         print(f"Session ID: {conversation['session_id']}")
         print(f"Template: {conversation['template_name']}")
@@ -89,46 +85,40 @@ class ConversationPlayer:
             flow = turn.get("conversation_flow", {})
 
             # User input
-            print(f"👤 USER SAID:")
+            print("👤 USER SAID:")
             print(f"   \"{flow.get('user_said', turn.get('user_input_text', 'N/A'))}\"")
             print()
 
             # Speech recognition result
             if flow.get("system_heard") or turn.get("user_speech_recognized"):
-                print(f"🎯 SYSTEM HEARD:")
-                heard_text = flow.get("system_heard") or turn.get(
-                    "user_speech_recognized"
-                )
+                print("🎯 SYSTEM HEARD:")
+                heard_text = flow.get("system_heard") or turn.get("user_speech_recognized")
                 print(f'   "{heard_text}"')
 
                 # Check if recognition was accurate
                 user_said = flow.get("user_said", turn.get("user_input_text", ""))
                 if heard_text.lower().strip() != user_said.lower().strip():
-                    print(f"   ⚠️  Recognition differs from input")
+                    print("   ⚠️  Recognition differs from input")
                 print()
 
             # Agent text responses
-            agent_responses = flow.get("agent_responded") or turn.get(
-                "agent_text_responses", []
-            )
+            agent_responses = flow.get("agent_responded") or turn.get("agent_text_responses", [])
             if agent_responses:
-                print(f"🤖 AGENT RESPONDED:")
+                print("🤖 AGENT RESPONDED:")
                 for i, response in enumerate(agent_responses, 1):
                     print(f'   {i}. "{response}"')
             else:
-                print(f"🤖 AGENT RESPONDED: (Text not captured)")
+                print("🤖 AGENT RESPONDED: (Text not captured)")
             print()
 
             # Audio info
             audio_available = flow.get("audio_response_available", False)
             audio_files = [
-                af
-                for af in turn.get("audio_files", [])
-                if af.get("type") == "combined_response"
+                af for af in turn.get("audio_files", []) if af.get("type") == "combined_response"
             ]
             audio_chunks_received = turn.get("audio_chunks_received", 0)
 
-            print(f"🎵 AUDIO RESPONSE:")
+            print("🎵 AUDIO RESPONSE:")
             if audio_available and audio_files:
                 for audio_file in audio_files:
                     duration = audio_file.get("duration_s", 0)
@@ -139,17 +129,15 @@ class ConversationPlayer:
             elif audio_available and audio_chunks_received > 0:
                 print(f"   Audio response received: {audio_chunks_received} chunks")
                 print(
-                    f"   (Audio file not saved - this was a non-recorded conversation or file save failed)"
+                    "   (Audio file not saved - this was a non-recorded conversation or file save failed)"
                 )
             else:
-                print(f"   No audio response recorded")
+                print("   No audio response recorded")
             print()
 
             # Performance metrics
-            print(f"⏱️  PERFORMANCE:")
-            print(
-                f"   Speech Recognition: {turn['speech_recognition_latency_ms']:.1f}ms"
-            )
+            print("⏱️  PERFORMANCE:")
+            print(f"   Speech Recognition: {turn['speech_recognition_latency_ms']:.1f}ms")
             print(f"   Agent Processing: {turn['agent_processing_latency_ms']:.1f}ms")
             print(f"   End-to-End: {turn['end_to_end_latency_ms']:.1f}ms")
             print()
@@ -195,7 +183,7 @@ class ConversationPlayer:
             print("Format: 16-bit PCM, 16kHz sample rate")
             return False
 
-    def interactive_playback(self, conversations: List[Dict[str, Any]]):
+    def interactive_playback(self, conversations: list[dict[str, Any]]):
         """Interactive conversation playback."""
         if not conversations:
             print("No conversations to play back")
@@ -232,9 +220,7 @@ class ConversationPlayer:
                     ]
 
                     if audio_files:
-                        play_audio = (
-                            input("\nPlay audio responses? (y/n): ").strip().lower()
-                        )
+                        play_audio = input("\nPlay audio responses? (y/n): ").strip().lower()
                         if play_audio in ["y", "yes"]:
                             for audio_file in audio_files:
                                 print(
@@ -256,13 +242,9 @@ def main():
     parser = argparse.ArgumentParser(
         description="Play back recorded conversations from load testing"
     )
-    parser.add_argument(
-        "--conversation-file", help="JSON file containing recorded conversations"
-    )
+    parser.add_argument("--conversation-file", help="JSON file containing recorded conversations")
     parser.add_argument("--session-id", help="Specific session ID to analyze")
-    parser.add_argument(
-        "--list", action="store_true", help="List available conversation files"
-    )
+    parser.add_argument("--list", action="store_true", help="List available conversation files")
 
     args = parser.parse_args()
 
@@ -278,9 +260,7 @@ def main():
 
             if args.session_id:
                 # Filter to specific session
-                conversations = [
-                    c for c in conversations if c["session_id"] == args.session_id
-                ]
+                conversations = [c for c in conversations if c["session_id"] == args.session_id]
                 if not conversations:
                     print(f"Session ID {args.session_id} not found")
                     return

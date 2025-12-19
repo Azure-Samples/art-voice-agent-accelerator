@@ -4,15 +4,17 @@
 # Each target is documented for clarity and maintainability
 ############################################################
 
-# Python interpreter to use
-PYTHON_INTERPRETER = python
-# Conda environment name (default: audioagent)
-CONDA_ENV ?= audioagent
+# Ensure uv is in PATH (installed via curl -LsSf https://astral.sh/uv/install.sh | sh)
+UV_BIN := $(HOME)/.local/bin/uv
+export PATH := $(HOME)/.local/bin:$(PATH)
+
+# Python interpreter to use (via uv)
+PYTHON_INTERPRETER = $(UV_BIN) run python
 # Ensure current directory is in PYTHONPATH
 export PYTHONPATH=$(PWD):$PYTHONPATH;
-SCRIPTS_DIR = apps/rtagent/scripts
+SCRIPTS_DIR = devops/scripts/local-dev
 SCRIPTS_LOAD_DIR = tests/load
-PHONE = +18165019907
+PHONE = 
 
 
 # Install pre-commit and pre-push git hooks
@@ -84,25 +86,26 @@ define log_section
 endef
 
 
-# Create the conda environment from environment.yaml
-create_conda_env:
-	@echo "Creating conda environment"
-	conda env create -f environment.yaml
+# Create the virtual environment using uv
+create_venv:
+	@echo "Creating virtual environment with uv..."
+	$(UV_BIN) sync
 
 
-# Activate the conda environment
-activate_conda_env:
-	@echo "Creating conda environment"
-	conda activate $(CONDA_ENV)
+# Recreate the virtual environment (clean install)
+recreate_venv:
+	@echo "Removing existing .venv and recreating..."
+	rm -rf .venv
+	$(UV_BIN) sync
 
 
-# Remove the conda environment
-remove_conda_env:
-	@echo "Removing conda environment"
-	conda env remove --name $(CONDA_ENV)
+# Update dependencies to latest compatible versions
+update_deps:
+	@echo "Updating dependencies..."
+	$(UV_BIN) sync --upgrade
 
 start_backend:
-	python $(SCRIPTS_DIR)/start_backend.py
+	$(UV_BIN) run python $(SCRIPTS_DIR)/start_backend.py
 
 start_frontend:
 	bash $(SCRIPTS_DIR)/start_frontend.sh
@@ -110,8 +113,37 @@ start_frontend:
 start_tunnel:
 	bash $(SCRIPTS_DIR)/start_devtunnel_host.sh
 
+# First-time tunnel setup - creates a new dev tunnel with anonymous access
+setup_tunnel:
+	@echo "🔧 Setting up Azure Dev Tunnel for first time use..."
+	@echo ""
+	@echo "📋 Prerequisites:"
+	@echo "   - Azure CLI installed (https://aka.ms/install-azure-cli)"
+	@echo "   - devtunnel CLI installed: brew install --cask devtunnel (macOS)"
+	@echo ""
+	@command -v devtunnel >/dev/null 2>&1 || { echo "❌ devtunnel not found. Install with: brew install --cask devtunnel"; exit 1; }
+	@echo "1️⃣  Logging into devtunnel..."
+	devtunnel user login
+	@echo ""
+	@echo "2️⃣  Creating new tunnel with anonymous access..."
+	devtunnel create --allow-anonymous
+	@echo ""
+	@echo "3️⃣  Adding port 8000 (backend port)..."
+	devtunnel port create -p 8000 --protocol https
+	@echo ""
+	@echo "4️⃣  Getting tunnel info..."
+	@devtunnel show
+	@echo ""
+	@echo "✅ Tunnel created! Now:"
+	@echo "   1. Copy the tunnel URL from above (e.g., https://xxxxx-8000.usw3.devtunnels.ms)"
+	@echo "   2. Update .env: BASE_URL=<tunnel-url>"
+	@echo "   3. Update apps/artagent/frontend/.env: VITE_BACKEND_BASE_URL=<tunnel-url>"
+	@echo "   4. Update devops/scripts/local-dev/start_devtunnel_host.sh with TUNNEL_ID"
+	@echo "   5. Run: make start_tunnel"
+	@echo ""
+
 generate_audio:
-	python $(SCRIPTS_LOAD_DIR)/utils/audio_generator.py --max-turns 5
+	$(UV_BIN) run python $(SCRIPTS_LOAD_DIR)/utils/audio_generator.py --max-turns 5
 
 # WebSocket endpoint load testing (current approach)
 # DEPLOYED_URL = 
@@ -177,9 +209,16 @@ run_load_test_realtime_conversation:
 
 # Purchase ACS phone number and store in environment file
 # Usage: make purchase_acs_phone_number [ENV_FILE=custom.env] [COUNTRY_CODE=US] [AREA_CODE=833] [PHONE_TYPE=TOLL_FREE]
+# ⚠️  WARNING: Repeated phone number purchase attempts may flag your subscription as potential fraud.
+#    If flagged, you will need to open an Azure support ticket to restore phone purchasing capabilities.
+#    Consider using Azure Portal for manual purchases to avoid this issue.
 purchase_acs_phone_number:
 	@echo "📞 Azure Communication Services - Phone Number Purchase"
 	@echo "======================================================"
+	@echo ""
+	@echo "⚠️  WARNING: Repeated purchase attempts may flag your subscription as potential fraud!"
+	@echo "   If flagged, you'll need an Azure support ticket to restore purchasing capabilities."
+	@echo "   Consider using Azure Portal for manual purchases to avoid this issue."
 	@echo ""
 	# Set default parameters
 	$(eval ENV_FILE ?= .env.$(AZURE_ENV_NAME))
@@ -197,13 +236,20 @@ purchase_acs_phone_number:
 	fi
 
 	@echo "📞 Creating a new ACS phone number using Python script..."
-	python3 devops/scripts/azd/helpers/acs_phone_number_manager.py --endpoint $(ACS_ENDPOINT) purchase --country $(COUNTRY_CODE) --area $(AREA_CODE)  --phone-number-type $(PHONE_TYPE)
+	$(UV_BIN) run python devops/scripts/azd/helpers/acs_phone_number_manager.py --endpoint $(ACS_ENDPOINT) purchase --country $(COUNTRY_CODE) --area $(AREA_CODE)  --phone-number-type $(PHONE_TYPE)
 
 # Purchase ACS phone number using PowerShell (Windows)	
 # Usage: make purchase_acs_phone_number_ps [ENV_FILE=custom.env] [COUNTRY_CODE=US] [AREA_CODE=833] [PHONE_TYPE=TOLL_FREE]
+# ⚠️  WARNING: Repeated phone number purchase attempts may flag your subscription as potential fraud.
+#    If flagged, you will need to open an Azure support ticket to restore phone purchasing capabilities.
+#    Consider using Azure Portal for manual purchases to avoid this issue.
 purchase_acs_phone_number_ps:
 	@echo "📞 Azure Communication Services - Phone Number Purchase (PowerShell)"
 	@echo "=================================================================="
+	@echo ""
+	@echo "⚠️  WARNING: Repeated purchase attempts may flag your subscription as potential fraud!"
+	@echo "   If flagged, you'll need an Azure support ticket to restore purchasing capabilities."
+	@echo "   Consider using Azure Portal for manual purchases to avoid this issue."
 	@echo ""
 	
 	# Set default parameters
@@ -221,8 +267,125 @@ purchase_acs_phone_number_ps:
 		-PhoneType "$(PHONE_TYPE)" \
 		-TerraformDir "$(TF_DIR)"
 
+.PHONY: purchase_acs_phone_number purchase_acs_phone_number_ps
 
 ############################################################
+# Azure App Configuration
+# Purpose: Manage configuration settings in Azure App Config
+############################################################
+
+# Default App Config settings (can be overridden)
+APPCONFIG_ENDPOINT ?= $(shell grep '^AZURE_APPCONFIG_ENDPOINT=' .env.local 2>/dev/null | cut -d'=' -f2 | sed 's|https://||')
+APPCONFIG_LABEL ?= $(shell grep '^AZURE_APPCONFIG_LABEL=' .env.local 2>/dev/null | cut -d'=' -f2)
+
+# Set ACS phone number in App Configuration
+# Usage: make set_phone_number PHONE=+18001234567
+# Usage: make set_phone_number PHONE=+18001234567 APPCONFIG_ENDPOINT=appconfig-xxx.azconfig.io APPCONFIG_LABEL=dev
+set_phone_number:
+	@echo "📞 Setting ACS Phone Number in App Configuration"
+	@echo "================================================"
+	@echo ""
+	@if [ -z "$(PHONE)" ]; then \
+		echo "❌ Error: PHONE parameter is required"; \
+		echo ""; \
+		echo "Usage: make set_phone_number PHONE=+18001234567"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@if [ -z "$(APPCONFIG_ENDPOINT)" ]; then \
+		echo "❌ Error: APPCONFIG_ENDPOINT not found"; \
+		echo "   Set it in .env.local or pass it as parameter"; \
+		echo ""; \
+		echo "Usage: make set_phone_number PHONE=+18001234567 APPCONFIG_ENDPOINT=appconfig-xxx.azconfig.io"; \
+		exit 1; \
+	fi
+	@if [ -z "$(APPCONFIG_LABEL)" ]; then \
+		echo "⚠️  Warning: APPCONFIG_LABEL not set, using empty label"; \
+	fi
+	@echo "📋 Configuration:"
+	@echo "   Endpoint: $(APPCONFIG_ENDPOINT)"
+	@echo "   Label: $(APPCONFIG_LABEL)"
+	@echo "   Phone: $(PHONE)"
+	@echo ""
+	@echo "🔧 Setting phone number..."
+	@az appconfig kv set \
+		--endpoint "https://$(APPCONFIG_ENDPOINT)" \
+		--key "azure/acs/source-phone-number" \
+		--value "$(PHONE)" \
+		--label "$(APPCONFIG_LABEL)" \
+		--auth-mode login \
+		--yes \
+		&& echo "" \
+		&& echo "✅ Phone number set successfully!" \
+		&& echo "" \
+		&& echo "🔄 Triggering config refresh..." \
+		&& az appconfig kv set \
+			--endpoint "https://$(APPCONFIG_ENDPOINT)" \
+			--key "app/sentinel" \
+			--value "v$$(date +%s)" \
+			--label "$(APPCONFIG_LABEL)" \
+			--auth-mode login \
+			--yes \
+			--output none \
+		&& echo "✅ Config refresh triggered - running apps will pick up the change"
+
+# Show current App Configuration values
+# Usage: make show_appconfig
+show_appconfig:
+	@echo "📋 Azure App Configuration Values"
+	@echo "================================="
+	@echo ""
+	@if [ -z "$(APPCONFIG_ENDPOINT)" ]; then \
+		echo "❌ Error: APPCONFIG_ENDPOINT not found in .env.local"; \
+		exit 1; \
+	fi
+	@echo "Endpoint: $(APPCONFIG_ENDPOINT)"
+	@echo "Label: $(APPCONFIG_LABEL)"
+	@echo ""
+	@az appconfig kv list \
+		--endpoint "https://$(APPCONFIG_ENDPOINT)" \
+		--label "$(APPCONFIG_LABEL)" \
+		--auth-mode login \
+		--output table
+
+# Show ACS-related App Configuration values
+# Usage: make show_appconfig_acs
+show_appconfig_acs:
+	@echo "📞 ACS Configuration in App Config"
+	@echo "==================================="
+	@echo ""
+	@if [ -z "$(APPCONFIG_ENDPOINT)" ]; then \
+		echo "❌ Error: APPCONFIG_ENDPOINT not found in .env.local"; \
+		exit 1; \
+	fi
+	@az appconfig kv list \
+		--endpoint "https://$(APPCONFIG_ENDPOINT)" \
+		--label "$(APPCONFIG_LABEL)" \
+		--key "azure/acs/*" \
+		--auth-mode login \
+		--output table
+
+# Trigger App Configuration refresh (updates sentinel key)
+# Usage: make refresh_appconfig
+refresh_appconfig:
+	@echo "🔄 Triggering App Configuration Refresh"
+	@echo "========================================"
+	@echo ""
+	@if [ -z "$(APPCONFIG_ENDPOINT)" ]; then \
+		echo "❌ Error: APPCONFIG_ENDPOINT not found in .env.local"; \
+		exit 1; \
+	fi
+	@az appconfig kv set \
+		--endpoint "https://$(APPCONFIG_ENDPOINT)" \
+		--key "app/sentinel" \
+		--value "v$$(date +%s)" \
+		--label "$(APPCONFIG_LABEL)" \
+		--auth-mode login \
+		--yes \
+		--output none \
+		&& echo "✅ Sentinel updated - running apps will refresh their configuration"
+
+.PHONY: set_phone_number show_appconfig show_appconfig_acs refresh_appconfig
 # Azure Redis Management
 # Purpose: Connect to Azure Redis using Azure AD authentication
 ############################################################
@@ -393,14 +556,15 @@ help:
 	@echo "  set_up_precommit_and_prepush     Install git hooks"
 	@echo ""
 	@echo "🐍 Environment Management:"
-	@echo "  create_conda_env                 Create conda environment from environment.yaml"
-	@echo "  activate_conda_env               Activate conda environment"
-	@echo "  remove_conda_env                 Remove conda environment"
+	@echo "  create_venv                      Create virtual environment with uv sync"
+	@echo "  recreate_venv                    Remove and recreate virtual environment"
+	@echo "  update_deps                      Update dependencies to latest compatible versions"
 	@echo ""
 	@echo "🚀 Application:"
 	@echo "  start_backend                    Start backend via script"
 	@echo "  start_frontend                   Start frontend via script"
 	@echo "  start_tunnel                     Start dev tunnel via script"
+	@echo "  setup_tunnel                     First-time tunnel setup (create tunnel, add port)"
 	@echo ""
 	@echo "⚡ Load Testing:"
 	@echo "  generate_audio                   Generate PCM audio files for load testing"
@@ -410,6 +574,12 @@ help:
 	@echo "📞 Azure Communication Services:"
 	@echo "  purchase_acs_phone_number        Purchase ACS phone number and store in env file"
 	@echo "  purchase_acs_phone_number_ps     Purchase ACS phone number (PowerShell version)"
+	@echo ""
+	@echo "⚙️  Azure App Configuration:"
+	@echo "  set_phone_number                 Set ACS phone number in App Config (PHONE=+18001234567)"
+	@echo "  show_appconfig                   Show all App Configuration values"
+	@echo "  show_appconfig_acs               Show ACS-related App Configuration values"
+	@echo "  refresh_appconfig                Trigger config refresh for running apps"
 	@echo ""
 	@echo "🔴 Azure Redis Management:"
 	@echo "  connect_redis                    Connect to Azure Redis using Azure AD authentication"
@@ -440,3 +610,21 @@ help:
 	@echo ""
 
 .PHONY: help
+
+############################################################
+# Documentation
+############################################################
+
+# Serve documentation locally with live reload
+docs-serve:
+	$(UV_BIN) run mkdocs serve -f docs/mkdocs.yml
+
+# Build documentation for production
+docs-build:
+	$(UV_BIN) run mkdocs build -f docs/mkdocs.yml
+
+# Deploy documentation to GitHub Pages
+docs-deploy:
+	$(UV_BIN) run mkdocs gh-deploy -f docs/mkdocs.yml
+
+.PHONY: docs-serve docs-build docs-deploy

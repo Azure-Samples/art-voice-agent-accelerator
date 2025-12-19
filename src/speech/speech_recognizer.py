@@ -10,7 +10,8 @@ It integrates with OpenTelemetry for observability, enabling detailed tracing an
 
 import json
 import os
-from typing import Callable, List, Optional, Final
+from collections.abc import Callable, Iterable
+from typing import Final
 
 import azure.cognitiveservices.speech as speechsdk
 from dotenv import load_dotenv
@@ -18,11 +19,14 @@ from dotenv import load_dotenv
 # OpenTelemetry imports for tracing
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
+from utils.ml_logging import get_logger
 
 # Import centralized span attributes enum
-from src.enums.monitoring import SpanAttr
 from src.speech.auth_manager import SpeechTokenManager, get_speech_token_manager
-from utils.ml_logging import get_logger
+from src.speech.phrase_list_manager import (
+    DEFAULT_PHRASE_LIST_ENV,
+    parse_phrase_entries,
+)
 
 # Set up logger
 logger = get_logger(__name__)
@@ -131,21 +135,22 @@ class StreamingSpeechRecognizerFromBytes:
         Exception: If Azure authentication fails or Speech SDK errors occur
     """
 
-    _DEFAULT_LANGS: Final[List[str]] = [
+    _DEFAULT_LANGS: Final[list[str]] = [
         "en-US",
         "es-ES",
         "fr-FR",
         "de-DE",
         "it-IT",
+        "ko-KR",
     ]
 
     def __init__(
         self,
         *,
-        key: Optional[str] = None,
-        region: Optional[str] = None,
+        key: str | None = None,
+        region: str | None = None,
         # Behaviour -----------------------------------------------------
-        candidate_languages: List[str] | None = None,
+        candidate_languages: list[str] | None = None,
         vad_silence_timeout_ms: int = 800,
         use_semantic_segmentation: bool = True,
         audio_format: str = "pcm",  # "pcm" | "any"
@@ -156,6 +161,8 @@ class StreamingSpeechRecognizerFromBytes:
         # Observability -------------------------------------------------
         call_connection_id: str | None = None,
         enable_tracing: bool = True,
+        # Phrase list biasing ------------------------------------------
+        initial_phrases: Iterable[str] | None = None,
     ):
         """
         Initialize the streaming speech recognizer with comprehensive configuration.
@@ -198,6 +205,12 @@ class StreamingSpeechRecognizerFromBytes:
                 correlation in tracing and logging. If None, uses "unknown".
             enable_tracing (bool): Enable OpenTelemetry tracing with Azure
                 Monitor integration for performance monitoring. Default: True.
+
+        Phrase Biasing:
+            initial_phrases (Optional[Iterable[str]]): Iterable of phrases to
+                pre-populate the recognizer bias list in addition to any
+                environment defaults. Useful for seeding runtime metadata such
+                as customer names.
 
         Attributes Initialized:
             - Authentication configuration and credentials
@@ -246,13 +259,11 @@ class StreamingSpeechRecognizerFromBytes:
 
         self.call_connection_id = call_connection_id or "unknown"
         self.enable_tracing = enable_tracing
-        self._token_manager: Optional[SpeechTokenManager] = None
+        self._token_manager: SpeechTokenManager | None = None
 
-        self.partial_callback: Optional[Callable[[str, str, str | None], None]] = None
-        self.final_callback: Optional[Callable[[str, str, str | None], None]] = None
-        self.cancel_callback: Optional[
-            Callable[[speechsdk.SessionEventArgs], None]
-        ] = None
+        self.partial_callback: Callable[[str, str, str | None], None] | None = None
+        self.final_callback: Callable[[str, str, str | None], None] | None = None
+        self.cancel_callback: Callable[[speechsdk.SessionEventArgs], None] | None = None
 
         # Advanced feature flags
         self._enable_neural_fe = enable_neural_fe
@@ -261,6 +272,12 @@ class StreamingSpeechRecognizerFromBytes:
 
         self.push_stream = None
         self.speech_recognizer = None
+        self._phrase_list_phrases: set[str] = set()
+        self._phrase_list_weight: float | None = None
+        self._phrase_list_grammar = None
+        self._apply_default_phrase_list_from_env()
+        if initial_phrases:
+            self.add_phrases(initial_phrases)
 
         # Initialize tracing
         self.tracer = None
@@ -276,6 +293,21 @@ class StreamingSpeechRecognizerFromBytes:
                 self.enable_tracing = False
 
         self.cfg = self._create_speech_config()
+
+    def _apply_default_phrase_list_from_env(self) -> None:
+        """Populate phrase biases from the configured environment variable."""
+
+        raw_values = os.getenv(DEFAULT_PHRASE_LIST_ENV, "")
+        parsed = parse_phrase_entries(raw_values)
+        if not parsed:
+            return
+
+        self._phrase_list_phrases.update(parsed)
+        logger.debug(
+            "Loaded %s default phrase list entries from %s",
+            len(parsed),
+            DEFAULT_PHRASE_LIST_ENV,
+        )
 
     def set_call_connection_id(self, call_connection_id: str) -> None:
         """
@@ -305,6 +337,31 @@ class StreamingSpeechRecognizerFromBytes:
             new spans and log entries.
         """
         self.call_connection_id = call_connection_id
+
+    def clear_session_state(self) -> None:
+        """Clear session-specific state for safe pool recycling.
+
+        Resets instance attributes that accumulate during a session to prevent
+        state leakage when the recognizer is returned to a resource pool and
+        potentially reused by a different session.
+
+        Cleared State:
+            - call_connection_id: Reset to None
+            - _session_span: End and clear any active tracing span
+
+        Thread Safety:
+            - Safe to call from any thread
+            - Does not affect operations already in progress
+        """
+        self.call_connection_id = None
+
+        # End any active session span
+        if self._session_span:
+            try:
+                self._session_span.end()
+            except Exception:
+                pass
+            self._session_span = None
 
     def _create_speech_config(self) -> speechsdk.SpeechConfig:
         """
@@ -352,9 +409,7 @@ class StreamingSpeechRecognizerFromBytes:
             # Use Azure Default Credentials (managed identity, service principal, etc.)
             logger.debug("Creating SpeechConfig with Azure AD credentials")
             if not self.region:
-                raise ValueError(
-                    "Region must be specified when using Entra Credentials"
-                )
+                raise ValueError("Region must be specified when using Entra Credentials")
 
             endpoint = os.getenv("AZURE_SPEECH_ENDPOINT")
             if endpoint:
@@ -368,9 +423,7 @@ class StreamingSpeechRecognizerFromBytes:
                 token_manager = get_speech_token_manager()
                 token_manager.apply_to_config(speech_config, force_refresh=True)
                 self._token_manager = token_manager
-                logger.debug(
-                    "Successfully applied Azure AD token to SpeechConfig"
-                )
+                logger.debug("Successfully applied Azure AD token to SpeechConfig")
             except Exception as e:
                 logger.error(
                     f"Failed to apply Azure AD speech token: {e}. Ensure that the required RBAC role, such as 'Cognitive Services User', is assigned to your identity."
@@ -383,7 +436,7 @@ class StreamingSpeechRecognizerFromBytes:
 
     def refresh_authentication(self) -> bool:
         """Refresh authentication configuration when 401 errors occur.
-        
+
         Returns:
             bool: True if authentication refresh succeeded, False otherwise.
         """
@@ -393,11 +446,11 @@ class StreamingSpeechRecognizerFromBytes:
                 self.cfg = self._create_speech_config()
             else:
                 self._ensure_auth_token(force_refresh=True)
-            
+
             # Clear the current speech recognizer to force recreation with new config
             if self.speech_recognizer:
                 self.speech_recognizer = None
-                
+
             logger.info("Authentication refresh completed successfully")
             return True
         except Exception as e:
@@ -406,30 +459,32 @@ class StreamingSpeechRecognizerFromBytes:
 
     def _is_authentication_error(self, details) -> bool:
         """Check if cancellation details indicate a 401 authentication error.
-        
+
         Args:
             details: Cancellation details from speech recognition event
-            
+
         Returns:
             bool: True if this is a 401 authentication error, False otherwise.
         """
         if not details:
             return False
-            
-        error_details = getattr(details, 'error_details', '')
+
+        error_details = getattr(details, "error_details", "")
         if not error_details:
             return False
-            
+
         # Check for 401 authentication error patterns
         auth_error_indicators = [
             "401",
-            "Authentication error", 
+            "Authentication error",
             "WebSocket upgrade failed: Authentication error",
             "unauthorized",
-            "Please check subscription information"
+            "Please check subscription information",
         ]
-        
-        return any(indicator.lower() in error_details.lower() for indicator in auth_error_indicators)
+
+        return any(
+            indicator.lower() in error_details.lower() for indicator in auth_error_indicators
+        )
 
     def _ensure_auth_token(self, *, force_refresh: bool = False) -> None:
         """Ensure the Speech SDK config holds a valid Azure AD token."""
@@ -449,50 +504,48 @@ class StreamingSpeechRecognizerFromBytes:
 
     def restart_recognition_after_auth_refresh(self) -> bool:
         """Restart speech recognition after authentication refresh.
-        
+
         This method recreates the speech recognizer with fresh authentication
         and restarts the recognition session. It's typically called after
         a 401 authentication error has been detected and credentials refreshed.
-        
+
         Returns:
             bool: True if restart succeeded, False otherwise.
         """
         try:
             logger.info("Restarting speech recognition with refreshed authentication")
-            
+
             # Stop current recognition if still active
             if self.speech_recognizer:
                 try:
                     self.speech_recognizer.stop_continuous_recognition_async().get()
                 except Exception as e:
                     logger.debug(f"Error stopping previous recognizer: {e}")
-                
+
             # Clear current recognizer
             self.speech_recognizer = None
-            
+
             # Recreate and start recognition with new auth
             self.prepare_start()
             self.speech_recognizer.start_continuous_recognition_async().get()
-            
+
             logger.info("Speech recognition restarted successfully with refreshed authentication")
-            
+
             if self._session_span:
                 self._session_span.add_event(
-                    "recognition_restarted_after_auth_refresh",
-                    {"restart_success": True}
+                    "recognition_restarted_after_auth_refresh", {"restart_success": True}
                 )
-                
+
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to restart speech recognition after auth refresh: {e}")
-            
+
             if self._session_span:
                 self._session_span.add_event(
-                    "recognition_restart_failed",
-                    {"restart_success": False, "error": str(e)}
+                    "recognition_restart_failed", {"restart_success": False, "error": str(e)}
                 )
-                
+
             return False
 
     def set_partial_result_callback(self, callback: Callable[[str, str], None]) -> None:
@@ -528,9 +581,7 @@ class StreamingSpeechRecognizerFromBytes:
         """
         self.partial_callback = callback
 
-    def set_final_result_callback(
-        self, callback: Callable[[str, str, Optional[str]], None]
-    ) -> None:
+    def set_final_result_callback(self, callback: Callable[[str, str, str | None], None]) -> None:
         """
         Set callback function for final recognition results.
 
@@ -562,9 +613,7 @@ class StreamingSpeechRecognizerFromBytes:
         """
         self.final_callback = callback
 
-    def set_cancel_callback(
-        self, callback: Callable[[speechsdk.SessionEventArgs], None]
-    ) -> None:
+    def set_cancel_callback(self, callback: Callable[[speechsdk.SessionEventArgs], None]) -> None:
         """
         Set callback function for cancellation and error events.
 
@@ -640,9 +689,86 @@ class StreamingSpeechRecognizerFromBytes:
         else:
             raise ValueError(f"Unsupported audio_format: {self.audio_format}")
 
-        self.push_stream = speechsdk.audio.PushAudioInputStream(
-            stream_format=stream_format
-        )
+        self.push_stream = speechsdk.audio.PushAudioInputStream(stream_format=stream_format)
+
+    def add_phrase(self, phrase: str) -> None:
+        """Add a phrase to the bias list.
+
+        Inputs:
+            phrase: Text to prioritise during recognition.
+        Outputs:
+            None. Updates internal state and reapplies biasing if the recogniser is active.
+        Latency:
+            Performs local SDK updates only; impact is negligible and no network I/O occurs.
+        """
+
+        normalized = (phrase or "").strip()
+        if not normalized:
+            return
+
+        if normalized in self._phrase_list_phrases:
+            return
+
+        self._phrase_list_phrases.add(normalized)
+        if self.speech_recognizer:
+            self._apply_phrase_list()
+
+    def add_phrases(self, phrases: Iterable[str]) -> None:
+        """Add multiple phrases to the bias list in a single call.
+
+        Inputs:
+            phrases: Iterable of phrases to favour during recognition.
+        Outputs:
+            None. Stored phrases are applied immediately when the recogniser is active.
+        Latency:
+            Iterates locally over the iterable; only invokes SDK reconfiguration once per call.
+        """
+
+        added = False
+        for phrase in phrases or []:
+            normalized = (phrase or "").strip()
+            if normalized and normalized not in self._phrase_list_phrases:
+                self._phrase_list_phrases.add(normalized)
+                added = True
+
+        if added and self.speech_recognizer:
+            self._apply_phrase_list()
+
+    def clear_phrase_list(self) -> None:
+        """Remove all phrase biases currently configured.
+
+        Inputs:
+            None.
+        Outputs:
+            None. Clears stored phrases and updates the active recogniser when running.
+        Latency:
+            Local operation; clearing the SDK phrase list is synchronous and low latency.
+        """
+
+        if not self._phrase_list_phrases and self._phrase_list_weight is None:
+            return
+
+        self._phrase_list_phrases.clear()
+        if self.speech_recognizer:
+            self._apply_phrase_list()
+
+    def set_phrase_list_weight(self, weight: float | None) -> None:
+        """Set the weight applied to the phrase list bias.
+
+        Inputs:
+            weight: Positive float accepted by Azure Speech, or None to reset.
+        Outputs:
+            None. Stores the preference and reapplies configuration when active.
+        Latency:
+            Local SDK call only; no network traffic and minimal overhead.
+        """
+
+        if weight is not None and weight <= 0:
+            raise ValueError("Phrase list weight must be a positive value or None.")
+
+        self._phrase_list_weight = weight
+        if self.speech_recognizer:
+            self._apply_phrase_list()
 
     def start(self) -> None:
         """
@@ -700,23 +826,23 @@ class StreamingSpeechRecognizerFromBytes:
             )
 
             # Set essential attributes using centralized enum and semantic conventions v1.27+
-            self._session_span.set_attributes({
-                "call_connection_id": self.call_connection_id,
-                "session_id": self.call_connection_id,
-                "ai.operation.id": self.call_connection_id,
-                
-                # Service and network identification
-                "peer.service": "azure-cognitive-speech",
-                "server.address": f"{self.region}.stt.speech.microsoft.com",
-                "server.port": 443,
-                "network.protocol.name": "websocket",
-                "http.request.method": "POST",
-                
-                # Speech configuration
-                "speech.audio_format": self.audio_format,
-                "speech.candidate_languages": ",".join(self.candidate_languages),
-                "speech.region": self.region,
-            })
+            self._session_span.set_attributes(
+                {
+                    "call_connection_id": self.call_connection_id,
+                    "session_id": self.call_connection_id,
+                    "ai.operation.id": self.call_connection_id,
+                    # Service and network identification
+                    "peer.service": "azure-cognitive-speech",
+                    "server.address": f"{self.region}.stt.speech.microsoft.com",
+                    "server.port": 443,
+                    "network.protocol.name": "websocket",
+                    "http.request.method": "POST",
+                    # Speech configuration
+                    "speech.audio_format": self.audio_format,
+                    "speech.candidate_languages": ",".join(self.candidate_languages),
+                    "speech.region": self.region,
+                }
+            )
 
             # Make this span current for the duration of setup
             with trace.use_span(self._session_span):
@@ -809,7 +935,7 @@ class StreamingSpeechRecognizerFromBytes:
             Call speech_recognizer.start_continuous_recognition_async() after
             this method to begin processing audio.
         """
-        logger.info(
+        logger.debug(
             "Speech-SDK prepare_start – format=%s  neuralFE=%s  diar=%s",
             self.audio_format,
             self._enable_neural_fe,
@@ -824,9 +950,7 @@ class StreamingSpeechRecognizerFromBytes:
         speech_config = self.cfg
 
         if self.use_semantic:
-            speech_config.set_property(
-                speechsdk.PropertyId.Speech_SegmentationStrategy, "Semantic"
-            )
+            speech_config.set_property(speechsdk.PropertyId.Speech_SegmentationStrategy, "Semantic")
 
         speech_config.set_property(
             speechsdk.PropertyId.SpeechServiceConnection_LanguageIdMode, "Continuous"
@@ -860,9 +984,7 @@ class StreamingSpeechRecognizerFromBytes:
         else:
             raise ValueError(f"Unsupported audio_format: {self.audio_format!r}")
 
-        self.push_stream = speechsdk.audio.PushAudioInputStream(
-            stream_format=stream_format
-        )
+        self.push_stream = speechsdk.audio.PushAudioInputStream(stream_format=stream_format)
 
         # ------------------------------------------------------------------ #
         # 3. Optional neural audio front-end
@@ -900,6 +1022,9 @@ class StreamingSpeechRecognizerFromBytes:
                 str(self.vad_silence_timeout_ms),
             )
 
+        if self._phrase_list_phrases or self._phrase_list_weight is not None:
+            self._apply_phrase_list()
+
         # ------------------------------------------------------------------ #
         # 6. Wire callbacks / health telemetry
         # ------------------------------------------------------------------ #
@@ -920,12 +1045,49 @@ class StreamingSpeechRecognizerFromBytes:
         self.speech_recognizer.canceled.connect(self._on_canceled)
         self.speech_recognizer.session_stopped.connect(self._on_session_stopped)
 
-        logger.info(
+        logger.debug(
             "Speech-SDK ready " "(neuralFE=%s, diarisation=%s, speakers=%s)",
             self._enable_neural_fe,
             self._enable_diarisation,
             self._speaker_hint,
         )
+
+    def warm_connection(self) -> bool:
+        """
+        Warm the STT connection by calling prepare_start() proactively.
+
+        This pre-establishes the Azure Speech STT stream configuration during
+        startup, eliminating 300-600ms of cold-start latency on the first
+        real recognition session.
+
+        The method calls prepare_start() which sets up:
+        - PushAudioInputStream with configured format
+        - SpeechRecognizer with all features (LID, diarization, etc.)
+        - Callback wiring for recognition events
+
+        Note: This does NOT start continuous recognition or establish a
+        WebSocket connection - that happens when start() is called. However,
+        having the recognizer pre-configured eliminates SDK initialization
+        overhead on first use.
+
+        Returns:
+            bool: True if warmup succeeded, False otherwise.
+        """
+        try:
+            # Call prepare_start to configure the recognizer without starting
+            self.prepare_start()
+
+            # Verify the recognizer was created successfully
+            if self.speech_recognizer is not None and self.push_stream is not None:
+                logger.debug("STT connection warmed successfully (recognizer pre-configured)")
+                return True
+            else:
+                logger.warning("STT warmup: recognizer or push_stream not created")
+                return False
+
+        except Exception as e:
+            logger.warning("STT connection warmup failed: %s", e)
+            return False
 
     def write_bytes(self, audio_chunk: bytes) -> None:
         """
@@ -980,13 +1142,11 @@ class StreamingSpeechRecognizerFromBytes:
         if self.push_stream:
             if self.enable_tracing and self._session_span:
                 try:
-                    self._session_span.add_event(
-                        "audio_chunk", {"size": len(audio_chunk)}
-                    )
+                    self._session_span.add_event("audio_chunk", {"size": len(audio_chunk)})
                 except Exception:
                     pass
             self.push_stream.write(audio_chunk)
-            logger.debug(f"✅ Audio chunk written to push_stream")
+            logger.debug("✅ Audio chunk written to push_stream")
         else:
             logger.warning(
                 f"⚠️ write_bytes called but push_stream is None! {len(audio_chunk)} bytes discarded"
@@ -1044,9 +1204,7 @@ class StreamingSpeechRecognizerFromBytes:
 
             # Stop recognition asynchronously without blocking
             future = self.speech_recognizer.stop_continuous_recognition_async()
-            logger.debug(
-                "🛑 Speech recognition stop initiated asynchronously (non-blocking)"
-            )
+            logger.debug("🛑 Speech recognition stop initiated asynchronously (non-blocking)")
             logger.info("Recognition stopped.")
 
             # Finish session span if it's still active
@@ -1115,6 +1273,42 @@ class StreamingSpeechRecognizerFromBytes:
                 self._session_span.add_event("audio_stream_closed")
                 self._session_span.end()
                 self._session_span = None
+
+    def _apply_phrase_list(self) -> None:
+        """Apply the stored phrase list state to the active recogniser.
+
+        Inputs:
+            None (operates on internal state).
+        Outputs:
+            None. Updates the SDK grammar object as needed.
+        Latency:
+            Only invokes local Speech SDK APIs; no network round trips are triggered.
+        """
+
+        if not self.speech_recognizer:
+            return
+
+        phrase_list = speechsdk.PhraseListGrammar.from_recognizer(self.speech_recognizer)
+
+        try:
+            phrase_list.clear()
+        except AttributeError:
+            logger.debug("PhraseListGrammar.clear unavailable; proceeding without reset.")
+
+        for phrase in sorted(self._phrase_list_phrases):
+            phrase_list.addPhrase(phrase)
+
+        if self._phrase_list_weight is not None:
+            try:
+                phrase_list.setWeight(self._phrase_list_weight)
+            except AttributeError:
+                logger.warning("PhraseListGrammar.setWeight unavailable; weight change skipped.")
+
+        self._phrase_list_grammar = phrase_list
+        logger.info(
+            "Applied speech phrase list",
+            extra={"phrase_count": len(self._phrase_list_phrases)},
+        )
 
     @staticmethod
     def _extract_lang(evt) -> str:
@@ -1201,9 +1395,7 @@ class StreamingSpeechRecognizerFromBytes:
             by the diarization algorithm. The same speaker may receive different
             IDs across different recognition sessions.
         """
-        blob = evt.result.properties.get(
-            speechsdk.PropertyId.SpeechServiceResponse_JsonResult, ""
-        )
+        blob = evt.result.properties.get(speechsdk.PropertyId.SpeechServiceResponse_JsonResult, "")
         if blob:
             try:
                 return str(json.loads(blob).get("SpeakerId"))
@@ -1277,11 +1469,11 @@ class StreamingSpeechRecognizerFromBytes:
         )
 
         if txt and self.partial_callback:
-            # Create a span for partial recognition
+            # Create a span for partial recognition (INTERNAL - event within session)
             if self.enable_tracing and self.tracer:
                 with self.tracer.start_as_current_span(
                     "speech_partial_recognition",
-                    kind=SpanKind.CLIENT,
+                    kind=SpanKind.INTERNAL,
                     attributes={
                         "speech.result.type": "partial",
                         "speech.result.text_length": len(txt),
@@ -1297,14 +1489,12 @@ class StreamingSpeechRecognizerFromBytes:
                             {"text_length": len(txt), "detected_language": detected},
                         )
 
-            logger.debug(
-                f"Calling partial_callback with: '{txt}', '{detected}', '{speaker_id}'"
-            )
+            logger.debug(f"Calling partial_callback with: '{txt}', '{detected}', '{speaker_id}'")
             self.partial_callback(txt, detected, speaker_id)
         elif txt:
             logger.debug(f"⚠️ Got text but no partial_callback: '{txt}'")
         else:
-            logger.debug(f"🔇 Empty text in recognizing event")
+            logger.debug("🔇 Empty text in recognizing event")
 
     def _on_recognized(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
         """
@@ -1380,7 +1570,7 @@ class StreamingSpeechRecognizerFromBytes:
             if self.enable_tracing and self.tracer and evt.result.text:
                 with self.tracer.start_as_current_span(
                     "speech_final_recognition",
-                    kind=SpanKind.CLIENT,
+                    kind=SpanKind.INTERNAL,  # Internal event within session, not external call
                     attributes={
                         "speech.result.type": "final",
                         "speech.result.text_length": len(evt.result.text),
@@ -1415,13 +1605,9 @@ class StreamingSpeechRecognizerFromBytes:
                 )
                 self.final_callback(evt.result.text, detected_lang, speaker_id)
             elif evt.result.text:
-                logger.debug(
-                    f"⚠️ Got final text but no final_callback: '{evt.result.text}'"
-                )
+                logger.debug(f"⚠️ Got final text but no final_callback: '{evt.result.text}'")
         else:
-            logger.debug(
-                f"🚫 Recognition result reason not RecognizedSpeech: {evt.result.reason}"
-            )
+            logger.debug(f"🚫 Recognition result reason not RecognizedSpeech: {evt.result.reason}")
 
     def _on_canceled(self, evt: speechsdk.SessionEventArgs) -> None:
         """
@@ -1483,52 +1669,49 @@ class StreamingSpeechRecognizerFromBytes:
 
         # Add error event to session span
         if self._session_span:
-            self._session_span.set_status(
-                Status(StatusCode.ERROR, "Recognition canceled")
-            )
-            self._session_span.add_event(
-                "recognition_canceled", {"event_details": str(evt)}
-            )
+            self._session_span.set_status(Status(StatusCode.ERROR, "Recognition canceled"))
+            self._session_span.add_event("recognition_canceled", {"event_details": str(evt)})
 
         if evt.result and evt.result.cancellation_details:
             details = evt.result.cancellation_details
             error_msg = f"Reason: {details.reason}, Error: {details.error_details}"
-            
+
             # Check for 401 authentication error and attempt refresh
             if self._is_authentication_error(details):
-                logger.warning(f"Authentication error detected in speech recognition: {details.error_details}")
-                
+                logger.warning(
+                    f"Authentication error detected in speech recognition: {details.error_details}"
+                )
+
                 if self._session_span:
                     self._session_span.add_event(
-                        "recognition_authentication_error",
-                        {"error_details": details.error_details}
+                        "recognition_authentication_error", {"error_details": details.error_details}
                     )
-                
+
                 # Try to refresh authentication
                 if self.refresh_authentication():
                     logger.info("Authentication refreshed successfully for speech recognition")
-                    
+
                     if self._session_span:
                         self._session_span.add_event(
-                            "recognition_authentication_refreshed",
-                            {"refresh_success": True}
+                            "recognition_authentication_refreshed", {"refresh_success": True}
                         )
-                        
+
                     # Attempt automatic restart with refreshed credentials
                     if self.restart_recognition_after_auth_refresh():
-                        logger.info("Speech recognition automatically restarted with refreshed credentials")
+                        logger.info(
+                            "Speech recognition automatically restarted with refreshed credentials"
+                        )
                         return  # Exit early on successful restart
                     else:
                         logger.warning("Automatic restart failed - manual restart required")
                 else:
                     logger.error("Failed to refresh authentication for speech recognition")
-                    
+
                     if self._session_span:
                         self._session_span.add_event(
-                            "recognition_authentication_refresh_failed",
-                            {"refresh_success": False}
+                            "recognition_authentication_refresh_failed", {"refresh_success": False}
                         )
-            
+
             logger.warning(error_msg)
 
             # Add detailed error information to span

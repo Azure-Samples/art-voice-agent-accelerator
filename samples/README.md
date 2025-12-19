@@ -85,7 +85,7 @@ Test recordings and audio samples for development and debugging.
 
 ### **Environment Setup**
 - **Python 3.11+** 
-- **Dependencies**: Install with `pip install -r requirements.txt`
+- **Dependencies**: Install with `uv sync` (or `pip install -e .`)
 - **Jupyter environment** for running notebooks
 
 ### **Azure Services Required**

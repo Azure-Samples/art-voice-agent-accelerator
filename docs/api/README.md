@@ -10,38 +10,132 @@ The API provides comprehensive Azure integrations for voice-enabled applications
 - **[Azure Speech Services](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-to-text)** - Neural text-to-speech and speech recognition  
 - **[Azure OpenAI](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/realtime-audio-websockets)** - Conversational AI and language processing
 
-## API Endpoints
+---
 
-The V1 API provides REST and WebSocket endpoints for real-time voice processing:
+## API Endpoints Overview
 
-### REST Endpoints
-- **`/api/v1/calls/`** - Phone call management (initiate, answer, callbacks)
-- **`/api/v1/health/`** - Service health monitoring and validation
+The V1 API provides REST and WebSocket endpoints organized by domain:
 
-### WebSocket Endpoints
-- **`/api/v1/media/stream`** - ACS media streaming and session management
-- **`/api/v1/realtime/conversation`** - Browser-based voice conversations
+### Health & Monitoring
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/health` | GET | Basic liveness check for load balancers |
+| `/api/v1/readiness` | GET | Comprehensive dependency health validation |
+| `/api/v1/agents` | GET | List loaded agents with configuration |
+| `/api/v1/agents/{name}` | GET | Get specific agent details |
+| `/api/v1/agents/{name}` | PUT | Update agent runtime configuration |
+
+### Call Management
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/calls/initiate` | POST | Initiate outbound call via ACS |
+| `/api/v1/calls/` | GET | List calls with pagination and filtering |
+| `/api/v1/calls/terminate` | POST | Terminate active call by connection ID |
+| `/api/v1/calls/answer` | POST | Handle inbound call/Event Grid validation |
+| `/api/v1/calls/callbacks` | POST | Process ACS webhook callback events |
+
+### Media Streaming
+
+| Endpoint | Type | Description |
+|----------|------|-------------|
+| `/api/v1/media/status` | GET | Get media streaming configuration status |
+| `/api/v1/media/stream` | WebSocket | ACS bidirectional audio streaming |
+
+### Browser Conversations
+
+| Endpoint | Type | Description |
+|----------|------|-------------|
+| `/api/v1/browser/status` | GET | Browser service status and connection counts |
+| `/api/v1/browser/dashboard/relay` | WebSocket | Dashboard client real-time updates |
+| `/api/v1/browser/conversation` | WebSocket | Browser-based voice conversations |
+
+### Session Metrics
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/metrics/sessions` | GET | List active sessions with basic metrics |
+| `/api/v1/metrics/session/{id}` | GET | Detailed latency/telemetry for a session |
+| `/api/v1/metrics/summary` | GET | Aggregated metrics across recent sessions |
+
+### Agent Builder
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/agent-builder/tools` | GET | List available tools for agents |
+| `/api/v1/agent-builder/voices` | GET | List available TTS voices |
+| `/api/v1/agent-builder/defaults` | GET | Get default agent configuration |
+| `/api/v1/agent-builder/templates` | GET | List available agent templates |
+| `/api/v1/agent-builder/templates/{id}` | GET | Get specific template details |
+| `/api/v1/agent-builder/create` | POST | Create dynamic agent for session |
+| `/api/v1/agent-builder/session/{id}` | GET | Get session agent configuration |
+| `/api/v1/agent-builder/session/{id}` | PUT | Update session agent configuration |
+| `/api/v1/agent-builder/session/{id}` | DELETE | Reset to default agent |
+| `/api/v1/agent-builder/sessions` | GET | List all sessions with dynamic agents |
+| `/api/v1/agent-builder/reload-agents` | POST | Reload agent templates from disk |
+
+### Demo Environment
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/demo-env/temporary-user` | POST | Create synthetic demo user profile |
+| `/api/v1/demo-env/temporary-user` | GET | Lookup demo profile by email |
+
+### TTS Health
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/tts/dedicated/health` | GET | TTS pool health status |
+| `/api/v1/tts/dedicated/metrics` | GET | TTS pool performance metrics |
+| `/api/v1/tts/dedicated/status` | GET | Ultra-fast status for load balancers |
+
+---
 
 ## Interactive API Documentation
 
 **👉 [Complete API Reference](api-reference.md)** - Interactive OpenAPI documentation with all REST endpoints, WebSocket details, authentication, and configuration.
 
-### Key Features
+---
 
-- **Call Management** - Phone call lifecycle through Azure Communication Services
-- **Media Streaming** - Real-time audio processing for ACS calls  
-- **Real-time Communication** - Browser-based voice conversations
-- **Health Monitoring** - Service validation and diagnostics
+## WebSocket Endpoints
 
-## WebSocket Protocol
+### ACS Media Streaming (`/api/v1/media/stream`)
 
-Real-time **bidirectional audio streaming** following [Azure Communication Services WebSocket specifications](https://learn.microsoft.com/en-us/azure/communication-services/how-tos/call-automation/audio-streaming-quickstart#set-up-a-websocket-server):
+Real-time bidirectional audio streaming for Azure Communication Services calls.
 
-- **Audio Format**: PCM 16kHz mono (ACS) / PCM 24kHz mono (Azure OpenAI Realtime)
-- **Transport**: WebSocket over TCP with full-duplex communication
-- **Latency**: Sub-50ms for voice activity detection and response generation
+**Query Parameters:**
+- `call_connection_id` (required): ACS call connection identifier
+- `session_id` (optional): Browser session ID for UI coordination
 
-**� [WebSocket Details](api-reference.md#websocket-endpoints)** - Complete protocol documentation
+**Streaming Modes:**
+- **MEDIA**: Traditional STT/TTS pipeline (PCM 16kHz mono)
+- **VOICE_LIVE**: Azure OpenAI Realtime API (PCM 24kHz mono)
+- **TRANSCRIPTION**: Real-time transcription only
+
+### Browser Conversation (`/api/v1/browser/conversation`)
+
+Browser-based voice conversations with session persistence.
+
+**Query Parameters:**
+- `session_id` (optional): Session identifier for restoration
+- `streaming_mode` (optional): `VOICE_LIVE` or `REALTIME`
+- `user_email` (optional): User email for context
+
+**Features:**
+- Real-time speech-to-text transcription
+- TTS audio streaming for responses
+- Barge-in detection and handling
+- Session context persistence
+
+### Dashboard Relay (`/api/v1/browser/dashboard/relay`)
+
+Real-time updates for dashboard clients monitoring conversations.
+
+**Query Parameters:**
+- `session_id` (optional): Filter updates for specific session
+
+---
 
 ## Observability
 
@@ -50,22 +144,36 @@ Real-time **bidirectional audio streaming** following [Azure Communication Servi
 - Session-level spans for complete request lifecycle  
 - Service dependency mapping (Speech, Communication Services, Redis, OpenAI)
 - Audio processing latency and error rate monitoring
+- Automatic context propagation via `session_context` wrapper
+
+---
 
 ## Streaming Modes
 
 The API supports multiple streaming modes configured via `ACS_STREAMING_MODE`:
 
-- **MEDIA Mode (Default)** - Traditional STT/TTS with orchestrator processing
-- **VOICE_LIVE Mode** - [Azure OpenAI Realtime API](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/realtime-audio-websockets) integration  
-- **TRANSCRIPTION Mode** - Real-time transcription without AI responses
+| Mode | Description | Audio Format | Use Case |
+|------|-------------|--------------|----------|
+| `MEDIA` | Traditional STT/TTS with Speech Cascade | PCM 16kHz mono | Phone calls with orchestrator |
+| `VOICE_LIVE` | Azure OpenAI Realtime API | PCM 24kHz mono | Low-latency conversational AI |
+| `TRANSCRIPTION` | Real-time transcription only | PCM 16kHz mono | Call recording and analysis |
+| `REALTIME` | Browser-based Speech Cascade | PCM 16kHz mono | Browser voice conversations |
 
-**👉 [Detailed Configuration](../reference/streaming-modes.md)** - Complete streaming mode documentation
+**📖 [Streaming Mode Details](../architecture/speech/README.md)** - Complete streaming mode documentation
+
+---
 
 ## Architecture
 
-**Three-Thread Design** - Optimized for real-time conversational AI with sub-10ms barge-in detection following [Azure Speech SDK best practices](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-recognize-speech).
+**Three-Thread Design** - Optimized for real-time conversational AI with sub-10ms barge-in detection:
 
-**� [Architecture Details](../architecture/acs-flows.md)** - Complete three-thread architecture documentation
+1. **Speech SDK Thread** - Audio processing and recognition
+2. **Route Turn Thread** - LLM orchestration and tool execution
+3. **Main Event Loop** - WebSocket I/O and TTS streaming
+
+**📖 [Architecture Details](../architecture/speech/README.md)** - Complete speech architecture documentation
+
+---
 
 ## Reliability
 
@@ -74,12 +182,14 @@ The API supports multiple streaming modes configured via `ACS_STREAMING_MODE`:
 - Connection pooling and retry logic with exponential backoff
 - Headless environment support with memory-only audio synthesis  
 - [Managed identity authentication](https://learn.microsoft.com/en-us/azure/ai-services/authentication#authenticate-with-azure-active-directory) with automatic token refresh
+- Session-aware resource management via `OnDemandResourcePool`
+
+---
 
 ## Related Documentation
 
 - **[API Reference](api-reference.md)** - Complete OpenAPI specification with interactive testing
-- **[Speech Synthesis](../reference/speech-synthesis.md)** - Comprehensive TTS implementation guide
-- **[Speech Recognition](../reference/speech-recognition.md)** - Advanced STT capabilities and configuration
-- **[Streaming Modes](../reference/streaming-modes.md)** - Audio processing pipeline configuration
-- **[Utilities](../reference/utilities.md)** - Supporting services and infrastructure components
+- **[Speech Architecture](../architecture/speech/README.md)** - STT, TTS, and cascade orchestration
+- **[Agent Architecture](../architecture/agents/README.md)** - Multi-agent system and handoffs
+- **[Data Architecture](../architecture/data/README.md)** - State management and persistence
 - **[Architecture Overview](../architecture/README.md)** - System architecture and deployment patterns

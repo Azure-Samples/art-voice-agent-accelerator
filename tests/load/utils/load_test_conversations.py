@@ -3,25 +3,25 @@
 Conversation-Based Load Testing Framework
 =========================================
 
-Runs concurrent realistic conversations to test system performance 
+Runs concurrent realistic conversations to test system performance
 and evaluate agent flows under load.
 """
 
 import asyncio
 import json
-import time
 import random
-import uuid
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass, field
 import statistics
+import time
+import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
-from utils.conversation_simulator import (
-    ConversationSimulator, 
-    ConversationTemplates, 
+from tests.load.utils.conversation_simulator import (
     ConversationMetrics,
+    ConversationSimulator,
     ConversationTemplate,
+    ConversationTemplates,
 )
 
 
@@ -33,7 +33,7 @@ class LoadTestConfig:
     total_conversations: int = 50
     ramp_up_time_s: float = 30.0  # Time to reach max concurrency
     test_duration_s: float = 300.0  # Total test duration
-    conversation_templates: List[str] = field(
+    conversation_templates: list[str] = field(
         default_factory=lambda: ["insurance_inquiry", "quick_question"]
     )
     ws_url: str = "ws://localhost:8010/api/v1/media/stream"
@@ -59,24 +59,23 @@ class LoadTestResults:
     total_conversations_failed: int = 0
 
     # Performance metrics
-    conversation_metrics: List[ConversationMetrics] = field(default_factory=list)
-    connection_times_ms: List[float] = field(default_factory=list)
-    conversation_durations_s: List[float] = field(default_factory=list)
+    conversation_metrics: list[ConversationMetrics] = field(default_factory=list)
+    connection_times_ms: list[float] = field(default_factory=list)
+    conversation_durations_s: list[float] = field(default_factory=list)
 
     # Detailed metrics
     concurrent_conversations_peak: int = 0
-    errors: List[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
 
     # Agent performance
-    agent_response_times_ms: List[float] = field(default_factory=list)
-    speech_recognition_times_ms: List[float] = field(default_factory=list)
+    agent_response_times_ms: list[float] = field(default_factory=list)
+    speech_recognition_times_ms: list[float] = field(default_factory=list)
 
-    def get_summary(self) -> Dict[str, Any]:
+    def get_summary(self) -> dict[str, Any]:
         """Get a summary of the load test results."""
         duration = self.end_time - self.start_time
         success_rate = (
-            self.total_conversations_completed
-            / max(1, self.total_conversations_attempted)
+            self.total_conversations_completed / max(1, self.total_conversations_attempted)
         ) * 100
 
         summary = {
@@ -96,9 +95,11 @@ class LoadTestResults:
                 "min": min(self.connection_times_ms),
                 "max": max(self.connection_times_ms),
                 "p50": statistics.median(self.connection_times_ms),
-                "p95": statistics.quantiles(self.connection_times_ms, n=20)[18]
-                if len(self.connection_times_ms) >= 20
-                else max(self.connection_times_ms),
+                "p95": (
+                    statistics.quantiles(self.connection_times_ms, n=20)[18]
+                    if len(self.connection_times_ms) >= 20
+                    else max(self.connection_times_ms)
+                ),
             }
 
         # Conversation duration metrics
@@ -108,9 +109,11 @@ class LoadTestResults:
                 "min": min(self.conversation_durations_s),
                 "max": max(self.conversation_durations_s),
                 "p50": statistics.median(self.conversation_durations_s),
-                "p95": statistics.quantiles(self.conversation_durations_s, n=20)[18]
-                if len(self.conversation_durations_s) >= 20
-                else max(self.conversation_durations_s),
+                "p95": (
+                    statistics.quantiles(self.conversation_durations_s, n=20)[18]
+                    if len(self.conversation_durations_s) >= 20
+                    else max(self.conversation_durations_s)
+                ),
             }
 
         # Agent performance metrics
@@ -120,9 +123,11 @@ class LoadTestResults:
                 "min": min(self.agent_response_times_ms),
                 "max": max(self.agent_response_times_ms),
                 "p50": statistics.median(self.agent_response_times_ms),
-                "p95": statistics.quantiles(self.agent_response_times_ms, n=20)[18]
-                if len(self.agent_response_times_ms) >= 20
-                else max(self.agent_response_times_ms),
+                "p95": (
+                    statistics.quantiles(self.agent_response_times_ms, n=20)[18]
+                    if len(self.agent_response_times_ms) >= 20
+                    else max(self.agent_response_times_ms)
+                ),
             }
 
         return summary
@@ -139,8 +144,7 @@ class ConversationLoadTester:
 
         # Get conversation templates
         self.templates = {
-            template.name: template
-            for template in ConversationTemplates.get_all_templates()
+            template.name: template for template in ConversationTemplates.get_all_templates()
         }
 
     async def run_single_conversation(
@@ -148,7 +152,7 @@ class ConversationLoadTester:
         template: ConversationTemplate,
         conversation_id: int,
         semaphore: asyncio.Semaphore,
-    ) -> Optional[ConversationMetrics]:
+    ) -> ConversationMetrics | None:
         """Run a single conversation with concurrency control and configurable turn depth."""
 
         async with semaphore:
@@ -166,13 +170,8 @@ class ConversationLoadTester:
             elif self.config.turn_variation_strategy == "increasing":
                 # Gradually increase turns as conversations progress
                 progress = min(1.0, conversation_id / self.config.total_conversations)
-                range_size = (
-                    self.config.max_conversation_turns
-                    - self.config.min_conversation_turns
-                )
-                num_turns = self.config.min_conversation_turns + int(
-                    progress * range_size
-                )
+                range_size = self.config.max_conversation_turns - self.config.min_conversation_turns
+                num_turns = self.config.min_conversation_turns + int(progress * range_size)
             else:  # "fixed"
                 num_turns = self.config.max_conversation_turns
 
@@ -227,7 +226,7 @@ class ConversationLoadTester:
     async def run_load_test(self) -> LoadTestResults:
         """Run the complete load test."""
 
-        print(f"🚀 Starting conversation load test")
+        print("🚀 Starting conversation load test")
         print(
             f"📊 Config: {self.config.max_concurrent_conversations} max concurrent, {self.config.total_conversations} total"
         )
@@ -282,9 +281,7 @@ class ConversationLoadTester:
                     self.results.total_conversations_attempted += 1
 
                     task = asyncio.create_task(
-                        self.run_single_conversation(
-                            template, conversation_counter, semaphore
-                        )
+                        self.run_single_conversation(template, conversation_counter, semaphore)
                     )
                     active_tasks.add(task)
                     current_active += 1
@@ -314,14 +311,12 @@ class ConversationLoadTester:
                 )
 
             # Wait for remaining conversations to complete
-            print(
-                f"⏳ Waiting for {len(active_tasks)} remaining conversations to complete..."
-            )
+            print(f"⏳ Waiting for {len(active_tasks)} remaining conversations to complete...")
             if active_tasks:
                 await asyncio.gather(*active_tasks, return_exceptions=True)
 
         except KeyboardInterrupt:
-            print(f"\n🛑 Load test interrupted by user")
+            print("\n🛑 Load test interrupted by user")
             # Cancel remaining tasks
             for task in active_tasks:
                 task.cancel()
@@ -333,12 +328,10 @@ class ConversationLoadTester:
         finally:
             self.results.end_time = time.time()
 
-        print(f"\n✅ Load test completed")
+        print("\n✅ Load test completed")
         return self.results
 
-    def save_results(
-        self, results: LoadTestResults, filename: Optional[str] = None
-    ) -> str:
+    def save_results(self, results: LoadTestResults, filename: str | None = None) -> str:
         """Save results to JSON file."""
 
         if filename is None:
@@ -394,11 +387,11 @@ class ConversationLoadTester:
         """Print a detailed summary of the test results."""
         summary = results.get_summary()
 
-        print(f"\n📊 CONVERSATION LOAD TEST SUMMARY")
-        print(f"=" * 70)
+        print("\n📊 CONVERSATION LOAD TEST SUMMARY")
+        print("=" * 70)
         print(summary)
         # Overall results
-        print(f"🎯 Overall Results:")
+        print("🎯 Overall Results:")
         print(f"   Success Rate: {summary['success_rate_percent']:.1f}%")
         print(
             f"   Conversations: {summary['conversations_completed']}/{summary['conversations_attempted']}"
@@ -410,7 +403,7 @@ class ConversationLoadTester:
         # Connection performance
         if "connection_times_ms" in summary:
             conn = summary["connection_times_ms"]
-            print(f"\n🔌 Connection Performance:")
+            print("\n🔌 Connection Performance:")
             print(f"   Average: {conn['avg']:.1f}ms")
             print(f"   Median (P50): {conn['p50']:.1f}ms")
             print(f"   95th Percentile: {conn['p95']:.1f}ms")
@@ -419,7 +412,7 @@ class ConversationLoadTester:
         # Conversation duration
         if "conversation_durations_s" in summary:
             dur = summary["conversation_durations_s"]
-            print(f"\n⏱️  Conversation Durations:")
+            print("\n⏱️  Conversation Durations:")
             print(f"   Average: {dur['avg']:.2f}s")
             print(f"   Median (P50): {dur['p50']:.2f}s")
             print(f"   95th Percentile: {dur['p95']:.2f}s")
@@ -428,7 +421,7 @@ class ConversationLoadTester:
         # Agent performance
         if "agent_response_times_ms" in summary:
             agent = summary["agent_response_times_ms"]
-            print(f"\n🤖 Agent Response Performance:")
+            print("\n🤖 Agent Response Performance:")
             print(f"   Average: {agent['avg']:.1f}ms")
             print(f"   Median (P50): {agent['p50']:.1f}ms")
             print(f"   95th Percentile: {agent['p95']:.1f}ms")
@@ -442,7 +435,7 @@ class ConversationLoadTester:
             if len(results.errors) > 5:
                 print(f"   ... and {len(results.errors) - 5} more errors")
         else:
-            print(f"\n✅ No errors detected")
+            print("\n✅ No errors detected")
 
 
 async def main():

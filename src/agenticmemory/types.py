@@ -12,7 +12,7 @@ applications. It exposes four public classes:
 """
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from utils.ml_logging import get_logger
 
@@ -31,7 +31,7 @@ class CoreMemory:
     """
 
     def __init__(self) -> None:
-        self._store: Dict[str, Any] = {}
+        self._store: dict[str, Any] = {}
         logger.debug("CoreMemory initialised with empty store.")
 
     def set(self, key: str, value: Any) -> None:  # noqa: D401, PLR0913
@@ -58,7 +58,7 @@ class CoreMemory:
         logger.debug("CoreMemory.get – key=%s, value=%r", key, value)
         return value
 
-    def update(self, updates: Dict[str, Any]) -> None:
+    def update(self, updates: dict[str, Any]) -> None:
         """Bulk-update the store.
 
         Args:
@@ -95,7 +95,7 @@ class ChatHistory:
     """
 
     def __init__(self) -> None:  # noqa: D401
-        self._threads: Dict[str, List[Dict[str, str]]] = {}
+        self._threads: dict[str, list[dict[str, str]]] = {}
         logger.debug("ChatHistory initialised with empty mapping.")
 
     # ------------------------------------------------------------------
@@ -111,15 +111,15 @@ class ChatHistory:
             len(self._threads[agent]),
         )
 
-    def get_agent(self, agent: str = "default") -> List[Dict[str, str]]:  # noqa: D401
+    def get_agent(self, agent: str = "default") -> list[dict[str, str]]:  # noqa: D401
         """Return the turn list for *agent* (creates if missing)."""
         return self._threads.setdefault(agent, [])
 
-    def get_all(self) -> Dict[str, List[Dict[str, str]]]:  # noqa: D401
+    def get_all(self) -> dict[str, list[dict[str, str]]]:  # noqa: D401
         """Return the full mapping *shallow* copy."""
         return dict(self._threads)
 
-    def clear(self, agent: Optional[str] = None) -> None:  # noqa: D401
+    def clear(self, agent: str | None = None) -> None:  # noqa: D401
         """Reset history – either all agents or a single thread."""
         if agent is None:
             self._threads.clear()

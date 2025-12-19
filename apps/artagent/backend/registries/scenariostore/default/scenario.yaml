@@ -1,0 +1,25 @@
+# Default Scenario
+# All agents available, no overrides - standard behavior
+
+name: default
+description: Default configuration with all agents available
+icon: "🎯"
+
+# Empty agents list = include all discovered agents
+agents: []
+
+# Default handoff behavior: announced
+# All handoffs will have target agent greet the user
+handoff_type: announced
+
+# Handoff configurations keyed by tool name
+# Empty dict = use defaults for all handoffs
+handoffs: {}
+
+# No agent overrides - use defaults from agent YAML files
+agent_overrides: {}
+
+# Global template variables
+template_vars:
+  company_name: "ART Voice Agent"
+  industry: "general"

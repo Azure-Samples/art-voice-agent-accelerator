@@ -1,0 +1,26 @@
+# Node.js
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build output (rebuilt in container)
+dist
+build
+
+# Dev/test files
+*.test.js
+*.spec.js
+__tests__
+coverage
+
+# IDE
+.vscode
+.idea
+
+# Misc
+*.log
+*.md
+!README.md
+.env.local
+.env.*.local

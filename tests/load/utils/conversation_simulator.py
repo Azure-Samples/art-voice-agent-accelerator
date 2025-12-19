@@ -8,29 +8,27 @@ observed in the server logs to enable proper load testing and agent evaluation.
 """
 
 import asyncio
-import json
 import base64
-import websockets
-import struct
-import math
-import time
+import json
 import random
 import ssl
-from typing import List, Dict, Any, Optional, Callable
+import struct
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
+
+import websockets
 
 # No longer need audio generator - using pre-cached PCM files
 
 
-def generate_silence_chunk(
-    duration_ms: float = 100.0, sample_rate: int = 16000
-) -> bytes:
+def generate_silence_chunk(duration_ms: float = 100.0, sample_rate: int = 16000) -> bytes:
     """Generate a silent audio chunk with very low-level noise for VAD continuity."""
     samples = int((duration_ms / 1000.0) * sample_rate)
     # Generate very quiet background noise instead of pure silence
     # This is more realistic and helps trigger final speech recognition
-    import struct
 
     audio_data = bytearray()
     for _ in range(samples):
@@ -57,7 +55,7 @@ class ConversationTurn:
     text: str
     phase: ConversationPhase
     delay_before_ms: int = 500  # Pause before speaking
-    speech_duration_ms: Optional[int] = None  # Override calculated duration
+    speech_duration_ms: int | None = None  # Override calculated duration
     interruption_likely: bool = False  # Whether agent might interrupt
 
 
@@ -67,9 +65,9 @@ class ConversationTemplate:
 
     name: str
     description: str
-    turns: List[ConversationTurn]
+    turns: list[ConversationTurn]
     expected_agent: str = "AuthAgent"
-    success_indicators: List[str] = field(default_factory=list)
+    success_indicators: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -101,13 +99,9 @@ class TurnMetrics:
 
     # NEW: Text and audio capture for conversation analysis
     user_speech_recognized: str = ""  # What the system heard from user
-    agent_text_responses: List[str] = field(
-        default_factory=list
-    )  # Agent text responses
-    agent_audio_responses: List[bytes] = field(default_factory=list)  # Agent audio data
-    full_responses_received: List[Dict[str, Any]] = field(
-        default_factory=list
-    )  # All raw responses
+    agent_text_responses: list[str] = field(default_factory=list)  # Agent text responses
+    agent_audio_responses: list[bytes] = field(default_factory=list)  # Agent audio data
+    full_responses_received: list[dict[str, Any]] = field(default_factory=list)  # All raw responses
 
     def calculate_metrics(self):
         """Calculate derived metrics from timestamps."""
@@ -125,9 +119,7 @@ class TurnMetrics:
                 self.last_audio_chunk_time - self.first_response_time
             ) * 1000
 
-        self.end_to_end_latency_ms = (
-            self.turn_complete_time - self.audio_send_start_time
-        ) * 1000
+        self.end_to_end_latency_ms = (self.turn_complete_time - self.audio_send_start_time) * 1000
 
 
 @dataclass
@@ -141,7 +133,7 @@ class ConversationMetrics:
     connection_time_ms: float
 
     # Per-turn detailed metrics
-    turn_metrics: List[TurnMetrics] = field(default_factory=list)
+    turn_metrics: list[TurnMetrics] = field(default_factory=list)
 
     # Legacy aggregate metrics (for backward compatibility)
     user_turns: int = 0
@@ -157,11 +149,11 @@ class ConversationMetrics:
     barge_ins_detected: int = 0
 
     # Server responses
-    server_responses: List[Dict[str, Any]] = field(default_factory=list)
+    server_responses: list[dict[str, Any]] = field(default_factory=list)
     audio_chunks_received: int = 0
-    errors: List[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
 
-    def get_turn_statistics(self) -> Dict[str, Any]:
+    def get_turn_statistics(self) -> dict[str, Any]:
         """Calculate detailed per-turn statistics."""
         if not self.turn_metrics:
             return {}
@@ -188,7 +180,7 @@ class ConversationMetrics:
 
         import statistics
 
-        def calculate_percentiles(data: List[float]) -> Dict[str, float]:
+        def calculate_percentiles(data: list[float]) -> dict[str, float]:
             """Calculate comprehensive percentile statistics."""
             if not data:
                 return {}
@@ -213,24 +205,17 @@ class ConversationMetrics:
             "total_turns": len(self.turn_metrics),
             "successful_turns": len(successful_turns),
             "failed_turns": len(self.turn_metrics) - len(successful_turns),
-            "success_rate_percent": (len(successful_turns) / len(self.turn_metrics))
-            * 100,
+            "success_rate_percent": (len(successful_turns) / len(self.turn_metrics)) * 100,
             # Detailed latency statistics
-            "speech_recognition_latency_ms": calculate_percentiles(
-                speech_recognition_latencies
-            ),
-            "agent_processing_latency_ms": calculate_percentiles(
-                agent_processing_latencies
-            ),
+            "speech_recognition_latency_ms": calculate_percentiles(speech_recognition_latencies),
+            "agent_processing_latency_ms": calculate_percentiles(agent_processing_latencies),
             "end_to_end_latency_ms": calculate_percentiles(end_to_end_latencies),
             "audio_send_duration_ms": calculate_percentiles(audio_send_durations),
             # Per-turn breakdown
             "per_turn_details": [
                 {
                     "turn": t.turn_number,
-                    "text": t.turn_text[:50] + "..."
-                    if len(t.turn_text) > 50
-                    else t.turn_text,
+                    "text": t.turn_text[:50] + "..." if len(t.turn_text) > 50 else t.turn_text,
                     "successful": t.turn_successful,
                     "speech_recognition_ms": round(t.speech_recognition_latency_ms, 1),
                     "agent_processing_ms": round(t.agent_processing_latency_ms, 1),
@@ -245,11 +230,11 @@ class ConversationMetrics:
 
 class ProductionSpeechGenerator:
     """Streams pre-cached PCM audio files for load testing with configurable conversation depth."""
-    
+
     def __init__(self, cache_dir: str = "audio_cache", conversation_turns: int = 5):
         """Initialize with cached PCM files directory and conversation depth."""
-        from pathlib import Path
         import os
+        from pathlib import Path
 
         # Handle relative paths by making them relative to the script location
         if not os.path.isabs(cache_dir):
@@ -284,9 +269,7 @@ class ProductionSpeechGenerator:
 
         # Sort scenario files by turn number
         for scenario in self.scenario_files:
-            self.scenario_files[scenario].sort(
-                key=lambda f: self._extract_turn_number(f.name)
-            )
+            self.scenario_files[scenario].sort(key=lambda f: self._extract_turn_number(f.name))
 
         print(f"📁 Found {len(self.pcm_files)} cached PCM files")
         print(
@@ -310,7 +293,7 @@ class ProductionSpeechGenerator:
 
     def get_conversation_audio_sequence(
         self, scenario: str = None, max_turns: int = None
-    ) -> List[bytes]:
+    ) -> list[bytes]:
         """Get a sequence of audio files for a complete conversation."""
         max_turns = max_turns or self.conversation_turns
         audio_sequence = []
@@ -325,16 +308,12 @@ class ProductionSpeechGenerator:
                     audio_bytes = pcm_file.read_bytes()
                     audio_sequence.append(audio_bytes)
                     duration_s = len(audio_bytes) / (16000 * 2)
-                    print(
-                        f"    📄 {pcm_file.name}: {len(audio_bytes)} bytes ({duration_s:.2f}s)"
-                    )
+                    print(f"    📄 {pcm_file.name}: {len(audio_bytes)} bytes ({duration_s:.2f}s)")
                 except Exception as e:
                     print(f"    ❌ Failed to read {pcm_file}: {e}")
         else:
             # Use generic files, cycling if needed
-            files_to_use = (
-                min(max_turns, len(self.generic_files)) if self.generic_files else 0
-            )
+            files_to_use = min(max_turns, len(self.generic_files)) if self.generic_files else 0
 
             if files_to_use == 0:
                 print("❌ No audio files available")
@@ -455,7 +434,7 @@ class ConversationTemplates:
         )
 
     @staticmethod
-    def get_all_templates() -> List[ConversationTemplate]:
+    def get_all_templates() -> list[ConversationTemplate]:
         """Get all available conversation templates - simplified to 2 scenarios."""
         return [
             ConversationTemplates.get_insurance_inquiry(),
@@ -473,31 +452,25 @@ class ConversationSimulator:
     ):
         self.ws_url = ws_url
         self.conversation_turns = conversation_turns
-        self.speech_generator = ProductionSpeechGenerator(
-            conversation_turns=conversation_turns
-        )
+        self.speech_generator = ProductionSpeechGenerator(conversation_turns=conversation_turns)
 
     def preload_conversation_audio(self, template: ConversationTemplate):
         """No-op since we're using pre-cached files."""
-        print(f"ℹ️  Using pre-cached PCM files, no preloading needed")
+        print("ℹ️  Using pre-cached PCM files, no preloading needed")
 
     async def simulate_conversation(
         self,
         template: ConversationTemplate,
-        session_id: Optional[str] = None,
-        on_turn_complete: Optional[
-            Callable[[ConversationTurn, List[Dict]], None]
-        ] = None,
-        on_agent_response: Optional[Callable[[str, List[Dict]], None]] = None,
+        session_id: str | None = None,
+        on_turn_complete: Callable[[ConversationTurn, list[dict]], None] | None = None,
+        on_agent_response: Callable[[str, list[dict]], None] | None = None,
         preload_audio: bool = True,
-        max_turns: Optional[int] = None,
+        max_turns: int | None = None,
     ) -> ConversationMetrics:
         """Simulate a complete conversation using the given template with configurable turn depth."""
 
         if session_id is None:
-            session_id = (
-                f"{template.name}-{int(time.time())}-{random.randint(1000, 9999)}"
-            )
+            session_id = f"{template.name}-{int(time.time())}-{random.randint(1000, 9999)}"
 
         # Use max_turns parameter or default to configured conversation_turns
         effective_max_turns = max_turns or self.conversation_turns
@@ -522,9 +495,7 @@ class ConversationSimulator:
             )
 
             if not audio_sequence:
-                print(
-                    "❌ No audio sequence available, falling back to individual file selection"
-                )
+                print("❌ No audio sequence available, falling back to individual file selection")
                 audio_sequence = None
         else:
             audio_sequence = None
@@ -568,9 +539,7 @@ class ConversationSimulator:
                 await asyncio.sleep(1.0)
 
                 # Process each conversation turn (limited by effective_max_turns)
-                turns_to_process = (
-                    template.turns[:effective_max_turns] if template.turns else []
-                )
+                turns_to_process = template.turns[:effective_max_turns] if template.turns else []
                 audio_turn_index = 0  # Track position in audio sequence
 
                 for turn_idx, turn in enumerate(turns_to_process):
@@ -591,12 +560,8 @@ class ConversationSimulator:
                         )
 
                         # Wait before speaking (natural pause) - let previous response finish
-                        pause_time = max(
-                            turn.delay_before_ms / 1000.0, 2.0
-                        )  # At least 2 seconds
-                        print(
-                            f"    ⏸️  Waiting {pause_time:.1f}s for agent to finish speaking..."
-                        )
+                        pause_time = max(turn.delay_before_ms / 1000.0, 2.0)  # At least 2 seconds
+                        print(f"    ⏸️  Waiting {pause_time:.1f}s for agent to finish speaking...")
                         await asyncio.sleep(pause_time)
 
                         # Start turn timing
@@ -613,10 +578,10 @@ class ConversationSimulator:
                         else:
                             # Fallback to individual file selection
                             speech_audio = self.speech_generator.get_next_audio()
-                            print(f"    🎵 Using fallback audio selection")
+                            print("    🎵 Using fallback audio selection")
 
                         if not speech_audio:
-                            print(f"    ❌ No audio available, skipping turn")
+                            print("    ❌ No audio available, skipping turn")
                             turn_metrics.turn_successful = False
                             turn_metrics.error_message = "No audio available"
                             turn_metrics.turn_complete_time = time.time()
@@ -628,9 +593,7 @@ class ConversationSimulator:
                         turn_metrics.audio_bytes_sent = len(speech_audio)
 
                         # Send audio more quickly to simulate natural speech timing
-                        chunk_size = int(
-                            16000 * 0.1 * 2
-                        )  # Back to 100ms chunks for natural flow
+                        chunk_size = int(16000 * 0.1 * 2)  # Back to 100ms chunks for natural flow
                         audio_chunks_sent = 0
 
                         print(f"    🎤 Streaming cached audio for turn: '{turn.text}'")
@@ -652,24 +615,22 @@ class ConversationSimulator:
                             audio_chunks_sent += 1
 
                             # Natural speech timing
-                            await asyncio.sleep(
-                                0.08
-                            )  # 80ms between chunks - more natural
+                            await asyncio.sleep(0.08)  # 80ms between chunks - more natural
 
                         # Record audio send completion
                         turn_metrics.audio_send_complete_time = time.time()
                         turn_metrics.audio_chunks_sent = audio_chunks_sent
 
                         # Add a short pause after speech (critical for speech recognition finalization)
-                        print(f"    🤫 Adding end-of-utterance silence...")
+                        print("    🤫 Adding end-of-utterance silence...")
 
                         for _ in range(5):  # Send 5 chunks of 100ms silence each
                             silence_msg = {
                                 "kind": "AudioData",
                                 "audioData": {
-                                    "data": base64.b64encode(
-                                        generate_silence_chunk(100)
-                                    ).decode("utf-8"),
+                                    "data": base64.b64encode(generate_silence_chunk(100)).decode(
+                                        "utf-8"
+                                    ),
                                     "silent": False,  # Mark as non-silent to ensure VAD processes it
                                     "timestamp": time.time(),
                                 },
@@ -681,9 +642,7 @@ class ConversationSimulator:
                         print(
                             f"    📤 Sent {audio_chunks_sent} audio chunks ({len(speech_audio)} bytes total)"
                         )
-                        print(
-                            f"    🎵 Audio duration: {len(speech_audio)/(16000*2):.2f}s"
-                        )
+                        print(f"    🎵 Audio duration: {len(speech_audio)/(16000*2):.2f}s")
                         print(
                             f"    ⏱️  Audio send time: {(turn_metrics.audio_send_complete_time - turn_metrics.audio_send_start_time)*1000:.1f}ms"
                         )
@@ -702,12 +661,8 @@ class ConversationSimulator:
 
                         async def stream_silence():
                             """Stream silent audio chunks during response wait to maintain VAD."""
-                            silence_chunk = generate_silence_chunk(
-                                100
-                            )  # 100ms silence chunks
-                            silence_chunk_b64 = base64.b64encode(silence_chunk).decode(
-                                "utf-8"
-                            )
+                            silence_chunk = generate_silence_chunk(100)  # 100ms silence chunks
+                            silence_chunk_b64 = base64.b64encode(silence_chunk).decode("utf-8")
 
                             while silence_streaming_active:
                                 try:
@@ -731,30 +686,23 @@ class ConversationSimulator:
 
                         try:
                             # Listen for the complete agent response with 20-second timeout
-                            timeout_deadline = (
-                                response_start + 20.0
-                            )  # 20 second absolute timeout
-                            audio_silence_timeout = 2.0  # Consider response complete after 2s of no audio chunks
+                            timeout_deadline = response_start + 20.0  # 20 second absolute timeout
+                            audio_silence_timeout = (
+                                2.0  # Consider response complete after 2s of no audio chunks
+                            )
 
-                            while (
-                                time.time() < timeout_deadline and not response_complete
-                            ):
+                            while time.time() < timeout_deadline and not response_complete:
                                 try:
                                     # Dynamic timeout: shorter if we've received audio, longer initially
                                     if last_audio_chunk_time:
                                         # If we've been getting audio, use shorter timeout to detect end
-                                        remaining_silence_time = (
-                                            audio_silence_timeout
-                                            - (time.time() - last_audio_chunk_time)
+                                        remaining_silence_time = audio_silence_timeout - (
+                                            time.time() - last_audio_chunk_time
                                         )
-                                        current_timeout = max(
-                                            0.5, remaining_silence_time
-                                        )
+                                        current_timeout = max(0.5, remaining_silence_time)
                                     else:
                                         # Initially, wait longer for first response
-                                        current_timeout = min(
-                                            3.0, timeout_deadline - time.time()
-                                        )
+                                        current_timeout = min(3.0, timeout_deadline - time.time())
 
                                     if current_timeout <= 0:
                                         # We've waited long enough since last audio chunk
@@ -773,9 +721,7 @@ class ConversationSimulator:
                                     metrics.server_responses.append(response_data)
 
                                     # Record the response for detailed analysis
-                                    turn_metrics.full_responses_received.append(
-                                        response_data
-                                    )
+                                    turn_metrics.full_responses_received.append(response_data)
 
                                     # Process different response types for conversation recording
                                     response_kind = response_data.get(
@@ -786,9 +732,7 @@ class ConversationSimulator:
                                     if response_kind == "AudioData":
                                         # Record first response time for turn metrics
                                         if not first_response_received:
-                                            turn_metrics.first_response_time = (
-                                                time.time()
-                                            )
+                                            turn_metrics.first_response_time = time.time()
                                             first_response_received = True
 
                                         metrics.audio_chunks_received += 1
@@ -797,14 +741,10 @@ class ConversationSimulator:
                                             agent_audio_chunks_this_turn
                                         )
                                         last_audio_chunk_time = time.time()
-                                        turn_metrics.last_audio_chunk_time = (
-                                            last_audio_chunk_time
-                                        )
+                                        turn_metrics.last_audio_chunk_time = last_audio_chunk_time
 
                                         # Extract and store audio data for playback analysis
-                                        audio_payload = response_data.get(
-                                            "audioData", {}
-                                        )
+                                        audio_payload = response_data.get("audioData", {})
                                         if "data" in audio_payload:
                                             try:
                                                 audio_bytes = base64.b64decode(
@@ -814,9 +754,7 @@ class ConversationSimulator:
                                                     audio_bytes
                                                 )
                                             except Exception as e:
-                                                print(
-                                                    f"      ⚠️  Failed to decode audio data: {e}"
-                                                )
+                                                print(f"      ⚠️  Failed to decode audio data: {e}")
 
                                         # Print progress for first few chunks
                                         if agent_audio_chunks_this_turn <= 3:
@@ -856,12 +794,8 @@ class ConversationSimulator:
                                             or ""
                                         )
                                         if text_result:
-                                            turn_metrics.user_speech_recognized = (
-                                                text_result
-                                            )
-                                            print(
-                                                f"      🎯 Speech recognized: '{text_result}'"
-                                            )
+                                            turn_metrics.user_speech_recognized = text_result
+                                            print(f"      🎯 Speech recognized: '{text_result}'")
 
                                     # Capture agent text responses - expand the search
                                     elif (
@@ -887,9 +821,7 @@ class ConversationSimulator:
                                             or ""
                                         )
                                         if text_response:
-                                            turn_metrics.agent_text_responses.append(
-                                                text_response
-                                            )
+                                            turn_metrics.agent_text_responses.append(text_response)
                                             print(
                                                 f"      💬 Agent text: '{text_response[:100]}{'...' if len(text_response) > 100 else ''}'"
                                             )
@@ -924,11 +856,9 @@ class ConversationSimulator:
                                                     )
 
                                         if text_fields:
-                                            print(
-                                                f"      🔍 Text fields found: {text_fields}"
-                                            )
+                                            print(f"      🔍 Text fields found: {text_fields}")
 
-                                except asyncio.TimeoutError:
+                                except TimeoutError:
                                     if (
                                         last_audio_chunk_time
                                         and (time.time() - last_audio_chunk_time)
@@ -946,9 +876,7 @@ class ConversationSimulator:
                             # Finalize turn metrics
                             turn_metrics.turn_complete_time = time.time()
                             response_end = turn_metrics.turn_complete_time
-                            total_response_time_ms = (
-                                response_end - response_start
-                            ) * 1000
+                            total_response_time_ms = (response_end - response_start) * 1000
                             end_to_end_latency_ms = (
                                 response_end - turn_metrics.audio_send_start_time
                             ) * 1000
@@ -976,25 +904,13 @@ class ConversationSimulator:
                             turn_metrics.calculate_metrics()
 
                             # Record timing metrics for backward compatibility
-                            metrics.total_agent_processing_time_ms += (
-                                total_response_time_ms
-                            )
-                            speech_recognition_time = (
-                                turn_metrics.speech_recognition_latency_ms
-                            )
-                            metrics.total_speech_recognition_time_ms += (
-                                speech_recognition_time
-                            )
+                            metrics.total_agent_processing_time_ms += total_response_time_ms
+                            speech_recognition_time = turn_metrics.speech_recognition_latency_ms
+                            metrics.total_speech_recognition_time_ms += speech_recognition_time
 
-                            print(
-                                f"      ⏱️  Turn Response time: {total_response_time_ms:.1f}ms"
-                            )
-                            print(
-                                f"      ⏱️  End-to-end latency: {end_to_end_latency_ms:.1f}ms"
-                            )
-                            print(
-                                f"      ⏱️  Speech recognition: {speech_recognition_time:.1f}ms"
-                            )
+                            print(f"      ⏱️  Turn Response time: {total_response_time_ms:.1f}ms")
+                            print(f"      ⏱️  End-to-end latency: {end_to_end_latency_ms:.1f}ms")
+                            print(f"      ⏱️  Speech recognition: {speech_recognition_time:.1f}ms")
                             print(
                                 f"      ⏱️  Agent processing: {turn_metrics.agent_processing_latency_ms:.1f}ms"
                             )
@@ -1048,7 +964,7 @@ class ConversationSimulator:
                                 1.0
                             )  # Slightly longer pause for more realistic conversation
 
-                print(f"\n✅ Conversation completed successfully")
+                print("\n✅ Conversation completed successfully")
                 metrics.end_time = time.time()
 
         except Exception as e:
@@ -1058,7 +974,7 @@ class ConversationSimulator:
 
         return metrics
 
-    def analyze_metrics(self, metrics: ConversationMetrics) -> Dict[str, Any]:
+    def analyze_metrics(self, metrics: ConversationMetrics) -> dict[str, Any]:
         """Analyze conversation metrics and return insights."""
         duration_s = metrics.end_time - metrics.start_time
 
@@ -1091,9 +1007,7 @@ class ConversationSimulator:
         # Analyze response types
         for response in metrics.server_responses:
             resp_type = response.get("kind", response.get("type", "unknown"))
-            analysis["response_types"][resp_type] = (
-                analysis["response_types"].get(resp_type, 0) + 1
-            )
+            analysis["response_types"][resp_type] = analysis["response_types"].get(resp_type, 0) + 1
 
         return analysis
 
@@ -1107,14 +1021,12 @@ async def main():
     template = ConversationTemplates.get_insurance_inquiry()
 
     # Define callbacks for monitoring
-    def on_turn_complete(turn: ConversationTurn, responses: List[Dict]):
+    def on_turn_complete(turn: ConversationTurn, responses: list[dict]):
         print(f"  📋 Turn completed: '{turn.text}' -> {len(responses)} responses")
 
-    def on_agent_response(user_text: str, responses: List[Dict]):
+    def on_agent_response(user_text: str, responses: list[dict]):
         audio_responses = len([r for r in responses if r.get("kind") == "AudioData"])
-        print(
-            f"  🎤 Agent generated {audio_responses} audio responses to: '{user_text[:30]}...'"
-        )
+        print(f"  🎤 Agent generated {audio_responses} audio responses to: '{user_text[:30]}...'")
 
     # Run simulation with production audio
     metrics = await simulator.simulate_conversation(
@@ -1127,8 +1039,8 @@ async def main():
     # Analyze results
     analysis = simulator.analyze_metrics(metrics)
 
-    print(f"\n📊 CONVERSATION ANALYSIS")
-    print(f"=" * 50)
+    print("\n📊 CONVERSATION ANALYSIS")
+    print("=" * 50)
     print(f"Success: {'✅' if analysis['success'] else '❌'}")
     print(f"Duration: {analysis['duration_s']:.2f}s")
     print(f"Connection: {analysis['connection_time_ms']:.1f}ms")

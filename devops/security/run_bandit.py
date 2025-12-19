@@ -109,18 +109,14 @@ def run_bandit(target: str) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(
-        description="Run Bandit and store reports in ./security"
-    )
+    ap = argparse.ArgumentParser(description="Run Bandit and store reports in ./security")
     ap.add_argument(
         "target",
         nargs="?",
         default=DEFAULT_TARGET,
         help="Folder to scan (default: ./src). Use '.' or --all for repo root.",
     )
-    ap.add_argument(
-        "--all", action="store_true", help="Scan the entire repository ('.')."
-    )
+    ap.add_argument("--all", action="store_true", help="Scan the entire repository ('.').")
     args = ap.parse_args()
     run_bandit("." if args.all else args.target)
 

@@ -7,25 +7,23 @@ detailed per-turn metrics, percentiles, and performance insights.
 Provides concurrency analysis and conversation recording capabilities.
 """
 
+import argparse
 import asyncio
 import json
-import argparse
-import statistics
 import random
-from pathlib import Path
+import statistics
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from pathlib import Path
+from typing import Any
 
-from tests.load.utils.load_test_conversations import ConversationLoadTester, LoadTestConfig
 from tests.load.utils.conversation_simulator import ConversationMetrics
+from tests.load.utils.load_test_conversations import ConversationLoadTester, LoadTestConfig
 
 
 class DetailedStatisticsAnalyzer:
     """Detailed statistics analyzer for conversation load testing with concurrency tracking."""
 
-    def __init__(
-        self, enable_recording: bool = False, recording_sample_rate: float = 0.1
-    ):
+    def __init__(self, enable_recording: bool = False, recording_sample_rate: float = 0.1):
         """
         Initialize analyzer with optional conversation recording.
 
@@ -38,9 +36,7 @@ class DetailedStatisticsAnalyzer:
         self.recording_sample_rate = recording_sample_rate
         self.recorded_conversations = []
 
-    def calculate_comprehensive_statistics(
-        self, values: List[float]
-    ) -> Dict[str, float]:
+    def calculate_comprehensive_statistics(self, values: list[float]) -> dict[str, float]:
         """Calculate comprehensive statistics including all percentiles."""
         if not values:
             return {}
@@ -67,23 +63,17 @@ class DetailedStatisticsAnalyzer:
         }
 
     def analyze_conversation_metrics(
-        self, conversation_metrics: List[ConversationMetrics]
-    ) -> Dict[str, Any]:
+        self, conversation_metrics: list[ConversationMetrics]
+    ) -> dict[str, Any]:
         """Analyze detailed conversation metrics with per-turn breakdown and concurrency analysis."""
 
         print(f"Analyzing {len(conversation_metrics)} conversations...")
 
         # Sample conversations for recording if enabled
         if self.enable_recording:
-            sample_size = max(
-                1, int(len(conversation_metrics) * self.recording_sample_rate)
-            )
-            self.recorded_conversations = random.sample(
-                conversation_metrics, sample_size
-            )
-            print(
-                f"Recording {len(self.recorded_conversations)} sample conversations for analysis"
-            )
+            sample_size = max(1, int(len(conversation_metrics) * self.recording_sample_rate))
+            self.recorded_conversations = random.sample(conversation_metrics, sample_size)
+            print(f"Recording {len(self.recorded_conversations)} sample conversations for analysis")
 
         # Extract all turn metrics
         all_turn_metrics = []
@@ -119,9 +109,7 @@ class DetailedStatisticsAnalyzer:
 
         # Per-turn position analysis
         turn_position_analysis = {}
-        max_turns = (
-            max(t.turn_number for t in all_turn_metrics) if all_turn_metrics else 0
-        )
+        max_turns = max(t.turn_number for t in all_turn_metrics) if all_turn_metrics else 0
 
         for turn_num in range(1, max_turns + 1):
             turn_data = [t for t in successful_turns if t.turn_number == turn_num]
@@ -178,9 +166,7 @@ class DetailedStatisticsAnalyzer:
         for template, convs in conversations_by_template.items():
             template_turns = []
             for conv in convs:
-                template_turns.extend(
-                    [t for t in conv.turn_metrics if t.turn_successful]
-                )
+                template_turns.extend([t for t in conv.turn_metrics if t.turn_successful])
 
             template_analysis[template] = {
                 "conversation_count": len(convs),
@@ -214,14 +200,12 @@ class DetailedStatisticsAnalyzer:
                 "total_turns": len(all_turn_metrics),
                 "successful_turns": len(successful_turns),
                 "failed_turns": len(failed_turns),
-                "overall_turn_success_rate": len(successful_turns)
-                / len(all_turn_metrics)
-                * 100
-                if all_turn_metrics
-                else 0,
-                "avg_conversation_duration_s": statistics.mean(conversation_durations)
-                if conversation_durations
-                else 0,
+                "overall_turn_success_rate": (
+                    len(successful_turns) / len(all_turn_metrics) * 100 if all_turn_metrics else 0
+                ),
+                "avg_conversation_duration_s": (
+                    statistics.mean(conversation_durations) if conversation_durations else 0
+                ),
             },
             "concurrency_analysis": concurrency_analysis,
             "overall_latency_statistics": {
@@ -231,9 +215,7 @@ class DetailedStatisticsAnalyzer:
                 "agent_processing_ms": self.calculate_comprehensive_statistics(
                     agent_processing_latencies
                 ),
-                "end_to_end_ms": self.calculate_comprehensive_statistics(
-                    end_to_end_latencies
-                ),
+                "end_to_end_ms": self.calculate_comprehensive_statistics(end_to_end_latencies),
                 "audio_send_duration_ms": self.calculate_comprehensive_statistics(
                     audio_send_durations
                 ),
@@ -252,24 +234,12 @@ class DetailedStatisticsAnalyzer:
                 "failed_turn_count": len(failed_turns),
                 "failure_rate_by_turn": {
                     f"turn_{turn_num}": {
-                        "failed": len(
-                            [t for t in failed_turns if t.turn_number == turn_num]
-                        ),
-                        "total": len(
-                            [t for t in all_turn_metrics if t.turn_number == turn_num]
-                        ),
-                        "failure_rate": len(
-                            [t for t in failed_turns if t.turn_number == turn_num]
-                        )
+                        "failed": len([t for t in failed_turns if t.turn_number == turn_num]),
+                        "total": len([t for t in all_turn_metrics if t.turn_number == turn_num]),
+                        "failure_rate": len([t for t in failed_turns if t.turn_number == turn_num])
                         / max(
                             1,
-                            len(
-                                [
-                                    t
-                                    for t in all_turn_metrics
-                                    if t.turn_number == turn_num
-                                ]
-                            ),
+                            len([t for t in all_turn_metrics if t.turn_number == turn_num]),
                         )
                         * 100,
                     }
@@ -277,12 +247,12 @@ class DetailedStatisticsAnalyzer:
                 },
                 "common_errors": self._analyze_common_errors(failed_turns),
             },
-            "recorded_conversations": self._prepare_recorded_conversations()
-            if self.enable_recording
-            else [],
+            "recorded_conversations": (
+                self._prepare_recorded_conversations() if self.enable_recording else []
+            ),
         }
 
-    def _analyze_common_errors(self, failed_turns) -> Dict[str, int]:
+    def _analyze_common_errors(self, failed_turns) -> dict[str, int]:
         """Analyze common error patterns in failed turns."""
         error_counts = {}
         for turn in failed_turns:
@@ -293,8 +263,8 @@ class DetailedStatisticsAnalyzer:
         return dict(sorted(error_counts.items(), key=lambda x: x[1], reverse=True))
 
     def _analyze_concurrency_patterns(
-        self, conversation_metrics: List[ConversationMetrics]
-    ) -> Dict[str, Any]:
+        self, conversation_metrics: list[ConversationMetrics]
+    ) -> dict[str, Any]:
         """Analyze concurrency patterns and peak concurrent connections."""
         if not conversation_metrics:
             return {}
@@ -302,12 +272,8 @@ class DetailedStatisticsAnalyzer:
         # Create timeline of conversation events
         events = []
         for conv in conversation_metrics:
-            events.append(
-                {"time": conv.start_time, "type": "start", "conv_id": conv.session_id}
-            )
-            events.append(
-                {"time": conv.end_time, "type": "end", "conv_id": conv.session_id}
-            )
+            events.append({"time": conv.start_time, "type": "start", "conv_id": conv.session_id})
+            events.append({"time": conv.end_time, "type": "end", "conv_id": conv.session_id})
 
         # Sort events by time
         events.sort(key=lambda x: x["time"])
@@ -344,17 +310,16 @@ class DetailedStatisticsAnalyzer:
             "peak_concurrency_time": peak_time,
             "average_concurrent_conversations": avg_concurrent,
             "concurrency_timeline_points": len(concurrency_timeline),
-            "total_test_duration_s": max(
-                [conv.end_time for conv in conversation_metrics]
-            )
-            - min([conv.start_time for conv in conversation_metrics])
-            if conversation_metrics
-            else 0,
+            "total_test_duration_s": (
+                max([conv.end_time for conv in conversation_metrics])
+                - min([conv.start_time for conv in conversation_metrics])
+                if conversation_metrics
+                else 0
+            ),
         }
 
-    def _prepare_recorded_conversations(self) -> List[Dict[str, Any]]:
+    def _prepare_recorded_conversations(self) -> list[dict[str, Any]]:
         """Prepare recorded conversation data for analysis including audio and text."""
-        import base64
         from pathlib import Path
 
         recorded_data = []
@@ -371,9 +336,7 @@ class DetailedStatisticsAnalyzer:
                 "end_time": conv.end_time,
                 "duration_s": conv.end_time - conv.start_time,
                 "total_turns": len(conv.turn_metrics),
-                "successful_turns": len(
-                    [t for t in conv.turn_metrics if t.turn_successful]
-                ),
+                "successful_turns": len([t for t in conv.turn_metrics if t.turn_successful]),
                 "turns": [],
                 "audio_files": [],
             }
@@ -385,7 +348,9 @@ class DetailedStatisticsAnalyzer:
                     for i, audio_data in enumerate(turn.agent_audio_responses):
                         if audio_data:  # Only save non-empty audio
                             # Create filename for this audio chunk
-                            audio_filename = f"{conv.session_id}_turn_{turn.turn_number}_chunk_{i+1}.pcm"
+                            audio_filename = (
+                                f"{conv.session_id}_turn_{turn.turn_number}_chunk_{i+1}.pcm"
+                            )
                             audio_file_path = audio_output_dir / audio_filename
 
                             try:
@@ -461,29 +426,27 @@ class DetailedStatisticsAnalyzer:
 
         return recorded_data
 
-    def print_detailed_statistics(self, analysis: Dict[str, Any]):
+    def print_detailed_statistics(self, analysis: dict[str, Any]):
         """Print comprehensive statistics in a readable format."""
 
-        print(f"\n" + "=" * 80)
-        print(f"DETAILED CONVERSATION STATISTICS ANALYSIS")
-        print(f"=" * 80)
+        print("\n" + "=" * 80)
+        print("DETAILED CONVERSATION STATISTICS ANALYSIS")
+        print("=" * 80)
 
         # Summary
         summary = analysis["summary"]
-        print(f"\nSUMMARY")
+        print("\nSUMMARY")
         print(f"{'Total Conversations:':<25} {summary['total_conversations']}")
         print(f"{'Total Turns:':<25} {summary['total_turns']}")
         print(f"{'Successful Turns:':<25} {summary['successful_turns']}")
         print(f"{'Failed Turns:':<25} {summary['failed_turns']}")
         print(f"{'Turn Success Rate:':<25} {summary['overall_turn_success_rate']:.1f}%")
-        print(
-            f"{'Avg Conversation:':<25} {summary['avg_conversation_duration_s']:.2f}s"
-        )
+        print(f"{'Avg Conversation:':<25} {summary['avg_conversation_duration_s']:.2f}s")
 
         # Concurrency Analysis
         if "concurrency_analysis" in analysis:
             concurrency = analysis["concurrency_analysis"]
-            print(f"\nCONCURRENCY ANALYSIS")
+            print("\nCONCURRENCY ANALYSIS")
             print(
                 f"{'Peak Concurrent:':<25} {concurrency.get('peak_concurrent_conversations', 0)} conversations"
             )
@@ -495,7 +458,7 @@ class DetailedStatisticsAnalyzer:
             )
 
         # Overall latency statistics
-        print(f"\nOVERALL LATENCY STATISTICS")
+        print("\nOVERALL LATENCY STATISTICS")
         latency_stats = analysis["overall_latency_statistics"]
 
         for metric_name, stats in latency_stats.items():
@@ -513,17 +476,15 @@ class DetailedStatisticsAnalyzer:
                 print(f"  StdDev:{stats['stddev']:>8.1f}ms")
 
         # Per-turn position analysis
-        print(f"\nPER-TURN POSITION ANALYSIS")
+        print("\nPER-TURN POSITION ANALYSIS")
         turn_analysis = analysis["per_turn_position_analysis"]
 
         print(
             f"{'Turn':<6} {'Count':<8} {'Success%':<9} {'Recognition P95':<15} {'Processing P95':<15} {'E2E P95':<10}"
         )
-        print(f"-" * 75)
+        print("-" * 75)
 
-        for turn_key in sorted(
-            turn_analysis.keys(), key=lambda x: int(x.split("_")[1])
-        ):
+        for turn_key in sorted(turn_analysis.keys(), key=lambda x: int(x.split("_")[1])):
             turn_data = turn_analysis[turn_key]
             turn_num = turn_key.split("_")[1]
 
@@ -541,7 +502,7 @@ class DetailedStatisticsAnalyzer:
             )
 
         # Template comparison
-        print(f"\nTEMPLATE COMPARISON ANALYSIS")
+        print("\nTEMPLATE COMPARISON ANALYSIS")
         template_analysis = analysis["per_template_analysis"]
 
         for template_name, template_data in template_analysis.items():
@@ -550,9 +511,7 @@ class DetailedStatisticsAnalyzer:
             print(
                 f"  Successful Turns: {template_data['successful_turns']}/{template_data['total_turns']}"
             )
-            print(
-                f"  Avg Duration: {template_data['avg_conversation_duration_s']:.2f}s"
-            )
+            print(f"  Avg Duration: {template_data['avg_conversation_duration_s']:.2f}s")
 
             if template_data["end_to_end_ms"]:
                 e2e = template_data["end_to_end_ms"]
@@ -561,23 +520,21 @@ class DetailedStatisticsAnalyzer:
                 )
 
         # Failure analysis
-        print(f"\nFAILURE ANALYSIS")
+        print("\nFAILURE ANALYSIS")
         failure_analysis = analysis["failure_analysis"]
 
         if failure_analysis["failed_turn_count"] > 0:
             print(f"Total Failed Turns: {failure_analysis['failed_turn_count']}")
 
-            print(f"\nFailure Rate by Turn Position:")
-            for turn_key, failure_data in failure_analysis[
-                "failure_rate_by_turn"
-            ].items():
+            print("\nFailure Rate by Turn Position:")
+            for turn_key, failure_data in failure_analysis["failure_rate_by_turn"].items():
                 if failure_data["total"] > 0:
                     turn_num = turn_key.split("_")[1]
                     print(
                         f"  Turn {turn_num}: {failure_data['failed']}/{failure_data['total']} ({failure_data['failure_rate']:.1f}%)"
                     )
 
-            print(f"\nCommon Error Messages:")
+            print("\nCommon Error Messages:")
             for error, count in list(failure_analysis["common_errors"].items())[:5]:
                 print(f"  {count}x: {error}")
         else:
@@ -585,7 +542,7 @@ class DetailedStatisticsAnalyzer:
 
         # Recorded conversations summary
         if "recorded_conversations" in analysis and analysis["recorded_conversations"]:
-            print(f"\nRECORDED CONVERSATIONS")
+            print("\nRECORDED CONVERSATIONS")
             print(
                 f"Recorded {len(analysis['recorded_conversations'])} sample conversations for detailed analysis"
             )
@@ -612,9 +569,7 @@ class DetailedStatisticsAnalyzer:
                         )
                     if flow["agent_responded"]:
                         for resp in flow["agent_responded"][:1]:  # Show first response
-                            print(
-                                f"    Agent said: '{resp[:60]}{'...' if len(resp) > 60 else ''}'"
-                            )
+                            print(f"    Agent said: '{resp[:60]}{'...' if len(resp) > 60 else ''}'")
                     print(
                         f"    Audio available: {'Yes' if flow['audio_response_available'] else 'No'}"
                     )
@@ -624,9 +579,7 @@ class DetailedStatisticsAnalyzer:
 
             print("Conversation records and audio files saved for manual review")
 
-    def save_detailed_analysis(
-        self, analysis: Dict[str, Any], filename: Optional[str] = None
-    ) -> str:
+    def save_detailed_analysis(self, analysis: dict[str, Any], filename: str | None = None) -> str:
         """Save detailed analysis to JSON file."""
 
         if filename is None:
@@ -664,18 +617,16 @@ async def run_detailed_load_test(
     concurrent_conversations: int = 5,
     enable_recording: bool = True,
     recording_sample_rate: float = 0.2,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Run a load test specifically designed for detailed statistics collection."""
 
-    print(f"Running Detailed Statistics Load Test")
+    print("Running Detailed Statistics Load Test")
     print(f"Turns per conversation: {conversation_turns}")
     print(f"Total conversations: {total_conversations}")
     print(f"Concurrent conversations: {concurrent_conversations}")
     print(f"Target URL: {url}")
     if enable_recording:
-        print(
-            f"Recording {recording_sample_rate*100:.0f}% of conversations for analysis"
-        )
+        print(f"Recording {recording_sample_rate*100:.0f}% of conversations for analysis")
     print("=" * 70)
 
     # Configure for detailed analysis - use fixed turn count for consistent statistics
@@ -703,15 +654,15 @@ async def run_detailed_load_test(
     analyzer = DetailedStatisticsAnalyzer(
         enable_recording=enable_recording, recording_sample_rate=recording_sample_rate
     )
-    detailed_analysis = analyzer.analyze_conversation_metrics(
-        results.conversation_metrics
-    )
+    detailed_analysis = analyzer.analyze_conversation_metrics(results.conversation_metrics)
 
     # Print detailed results
     analyzer.print_detailed_statistics(detailed_analysis)
 
     # Save results
-    filename = f"detailed_stats_{conversation_turns}turns_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    filename = (
+        f"detailed_stats_{conversation_turns}turns_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    )
     analysis_file = analyzer.save_detailed_analysis(detailed_analysis, filename)
 
     return {
@@ -725,9 +676,7 @@ async def run_detailed_load_test(
 async def main():
     """Main entry point for detailed statistics load testing."""
 
-    parser = argparse.ArgumentParser(
-        description="Detailed Turn-by-Turn Statistics Load Testing"
-    )
+    parser = argparse.ArgumentParser(description="Detailed Turn-by-Turn Statistics Load Testing")
     parser.add_argument(
         "--url",
         default="ws://localhost:8010/api/v1/media/stream",
@@ -776,22 +725,18 @@ async def main():
         recording_sample_rate=args.record_rate,
     )
 
-    print(f"\nDetailed statistics analysis completed!")
+    print("\nDetailed statistics analysis completed!")
     print(f"Analysis saved to: {results['analysis_file']}")
 
     # Show peak concurrency information
     concurrency = results["detailed_analysis"].get("concurrency_analysis", {})
     if concurrency:
-        print(f"\nKey Performance Indicators:")
+        print("\nKey Performance Indicators:")
         print(
             f"Peak Concurrent Conversations: {concurrency.get('peak_concurrent_conversations', 0)}"
         )
-        print(
-            f"Average Concurrent: {concurrency.get('average_concurrent_conversations', 0):.1f}"
-        )
-        print(
-            f"Total Test Duration: {concurrency.get('total_test_duration_s', 0):.1f}s"
-        )
+        print(f"Average Concurrent: {concurrency.get('average_concurrent_conversations', 0):.1f}")
+        print(f"Total Test Duration: {concurrency.get('total_test_duration_s', 0):.1f}s")
 
 
 if __name__ == "__main__":

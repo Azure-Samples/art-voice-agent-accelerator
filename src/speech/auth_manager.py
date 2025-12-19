@@ -4,17 +4,16 @@ Provides a shared token manager that wraps the repo's credential helper and
 applies Azure AD tokens to Speech SDK configurations with proper refresh and
 thread-safety. This centralises AAD token handling for both TTS and STT flows.
 """
+
 from __future__ import annotations
 
 import os
 import threading
 import time
 from functools import lru_cache
-from typing import Optional
 
 import azure.cognitiveservices.speech as speechsdk
 from azure.core.credentials import AccessToken, TokenCredential
-
 from utils.azure_auth import get_credential
 from utils.ml_logging import get_logger
 
@@ -31,17 +30,21 @@ class SpeechTokenManager:
 
     def __init__(self, credential: TokenCredential, resource_id: str) -> None:
         if not resource_id:
-            raise ValueError(
-                "AZURE_SPEECH_RESOURCE_ID is required for Azure AD authentication"
-            )
+            raise ValueError("AZURE_SPEECH_RESOURCE_ID is required for Azure AD authentication")
         self._credential = credential
         self._resource_id = resource_id
         self._token_lock = threading.Lock()
-        self._cached_token: Optional[AccessToken] = None
+        self._cached_token: AccessToken | None = None
+        self._warmed: bool = False
 
     @property
     def resource_id(self) -> str:
         return self._resource_id
+
+    @property
+    def is_warmed(self) -> bool:
+        """Return True if token has been pre-fetched."""
+        return self._warmed
 
     def _needs_refresh(self) -> bool:
         if not self._cached_token:
@@ -61,6 +64,24 @@ class SpeechTokenManager:
                 raise RuntimeError("Failed to obtain Azure Speech token")
             return token
 
+    def warm_token(self) -> bool:
+        """
+        Pre-fetch token during startup to avoid first-call latency.
+
+        Eliminates 100-300ms token acquisition latency on first Speech API call.
+
+        Returns:
+            True if token was successfully pre-fetched, False otherwise.
+        """
+        try:
+            self.get_token(force_refresh=True)
+            self._warmed = True
+            logger.debug("Speech token pre-fetched successfully")
+            return True
+        except Exception as e:
+            logger.warning("Speech token pre-fetch failed: %s", e)
+            return False
+
     def apply_to_config(
         self, speech_config: speechsdk.SpeechConfig, *, force_refresh: bool = False
     ) -> None:
@@ -68,22 +89,16 @@ class SpeechTokenManager:
         token = self.get_token(force_refresh=force_refresh)
         speech_config.authorization_token = token.token
         try:
-            speech_config.set_property_by_name(
-                "SpeechServiceConnection_AuthorizationType", "aad"
-            )
+            speech_config.set_property_by_name("SpeechServiceConnection_AuthorizationType", "aad")
         except Exception as exc:
-            logger.debug(
-                "AuthorizationType property not supported by SDK: %s", exc
-            )
+            logger.debug("AuthorizationType property not supported by SDK: %s", exc)
 
         try:
             speech_config.set_property_by_name(
                 "SpeechServiceConnection_AzureResourceId", self._resource_id
             )
         except Exception as exc:
-            logger.warning(
-                "Failed to set SpeechServiceConnection_AzureResourceId: %s", exc
-            )
+            logger.warning("Failed to set SpeechServiceConnection_AzureResourceId: %s", exc)
 
 
 @lru_cache(maxsize=1)
@@ -92,7 +107,5 @@ def get_speech_token_manager() -> SpeechTokenManager:
     credential = get_credential()
     resource_id = os.getenv("AZURE_SPEECH_RESOURCE_ID")
     if not resource_id:
-        raise ValueError(
-            "AZURE_SPEECH_RESOURCE_ID must be set when using Azure AD authentication"
-        )
+        raise ValueError("AZURE_SPEECH_RESOURCE_ID must be set when using Azure AD authentication")
     return SpeechTokenManager(credential=credential, resource_id=resource_id)

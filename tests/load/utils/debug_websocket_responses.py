@@ -7,12 +7,12 @@ to help us understand the actual format of WebSocket responses from the backend.
 """
 
 import asyncio
+import base64
 import json
 import time
-import base64
-import websockets
 from pathlib import Path
-from typing import Dict, Any, List
+
+import websockets
 
 
 class WebSocketResponseDebugger:
@@ -84,39 +84,33 @@ class WebSocketResponseDebugger:
                     responses.append(response_data)
 
                     # Track response types
-                    response_kind = response_data.get(
-                        "kind", response_data.get("type", "unknown")
-                    )
-                    response_types[response_kind] = (
-                        response_types.get(response_kind, 0) + 1
-                    )
+                    response_kind = response_data.get("kind", response_data.get("type", "unknown"))
+                    response_types[response_kind] = response_types.get(response_kind, 0) + 1
 
                     # Log the first few responses of each type
                     if response_types[response_kind] <= 3:
                         print(f"\n📨 Response Type: {response_kind}")
-                        print(
-                            f"   Full Response: {json.dumps(response_data, indent=2)}"
-                        )
+                        print(f"   Full Response: {json.dumps(response_data, indent=2)}")
                     elif response_types[response_kind] == 4:
                         print(
                             f"📨 {response_kind}: (continuing to receive, stopping detailed logs...)"
                         )
 
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     print("⏰ Timeout waiting for more responses")
                     break
                 except Exception as e:
                     print(f"❌ Error receiving response: {e}")
                     break
 
-            print(f"\n📊 RESPONSE SUMMARY")
+            print("\n📊 RESPONSE SUMMARY")
             print(f"Total responses received: {len(responses)}")
-            print(f"Response type breakdown:")
+            print("Response type breakdown:")
             for resp_type, count in response_types.items():
                 print(f"  {resp_type}: {count}")
 
             # Analyze specific response patterns
-            print(f"\n🔍 RESPONSE ANALYSIS")
+            print("\n🔍 RESPONSE ANALYSIS")
 
             # Look for speech recognition patterns
             speech_responses = [
@@ -163,10 +157,8 @@ async def main():
 
     try:
         responses, response_types = await debugger.debug_single_turn()
-        print(f"\n✅ Debug session completed successfully")
-        print(
-            f"📄 Use this information to update conversation_simulator.py response parsing"
-        )
+        print("\n✅ Debug session completed successfully")
+        print("📄 Use this information to update conversation_simulator.py response parsing")
 
     except Exception as e:
         print(f"❌ Debug session failed: {e}")

@@ -13,7 +13,6 @@ Examples:
 import os
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional
 
 from utils.ml_logging import get_logger
 
@@ -61,7 +60,7 @@ class TTLPolicy:
     max: int
     min: int = 60
 
-    def validate(self, ttl: Optional[int] = None) -> int:
+    def validate(self, ttl: int | None = None) -> int:
         """Return valid TTL within policy bounds"""
         if ttl is None:
             return self.default
@@ -80,7 +79,7 @@ class RedisKeyManager:
         DataType.CACHE: TTLPolicy(300, 1800),  # 5-30 mins
     }
 
-    def __init__(self, environment: Optional[str] = None, app_prefix: str = "rtvoice"):
+    def __init__(self, environment: str | None = None, app_prefix: str = "rtvoice"):
         self.environment = environment or os.getenv("ENVIRONMENT", "dev")
         self.app_prefix = app_prefix
 
@@ -93,7 +92,7 @@ class RedisKeyManager:
         self,
         data_type: DataType,
         identifier: str,
-        component: Optional[Component] = None,
+        component: Component | None = None,
     ) -> str:
         """Build hierarchical Redis key"""
         # Ensure identifier is always a string
@@ -103,7 +102,7 @@ class RedisKeyManager:
             parts.append(component.value)
         return ":".join(parts)
 
-    def get_ttl(self, data_type: DataType, ttl: Optional[int] = None) -> int:
+    def get_ttl(self, data_type: DataType, ttl: int | None = None) -> int:
         """Get validated TTL for data type"""
         policy = self.TTL_POLICIES.get(data_type, TTLPolicy(900, 3600))
         return policy.validate(ttl)
@@ -136,7 +135,7 @@ class RedisKeyManager:
         return self.build_key(data_type, identifier)
 
     # Migration helpers
-    def migrate_legacy_key(self, legacy_key: str) -> Optional[str]:
+    def migrate_legacy_key(self, legacy_key: str) -> str | None:
         """Migrate legacy keys to new format"""
         try:
             if legacy_key.startswith("session:"):
@@ -170,7 +169,7 @@ class RedisKeyManager:
 _default_manager = None
 
 
-def get_key_manager(environment: Optional[str] = None) -> RedisKeyManager:
+def get_key_manager(environment: str | None = None) -> RedisKeyManager:
     """Get Redis Key Manager instance (singleton for default environment)"""
     global _default_manager
 

@@ -230,7 +230,7 @@ The authentication flow leverages **DTMF media analysis** for telephony calls (P
 ### Security Implementation
 
 - **Media Stream Security**: DTMF analysis on encrypted ACS streams
-- **Session Timeout**: Configurable TTL (default: 1 hour)  
+- **Session Timeout**: Configurable TTL (default: 24 hour)  
 - **Rate Limiting**: DTMF processing abuse prevention
 - **Key Cryptography**: Secure Redis key formatting
 - **Cross-Cloud Validation**: Secure AWS Connect ↔ ACS handoff

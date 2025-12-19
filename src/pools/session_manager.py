@@ -8,10 +8,9 @@ to prevent race conditions during concurrent session add/remove operations.
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any
 
 from fastapi import WebSocket
-
 from utils.ml_logging import get_logger
 
 logger = get_logger(__name__)
@@ -32,7 +31,7 @@ class SessionContext:
     memory_manager: Any
     websocket: WebSocket
     start_time: datetime = field(default_factory=datetime.now)
-    _metadata: Dict[str, Any] = field(default_factory=dict)
+    _metadata: dict[str, Any] = field(default_factory=dict)
     _metadata_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
 
     async def get_metadata(self, key: str, default: Any = None) -> Any:
@@ -45,7 +44,7 @@ class SessionContext:
         async with self._metadata_lock:
             self._metadata[key] = value
 
-    async def clear_metadata(self, key: Optional[str] = None) -> None:
+    async def clear_metadata(self, key: str | None = None) -> None:
         """Clear either a specific metadata key or the entire metadata dictionary."""
         async with self._metadata_lock:
             if key is None:
@@ -53,7 +52,7 @@ class SessionContext:
             else:
                 self._metadata.pop(key, None)
 
-    async def metadata_snapshot(self) -> Dict[str, Any]:
+    async def metadata_snapshot(self) -> dict[str, Any]:
         """Return a shallow copy of the current metadata for diagnostics."""
         async with self._metadata_lock:
             return dict(self._metadata)
@@ -89,7 +88,7 @@ class ThreadSafeSessionManager:
     """
 
     def __init__(self):
-        self._sessions: Dict[str, SessionContext] = {}
+        self._sessions: dict[str, SessionContext] = {}
         self._lock = asyncio.Lock()
 
     async def add_session(
@@ -98,7 +97,7 @@ class ThreadSafeSessionManager:
         memory_manager: Any,
         websocket: WebSocket,
         *,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """Add a conversation session thread-safely with optional metadata."""
         context = getattr(websocket.state, "session_context", None)
@@ -144,7 +143,7 @@ class ThreadSafeSessionManager:
                 return True
             return False
 
-    async def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+    async def get_session(self, session_id: str) -> dict[str, Any] | None:
         """Get session data thread-safely. Deprecated: prefer get_session_context."""
         context = await self.get_session_context(session_id)
         if not context:
@@ -156,7 +155,7 @@ class ThreadSafeSessionManager:
             "metadata": await context.metadata_snapshot(),
         }
 
-    async def get_session_context(self, session_id: str) -> Optional[SessionContext]:
+    async def get_session_context(self, session_id: str) -> SessionContext | None:
         """Return the SessionContext for an active session."""
         async with self._lock:
             return self._sessions.get(session_id)
@@ -166,12 +165,12 @@ class ThreadSafeSessionManager:
         async with self._lock:
             return len(self._sessions)
 
-    async def get_all_sessions_snapshot(self) -> Dict[str, Dict[str, Any]]:
+    async def get_all_sessions_snapshot(self) -> dict[str, dict[str, Any]]:
         """Get a thread-safe snapshot of all sessions."""
         async with self._lock:
             sessions = list(self._sessions.items())
 
-        snapshot: Dict[str, Dict[str, Any]] = {}
+        snapshot: dict[str, dict[str, Any]] = {}
         for session_id, context in sessions:
             snapshot[session_id] = {
                 "memory_manager": context.memory_manager,
@@ -223,7 +222,7 @@ class ThreadSafeSessionManager:
     async def clear_metadata(
         self,
         session_id: str,
-        key: Optional[str] = None,
+        key: str | None = None,
     ) -> bool:
         """Clear metadata values for a session."""
         context = await self.get_session_context(session_id)

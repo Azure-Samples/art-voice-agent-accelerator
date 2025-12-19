@@ -10,11 +10,12 @@ Phone/Browser → ACS/WebSocket → FastAPI Backend → Multi-Agent AI → Azure
 
 ## **Structure**
 
+# TODO: Update with latest folder structure
 ```
-apps/rtagent/
+apps/artagent/
 ├── backend/           # FastAPI + multi-agent framework
 │   ├── main.py       # 🚀 Entry point
-│   ├── src/agents/   # 🤖 ARTAgent, LVAgent, FoundryAgents
+│   ├── agents/   # 🤖 ARTAgent, LVAgent, FoundryAgents
 │   ├── api/          # 🌐 REST/WebSocket endpoints
 │   └── config/       # ⚙️ Voice, features, limits
 ├── frontend/         # React + WebSocket client
@@ -68,6 +69,7 @@ apps/rtagent/
 - **Azure Services**: Speech SDK, OpenAI, Redis, CosmosDB integration
 
 ### **Key Endpoints**
+#TODO: Update with latest endpoint schema
 | **Endpoint** | **Purpose** | **Type** |
 |--------------|-------------|----------|
 | `WS /api/v1/realtime/conversation` | Frontend voice interaction | WebSocket |
@@ -80,20 +82,20 @@ apps/rtagent/
 
 ### **Prerequisites**
 - Python 3.11+, Node.js 18+
+- [uv](https://docs.astral.sh/uv/) (recommended) or pip
 - Azure services provisioned (see Infrastructure section)
 
 ### **Backend Setup**
 ```bash
-cd apps/rtagent/backend
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+# From project root (recommended)
+uv sync
 cp .env.sample .env  # Configure Azure credentials
-python main.py  # Starts on localhost:8010
+uv run uvicorn apps.artagent.backend.main:app --host 0.0.0.0 --port 8010 --reload
 ```
 
 ### **Frontend Setup**  
 ```bash
-cd apps/rtagent/frontend
+cd apps/artagent/frontend
 npm install && npm run dev  # Starts on localhost:5173
 ```
 
@@ -132,8 +134,7 @@ VITE_BACKEND_URL=ws://localhost:8010
 
 ### **Local Development with ACS**
 ```bash
-cd scripts/
-./start_devtunnel_host.sh  # Exposes backend for ACS webhooks
+make start_tunnel # Exposes backend for ACS webhooks via Devtunnel
 ```
 Update `BASE_URL` environment variable with tunnel URL.
 

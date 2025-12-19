@@ -1,0 +1,145 @@
+site_name: Azure Real-Time (ART) Voice Agent Documentation
+site_description: Azure-powered real-time voice agent with text-to-speech and speech recognition capabilities
+# site_url: https://github.com/Azure-Samples/art-voice-agent-accelerator/
+repo_url: https://github.com/Azure-Samples/art-voice-agent-accelerator/
+repo_name: Azure-Samples/art-voice-agent-accelerator
+docs_dir: .
+site_dir: ../site
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+  palette:
+    - scheme: default
+      primary: blue
+      accent: light blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: blue
+      accent: light blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+  - mermaid2
+  - neoteroi.mkdocsoad
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google
+            show_source: true
+            show_signature_annotations: true
+            signature_crossrefs: true
+            separate_signature: true
+            merge_init_into_class: true
+            docstring_section_style: table
+            members_order: source
+            group_by_category: true
+            show_category_heading: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Overview: getting-started/README.md
+    - Prerequisites: getting-started/prerequisites.md
+    - Quick Start: getting-started/quickstart.md
+    - Local Development: getting-started/local-development.md
+    - Demo Guide: getting-started/demo-guide.md
+  - Architecture:
+    - Overview: architecture/README.md
+    - Agents:
+      - Agent Framework: architecture/agents/README.md
+      - Handoff Strategies: architecture/agents/handoffs.md
+    - Orchestration:
+      - Overview: architecture/orchestration/README.md
+      - Scenario-Based Orchestration: architecture/orchestration/industry-scenarios.md
+      - Scenario System Flow: architecture/orchestration/scenario-system-flow.md
+      - Cascade Orchestrator: architecture/orchestration/cascade.md
+      - VoiceLive Orchestrator: architecture/orchestration/voicelive.md
+      - Handoff Service: architecture/orchestration/handoff-service.md
+    - Speech:
+      - Streaming Modes: architecture/speech/README.md
+      - Recognition: architecture/speech/recognition.md
+      - Synthesis: architecture/speech/synthesis.md
+    - Data:
+      - Session Management: architecture/data/README.md
+      - Data Flows: architecture/data/flows.md
+    - ACS:
+      - Call Flows: architecture/acs/README.md
+      - Telephony Integration: architecture/acs/integrations.md
+    - Telemetry: architecture/telemetry.md
+    - Archive: architecture/archive/README.md
+  - Deployment:
+    - Deployment Guide: deployment/README.md
+    - Phone Number Setup: deployment/phone-number-setup.md
+    - Production: deployment/production.md
+    - CI/CD: deployment/cicd.md
+  - Security:
+    - Authentication: security/authentication.md
+  - Operations:
+    - Monitoring: operations/monitoring.md
+    - Troubleshooting: operations/troubleshooting.md
+    - Testing: operations/testing.md
+    - Load Testing: operations/load-testing.md
+  - API Reference:
+    - Overview: api/README.md
+    - API Reference: api/api-reference.md
+  - Industry Solutions:
+    - Overview: industry/README.md
+    - Banking: industry/banking.md
+    - Insurance: industry/insurance.md
+    - Healthcare: industry/healthcare.md
+  - Samples & Labs:
+    - Overview: samples/README.md
+  - Guides:
+    - Repository Structure: guides/repository-structure.md
+    - Utilities & Services: guides/utilities.md
+extra_css:
+  - assets/oad-styles.css
+markdown_extensions:
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+        # make exceptions to highlighting of code:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:mermaid2.fence_mermaid
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - pymdownx.critic
+  - pymdownx.caret
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.tilde
+  - attr_list
+  - md_in_html
+  - tables
+  - footnotes
+  - toc:
+      permalink: true
+      baselevel: 2

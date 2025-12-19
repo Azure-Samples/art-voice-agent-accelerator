@@ -16,13 +16,16 @@ import asyncio
 import json
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, Optional, Set, Literal
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from fastapi import WebSocket
 from fastapi.websockets import WebSocketState
-
 from utils.ml_logging import get_logger
+
+if TYPE_CHECKING:
+    from src.redis.manager import AzureRedisManager
 
 logger = get_logger(__name__)
 
@@ -35,11 +38,11 @@ class ConnectionMeta:
 
     connection_id: str
     client_type: ClientType = "other"
-    session_id: Optional[str] = None
-    call_id: Optional[str] = None
-    user_id: Optional[str] = None
-    topics: Set[str] = field(default_factory=set)
-    handler: Optional[Any] = None
+    session_id: str | None = None
+    call_id: str | None = None
+    user_id: str | None = None
+    topics: set[str] = field(default_factory=set)
+    handler: Any | None = None
     created_at: float = field(default_factory=time.time)
 
 
@@ -50,7 +53,7 @@ class _Connection:
         self,
         websocket: WebSocket,
         meta: ConnectionMeta,
-        on_send_failure: Optional[Callable[[Exception], Awaitable[None]]] = None,
+        on_send_failure: Callable[[Exception], Awaitable[None]] | None = None,
     ):
         self.ws = websocket
         self.meta = meta
@@ -60,7 +63,7 @@ class _Connection:
         self._closed = False
         self._on_send_failure = on_send_failure
 
-    async def send_json(self, payload: Dict[str, Any]) -> None:
+    async def send_json(self, payload: dict[str, Any]) -> None:
         """Queue JSON message for sending with thread safety."""
         if self._closed:
             return
@@ -87,7 +90,7 @@ class _Connection:
             while not self._closed:
                 try:
                     message = await asyncio.wait_for(self._queue.get(), timeout=1.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     continue  # Check _closed flag periodically
 
                 if message is None:  # Shutdown signal
@@ -107,7 +110,9 @@ class _Connection:
                         )
                         self._closed = True
                         if self._on_send_failure:
-                            asyncio.create_task(self._on_send_failure(RuntimeError("websocket_disconnected")))
+                            asyncio.create_task(
+                                self._on_send_failure(RuntimeError("websocket_disconnected"))
+                            )
                         return
                 except Exception as e:
                     level = logger.error
@@ -125,13 +130,9 @@ class _Connection:
                     return
 
         except asyncio.CancelledError:
-            logger.debug(
-                f"Sender loop cancelled", extra={"conn_id": self.meta.connection_id}
-            )
+            logger.debug("Sender loop cancelled", extra={"conn_id": self.meta.connection_id})
         except Exception as e:
-            logger.error(
-                f"Sender loop error: {e}", extra={"conn_id": self.meta.connection_id}
-            )
+            logger.error(f"Sender loop error: {e}", extra={"conn_id": self.meta.connection_id})
 
     async def close(self) -> None:
         """Close connection and cleanup resources with proper thread safety."""
@@ -164,7 +165,7 @@ class _Connection:
                 if not self._sender_task.done():
                     try:
                         await asyncio.wait_for(self._sender_task, timeout=2.0)
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         logger.debug(
                             "Sender task timeout on close; proceeding to force close",
                             extra={"conn_id": self.meta.connection_id},
@@ -214,12 +215,12 @@ class ThreadSafeConnectionManager:
         enable_connection_limits: bool = True,
     ):
         self._lock = asyncio.Lock()
-        self._conns: Dict[str, _Connection] = {}
+        self._conns: dict[str, _Connection] = {}
 
         # Simple indexes for efficient broadcast
-        self._by_session: Dict[str, Set[str]] = {}
-        self._by_call: Dict[str, Set[str]] = {}
-        self._by_topic: Dict[str, Set[str]] = {}
+        self._by_session: dict[str, set[str]] = {}
+        self._by_call: dict[str, set[str]] = {}
+        self._by_topic: dict[str, set[str]] = {}
 
         # Connection limit management
         self.max_connections = max_connections
@@ -228,17 +229,68 @@ class ThreadSafeConnectionManager:
         self._connection_queue: asyncio.Queue = asyncio.Queue(maxsize=queue_size)
         self._rejected_count = 0
 
+        # Distributed session delivery
+        self._node_id = str(uuid.uuid4())
+        self._redis_mgr: AzureRedisManager | None = None
+        self._distributed_channel_prefix = "session"
+        self._redis_listener_task: asyncio.Task | None = None
+        self._redis_listener_stop: asyncio.Event | None = None
+        self._redis_pubsub = None
+
         # Out-of-band per-call context (for pre-initialized resources before WS exists)
         # Example: { call_id: { "lva_agent": <agent>, "pool": <pool>, "session_id": str, ... } }
-        self._call_context: Dict[str, Any] = {}
+        self._call_context: dict[str, Any] = {}
 
-        logger.info(
+        logger.debug(
             f"ConnectionManager initialized: max_connections={max_connections}, "
             f"queue_size={queue_size}, limits_enabled={enable_connection_limits}"
         )
 
+    @property
+    def distributed_enabled(self) -> bool:
+        """Return True when Redis-backed fan-out is configured."""
+        return self._redis_mgr is not None
+
+    async def enable_distributed_session_bus(
+        self,
+        redis_manager: Optional["AzureRedisManager"],
+        *,
+        channel_prefix: str = "session",
+    ) -> None:
+        """
+        Enable cross-replica session routing using Redis pub/sub.
+
+        Creates a process-unique node identifier, subscribes to the shared
+        channel pattern, and relays any envelopes destined for local sessions.
+        """
+        if not redis_manager:
+            logger.warning("Distributed session bus requested without Redis manager")
+            return
+
+        if self._redis_listener_task:
+            logger.debug("Distributed session bus already enabled; skipping")
+            return
+
+        self._redis_mgr = redis_manager
+        prefix = channel_prefix.strip() or "session"
+        self._distributed_channel_prefix = prefix.rstrip(":")
+        self._redis_listener_stop = asyncio.Event()
+        self._redis_listener_task = asyncio.create_task(self._redis_listener_loop())
+        logger.debug(
+            "Distributed session bus enabled",
+            extra={
+                "node_id": self._node_id,
+                "channel_prefix": self._distributed_channel_prefix,
+            },
+        )
+
+    def _session_channel_name(self, session_id: str) -> str:
+        return f"{self._distributed_channel_prefix}:{session_id}"
+
     async def stop(self) -> None:
         """Stop manager and close all connections."""
+        await self._shutdown_distributed_bus()
+
         async with self._lock:
             close_tasks = [conn.close() for conn in self._conns.values()]
         await asyncio.gather(*close_tasks, return_exceptions=True)
@@ -249,16 +301,37 @@ class ThreadSafeConnectionManager:
             self._by_call.clear()
             self._by_topic.clear()
 
+    async def _shutdown_distributed_bus(self) -> None:
+        """Stop the Redis listener task and release subscriptions."""
+        if self._redis_listener_task:
+            if self._redis_listener_stop:
+                self._redis_listener_stop.set()
+            try:
+                await self._redis_listener_task
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug("Distributed bus listener shut down with error: %s", exc)
+            self._redis_listener_task = None
+
+        if self._redis_pubsub:
+            try:
+                self._redis_pubsub.close()
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug("Error closing Redis pubsub: %s", exc)
+            self._redis_pubsub = None
+
+        self._redis_mgr = None
+        self._redis_listener_stop = None
+
     async def register(
         self,
         websocket: WebSocket,
         *,
         client_type: ClientType = "other",
-        session_id: Optional[str] = None,
-        call_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        topics: Optional[Set[str]] = None,
-        handler: Optional[Any] = None,
+        session_id: str | None = None,
+        call_id: str | None = None,
+        user_id: str | None = None,
+        topics: set[str] | None = None,
+        handler: Any | None = None,
         accept_already_done: bool = True,
     ) -> str:
         """
@@ -337,6 +410,7 @@ class ThreadSafeConnectionManager:
             topics=topics or set(),
             handler=handler,
         )
+
         async def _on_send_failure(exc: Exception, conn_id: str = conn_id):
             await self._handle_connection_send_failure(conn_id, exc)
 
@@ -362,9 +436,7 @@ class ThreadSafeConnectionManager:
         )
         return conn_id
 
-    async def _handle_connection_send_failure(
-        self, connection_id: str, exc: Exception
-    ) -> None:
+    async def _handle_connection_send_failure(self, connection_id: str, exc: Exception) -> None:
         """Automatically unregister connections whose sender loop failed."""
         msg = str(exc) if exc else ""
         if msg:
@@ -398,14 +470,10 @@ class ThreadSafeConnectionManager:
             # Cleanup handler if present
             if conn.meta.handler:
                 try:
-                    if hasattr(conn.meta.handler, "stop") and callable(
-                        conn.meta.handler.stop
-                    ):
+                    if hasattr(conn.meta.handler, "stop") and callable(conn.meta.handler.stop):
                         await conn.meta.handler.stop()
                 except Exception as e:
-                    logger.error(
-                        f"Error stopping handler: {e}", extra={"conn_id": connection_id}
-                    )
+                    logger.error(f"Error stopping handler: {e}", extra={"conn_id": connection_id})
 
             # Remove from indexes
             if conn.meta.session_id:
@@ -429,17 +497,17 @@ class ThreadSafeConnectionManager:
         if target_id:
             await self.unregister(target_id)
 
-    async def stats(self) -> Dict[str, Any]:
+    async def stats(self) -> dict[str, Any]:
         """Get connection statistics with Phase 1 metrics."""
         async with self._lock:
             return {
                 "connections": len(self._conns),
                 "max_connections": self.max_connections if self.enable_limits else None,
-                "utilization_percent": round(
-                    len(self._conns) / self.max_connections * 100, 1
-                )
-                if self.enable_limits
-                else None,
+                "utilization_percent": (
+                    round(len(self._conns) / self.max_connections * 100, 1)
+                    if self.enable_limits
+                    else None
+                ),
                 "rejected_count": self._rejected_count,
                 "queue_size": self._connection_queue.qsize(),
                 "queue_capacity": self.queue_size,
@@ -449,9 +517,7 @@ class ThreadSafeConnectionManager:
                 "by_topic": {k: len(v) for k, v in self._by_topic.items()},
             }
 
-    async def send_to_connection(
-        self, connection_id: str, payload: Dict[str, Any]
-    ) -> bool:
+    async def send_to_connection(self, connection_id: str, payload: dict[str, Any]) -> bool:
         """
         Send message to specific connection.
 
@@ -465,7 +531,7 @@ class ThreadSafeConnectionManager:
             return True
         return False
 
-    async def broadcast_session(self, session_id: str, payload: Dict[str, Any]) -> int:
+    async def broadcast_session(self, session_id: str, payload: dict[str, Any]) -> int:
         """
         Broadcast to all connections in a session with session-safe data filtering.
 
@@ -515,9 +581,55 @@ class ThreadSafeConnectionManager:
 
         return sent
 
-    async def _safe_send_to_connection(
-        self, conn: "_Connection", payload: Dict[str, Any]
-    ) -> None:
+    async def publish_session_envelope(
+        self,
+        session_id: str | None,
+        payload: dict[str, Any],
+        *,
+        event_label: str = "unspecified",
+    ) -> bool:
+        """Publish an envelope to the distributed session channel."""
+        if not session_id or not self._redis_mgr:
+            return False
+
+        try:
+            serialized = json.dumps(
+                {
+                    "session_id": session_id,
+                    "envelope": payload,
+                    "origin": self._node_id,
+                    "event": event_label,
+                    "published_at": time.time(),
+                }
+            )
+        except (TypeError, ValueError) as exc:
+            logger.error(
+                "Failed to serialize envelope for distributed publish: %s",
+                exc,
+                extra={"session_id": session_id, "event": event_label},
+            )
+            return False
+
+        channel = self._session_channel_name(session_id)
+        try:
+            await self._redis_mgr.publish_channel_async(channel, serialized)
+            logger.debug(
+                "Distributed envelope published",
+                extra={"session_id": session_id, "event": event_label},
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "Distributed envelope publish failed",
+                extra={
+                    "session_id": session_id,
+                    "event": event_label,
+                    "error": str(exc),
+                },
+            )
+            return False
+
+    async def _safe_send_to_connection(self, conn: "_Connection", payload: dict[str, Any]) -> None:
         """Safely send to a connection with proper error handling."""
         try:
             await conn.send_json(payload)
@@ -534,7 +646,166 @@ class ThreadSafeConnectionManager:
             except Exception as e:
                 logger.error(f"Error removing failed connection {conn_id}: {e}")
 
-    async def broadcast_call(self, call_id: str, payload: Dict[str, Any]) -> int:
+    def _create_pubsub(self, pattern: str) -> Any:
+        """Create a new pubsub subscription with current credentials.
+
+        Args:
+            pattern: The channel pattern to subscribe to.
+
+        Returns:
+            A new pubsub object subscribed to the pattern.
+        """
+        pubsub = self._redis_mgr.redis_client.pubsub(ignore_subscribe_messages=True)
+        pubsub.psubscribe(pattern)
+        return pubsub
+
+    async def _redis_listener_loop(self) -> None:
+        """Listen for distributed session envelopes and deliver locally."""
+        if not self._redis_mgr:
+            return
+
+        pattern = f"{self._distributed_channel_prefix}:*"
+        try:
+            pubsub = self._create_pubsub(pattern)
+            self._redis_pubsub = pubsub
+            logger.info(
+                "Subscribed to distributed session pattern",
+                extra={"pattern": pattern, "node_id": self._node_id},
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Distributed session listener unavailable (non-critical): %s",
+                exc,
+            )
+            self._redis_mgr = None
+            return
+
+        loop = asyncio.get_running_loop()
+        try:
+            while self._redis_listener_stop and not self._redis_listener_stop.is_set():
+                try:
+                    message = await loop.run_in_executor(
+                        None,
+                        lambda: pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    exc_str = str(exc).lower()
+                    # Avoid tight loop when pubsub has already been closed or shut down
+                    if "closed file" in exc_str:
+                        logger.info(
+                            "Distributed listener detected closed pubsub; exiting",
+                            extra={"node_id": self._node_id},
+                        )
+                        break
+
+                    # Detect credential expiration and reconnect with fresh credentials
+                    if "invalid username-password" in exc_str or "auth" in exc_str:
+                        logger.warning(
+                            "Redis pubsub auth error detected, refreshing credentials",
+                            extra={"node_id": self._node_id, "error": str(exc)},
+                        )
+                        try:
+                            # Close old pubsub
+                            try:
+                                pubsub.close()
+                            except Exception:
+                                pass
+                            # Force credential refresh in Redis manager
+                            self._redis_mgr._create_client()
+                            # Re-establish pubsub with fresh credentials
+                            pubsub = self._create_pubsub(pattern)
+                            self._redis_pubsub = pubsub
+                            logger.info(
+                                "Redis pubsub reconnected with refreshed credentials",
+                                extra={"pattern": pattern, "node_id": self._node_id},
+                            )
+                        except Exception as reconnect_exc:
+                            logger.error(
+                                "Failed to reconnect Redis pubsub: %s",
+                                reconnect_exc,
+                                extra={"node_id": self._node_id},
+                            )
+                            await asyncio.sleep(5.0)
+                        continue
+
+                    logger.error(
+                        "Distributed session listener error: %s",
+                        exc,
+                        extra={"node_id": self._node_id},
+                    )
+                    await asyncio.sleep(1.0)
+                    continue
+
+                if self._redis_listener_stop and self._redis_listener_stop.is_set():
+                    break
+                if not message:
+                    continue
+
+                msg_type = message.get("type")
+                if msg_type not in {"message", "pmessage"}:
+                    continue
+
+                raw_data = message.get("data")
+                if not raw_data:
+                    continue
+
+                try:
+                    payload = json.loads(raw_data)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Distributed session payload decode failed",
+                        extra={"data": raw_data},
+                    )
+                    continue
+
+                if payload.get("origin") == self._node_id:
+                    continue
+
+                session_id = payload.get("session_id")
+                envelope = payload.get("envelope")
+                if not session_id or not isinstance(envelope, dict):
+                    continue
+
+                await self._deliver_session_envelope_local(session_id, envelope)
+        finally:
+            try:
+                pubsub.close()
+            except Exception:
+                pass
+            logger.info(
+                "Distributed session listener stopped",
+                extra={"node_id": self._node_id},
+            )
+
+    async def _deliver_session_envelope_local(
+        self, session_id: str, payload: dict[str, Any]
+    ) -> None:
+        """Deliver distributed envelope to local connections for a session."""
+        async with self._lock:
+            conn_ids = list(self._by_session.get(session_id, set()))
+            targets = [self._conns.get(conn_id) for conn_id in conn_ids]
+            targets = [conn for conn in targets if conn]
+
+        if not targets:
+            return
+
+        results = await asyncio.gather(
+            *(conn.send_json(payload) for conn in targets),
+            return_exceptions=True,
+        )
+
+        for idx, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(
+                    "Distributed local delivery failed",
+                    extra={
+                        "conn_id": targets[idx].meta.connection_id,
+                        "session_id": session_id,
+                        "error": str(result),
+                    },
+                )
+
+    async def broadcast_call(self, call_id: str, payload: dict[str, Any]) -> int:
         """Broadcast to all connections in a call."""
         async with self._lock:
             conn_ids = list(self._by_call.get(call_id, set()))
@@ -546,12 +817,10 @@ class ThreadSafeConnectionManager:
                 await conn.send_json(payload)
                 sent += 1
             except Exception as e:
-                logger.error(
-                    f"Broadcast failed: {e}", extra={"conn_id": conn.meta.connection_id}
-                )
+                logger.error(f"Broadcast failed: {e}", extra={"conn_id": conn.meta.connection_id})
         return sent
 
-    async def broadcast_topic(self, topic: str, payload: Dict[str, Any]) -> int:
+    async def broadcast_topic(self, topic: str, payload: dict[str, Any]) -> int:
         """Broadcast to all connections subscribed to a topic."""
         async with self._lock:
             conn_ids = list(self._by_topic.get(topic, set()))
@@ -563,12 +832,10 @@ class ThreadSafeConnectionManager:
                 await conn.send_json(payload)
                 sent += 1
             except Exception as e:
-                logger.error(
-                    f"Broadcast failed: {e}", extra={"conn_id": conn.meta.connection_id}
-                )
+                logger.error(f"Broadcast failed: {e}", extra={"conn_id": conn.meta.connection_id})
         return sent
 
-    async def broadcast_all(self, payload: Dict[str, Any]) -> int:
+    async def broadcast_all(self, payload: dict[str, Any]) -> int:
         """Broadcast to all connections."""
         async with self._lock:
             targets = list(self._conns.values())
@@ -579,34 +846,32 @@ class ThreadSafeConnectionManager:
                 await conn.send_json(payload)
                 sent += 1
             except Exception as e:
-                logger.error(
-                    f"Broadcast failed: {e}", extra={"conn_id": conn.meta.connection_id}
-                )
+                logger.error(f"Broadcast failed: {e}", extra={"conn_id": conn.meta.connection_id})
         return sent
 
-    async def get_connection_meta(self, connection_id: str) -> Optional[ConnectionMeta]:
+    async def get_connection_meta(self, connection_id: str) -> ConnectionMeta | None:
         """Get connection metadata safely."""
         async with self._lock:
             conn = self._conns.get(connection_id)
             return conn.meta if conn else None
 
     # ---------------------- Call Context (Out-of-band) ---------------------- #
-    async def set_call_context(self, call_id: str, context: Dict[str, Any]) -> None:
+    async def set_call_context(self, call_id: str, context: dict[str, Any]) -> None:
         """Associate arbitrary context with a call_id (thread-safe)."""
         async with self._lock:
             self._call_context[call_id] = context
 
-    async def get_call_context(self, call_id: str) -> Optional[Dict[str, Any]]:
+    async def get_call_context(self, call_id: str) -> dict[str, Any] | None:
         """Get (without removing) context for a call_id (thread-safe)."""
         async with self._lock:
             return self._call_context.get(call_id)
 
-    async def pop_call_context(self, call_id: str) -> Optional[Dict[str, Any]]:
+    async def pop_call_context(self, call_id: str) -> dict[str, Any] | None:
         """Atomically retrieve and remove context for a call_id (thread-safe)."""
         async with self._lock:
             return self._call_context.pop(call_id, None)
 
-    async def get_connection_by_call_id(self, call_id: str) -> Optional[str]:
+    async def get_connection_by_call_id(self, call_id: str) -> str | None:
         """Get connection_id by call_id safely."""
         async with self._lock:
             conn_ids = self._by_call.get(call_id, set())
@@ -614,7 +879,7 @@ class ThreadSafeConnectionManager:
 
     async def get_session_data_safe(
         self, session_id: str, requesting_connection_id: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Get session data safely - only if the requesting connection belongs to that session.
 
@@ -626,13 +891,13 @@ class ThreadSafeConnectionManager:
             requesting_conn = self._conns.get(requesting_connection_id)
             if not requesting_conn or requesting_conn.meta.session_id != session_id:
                 logger.warning(
-                    f"Unauthorized session data access attempt",
+                    "Unauthorized session data access attempt",
                     extra={
                         "requesting_conn_id": requesting_connection_id,
                         "requested_session_id": session_id,
-                        "actual_session_id": requesting_conn.meta.session_id
-                        if requesting_conn
-                        else None,
+                        "actual_session_id": (
+                            requesting_conn.meta.session_id if requesting_conn else None
+                        ),
                     },
                 )
                 return None
@@ -660,7 +925,7 @@ class ThreadSafeConnectionManager:
                 "restricted_to_session": True,
             }
 
-    async def get_connection_by_websocket(self, websocket: WebSocket) -> Optional[str]:
+    async def get_connection_by_websocket(self, websocket: WebSocket) -> str | None:
         """Get connection_id by WebSocket instance safely."""
         async with self._lock:
             for conn_id, conn in self._conns.items():
@@ -668,7 +933,7 @@ class ThreadSafeConnectionManager:
                     return conn_id
         return None
 
-    async def validate_and_cleanup_stale_connections(self) -> Dict[str, int]:
+    async def validate_and_cleanup_stale_connections(self) -> dict[str, int]:
         """
         Validate connection states and cleanup stale connections.
 
@@ -704,14 +969,10 @@ class ThreadSafeConnectionManager:
         # Cleanup handler if present
         if conn.meta.handler:
             try:
-                if hasattr(conn.meta.handler, "stop") and callable(
-                    conn.meta.handler.stop
-                ):
+                if hasattr(conn.meta.handler, "stop") and callable(conn.meta.handler.stop):
                     await conn.meta.handler.stop()
             except Exception as e:
-                logger.error(
-                    f"Error stopping handler: {e}", extra={"conn_id": connection_id}
-                )
+                logger.error(f"Error stopping handler: {e}", extra={"conn_id": connection_id})
 
         # Remove from indexes
         if conn.meta.session_id:
@@ -733,7 +994,7 @@ class ThreadSafeConnectionManager:
                 return True
         return False
 
-    async def get_handler_by_call_id(self, call_id: str) -> Optional[Any]:
+    async def get_handler_by_call_id(self, call_id: str) -> Any | None:
         """Get handler for a call_id - direct access."""
         async with self._lock:
             conn_ids = self._by_call.get(call_id, set())
@@ -743,14 +1004,14 @@ class ThreadSafeConnectionManager:
                     return conn.meta.handler
         return None
 
-    async def get_handler_by_connection_id(self, connection_id: str) -> Optional[Any]:
+    async def get_handler_by_connection_id(self, connection_id: str) -> Any | None:
         """Get handler for a connection_id - direct access."""
         async with self._lock:
             conn = self._conns.get(connection_id)
             return conn.meta.handler if conn else None
 
     # Enhanced Session-Specific Broadcasting for Frontend Data Isolation
-    async def get_session_data(self, session_id: str) -> Dict[str, Any]:
+    async def get_session_data(self, session_id: str) -> dict[str, Any]:
         """
         Get all data for a specific session - thread-safe for frontend consumption.
 
@@ -773,8 +1034,7 @@ class ThreadSafeConnectionManager:
                             "created_at": conn.meta.created_at,
                             "connected": (
                                 conn.ws.client_state == WebSocketState.CONNECTED
-                                and conn.ws.application_state
-                                == WebSocketState.CONNECTED
+                                and conn.ws.application_state == WebSocketState.CONNECTED
                             ),
                         }
                     )
@@ -787,8 +1047,8 @@ class ThreadSafeConnectionManager:
             }
 
     async def broadcast_session_with_metadata(
-        self, session_id: str, payload: Dict[str, Any], include_metadata: bool = True
-    ) -> Dict[str, Any]:
+        self, session_id: str, payload: dict[str, Any], include_metadata: bool = True
+    ) -> dict[str, Any]:
         """
         Enhanced session broadcast with metadata for frontend isolation.
 

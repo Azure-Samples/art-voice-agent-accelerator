@@ -154,9 +154,7 @@ class RealtimeApp(App[None]):
                         acc_items[event.item_id] = text + event.delta
 
                     if event.delta.strip().endswith((".", "!", "?")):
-                        self.conversation_log.append(
-                            ("Assistant", acc_items[event.item_id])
-                        )
+                        self.conversation_log.append(("Assistant", acc_items[event.item_id]))
                         self._refresh_log(bottom_pane)
                     continue
 
@@ -171,9 +169,7 @@ class RealtimeApp(App[None]):
     def _refresh_log(self, pane: RichLog) -> None:
         pane.clear()
         for who, msg in self.conversation_log:
-            color = (
-                "cyan" if who == "User" else "green" if who == "Assistant" else "yellow"
-            )
+            color = "cyan" if who == "User" else "green" if who == "Assistant" else "yellow"
             pane.write(f"[b {color}]{who}:[/b {color}] {msg}")
 
     async def _get_connection(self) -> AsyncRealtimeConnection:
@@ -186,9 +182,7 @@ class RealtimeApp(App[None]):
 
         sent_audio = False
         read_size = int(SAMPLE_RATE * 0.02)
-        stream = sd.InputStream(
-            channels=CHANNELS, samplerate=SAMPLE_RATE, dtype="int16"
-        )
+        stream = sd.InputStream(channels=CHANNELS, samplerate=SAMPLE_RATE, dtype="int16")
         stream.start()
 
         status_indicator = self.query_one(AudioStatusIndicator)

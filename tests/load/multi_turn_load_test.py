@@ -7,10 +7,10 @@ Enhanced load testing framework with configurable conversation turn depth
 for realistic multi-turn conversation simulation.
 """
 
-import asyncio
 import argparse
-from pathlib import Path
+import asyncio
 from datetime import datetime
+from pathlib import Path
 
 from tests.load.utils.load_test_conversations import ConversationLoadTester, LoadTestConfig
 
@@ -120,7 +120,9 @@ class MultiTurnLoadTest:
         print(f"📊 ESCALATING-TURN RESULTS (up to {max_turns} turns):")
         tester.print_summary(results)
 
-        filename = f"escalating_turn_{max_turns}_test_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        filename = (
+            f"escalating_turn_{max_turns}_test_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        )
         results_file = tester.save_results(results, filename)
 
         return {
@@ -134,8 +136,8 @@ class MultiTurnLoadTest:
     def compare_turn_complexity_results(self, test_results: list) -> dict:
         """Compare results across different turn complexity levels."""
 
-        print(f"\n📈 TURN COMPLEXITY COMPARISON")
-        print(f"=" * 70)
+        print("\n📈 TURN COMPLEXITY COMPARISON")
+        print("=" * 70)
 
         comparison = {"test_count": len(test_results), "tests": {}, "turn_analysis": {}}
 
@@ -149,15 +151,11 @@ class MultiTurnLoadTest:
                 "success_rate": summary.get("success_rate_percent", 0),
                 "max_turns": config.max_conversation_turns,
                 "min_turns": config.min_conversation_turns,
-                "avg_connection_ms": summary.get("connection_times_ms", {}).get(
+                "avg_connection_ms": summary.get("connection_times_ms", {}).get("avg", 0),
+                "avg_agent_response_ms": summary.get("agent_response_times_ms", {}).get("avg", 0),
+                "avg_conversation_duration_s": summary.get("conversation_durations_s", {}).get(
                     "avg", 0
                 ),
-                "avg_agent_response_ms": summary.get("agent_response_times_ms", {}).get(
-                    "avg", 0
-                ),
-                "avg_conversation_duration_s": summary.get(
-                    "conversation_durations_s", {}
-                ).get("avg", 0),
                 "conversations_completed": summary.get("conversations_completed", 0),
                 "error_count": summary.get("error_count", 0),
             }
@@ -166,7 +164,7 @@ class MultiTurnLoadTest:
         print(
             f"{'Test Type':<20} {'Max Turns':<10} {'Success%':<8} {'Avg Duration(s)':<15} {'Avg Response(ms)':<15} {'Errors':<7}"
         )
-        print(f"-" * 85)
+        print("-" * 85)
 
         for test_type, metrics in comparison["tests"].items():
             print(
@@ -190,27 +188,21 @@ class MultiTurnLoadTest:
         if len(turn_counts) > 1:
             comparison["turn_analysis"] = {
                 "turn_range": f"{min(turn_counts)} - {max(turn_counts)} turns",
-                "success_rate_trend": "stable"
-                if max(success_rates) - min(success_rates) < 15
-                else "degrading",
-                "duration_scalability": "linear"
-                if durations and max(durations) / min(durations) < 3.0
-                else "exponential",
-                "complexity_tolerance": "good"
-                if min(success_rates) > 80
-                else "concerning",
+                "success_rate_trend": (
+                    "stable" if max(success_rates) - min(success_rates) < 15 else "degrading"
+                ),
+                "duration_scalability": (
+                    "linear"
+                    if durations and max(durations) / min(durations) < 3.0
+                    else "exponential"
+                ),
+                "complexity_tolerance": "good" if min(success_rates) > 80 else "concerning",
             }
 
-        print(f"\n🔍 TURN COMPLEXITY ANALYSIS:")
-        for analysis_name, analysis_value in comparison.get(
-            "turn_analysis", {}
-        ).items():
-            status_emoji = (
-                "✅" if analysis_value in ["stable", "linear", "good"] else "⚠️"
-            )
-            print(
-                f"   {status_emoji} {analysis_name.replace('_', ' ').title()}: {analysis_value}"
-            )
+        print("\n🔍 TURN COMPLEXITY ANALYSIS:")
+        for analysis_name, analysis_value in comparison.get("turn_analysis", {}).items():
+            status_emoji = "✅" if analysis_value in ["stable", "linear", "good"] else "⚠️"
+            print(f"   {status_emoji} {analysis_name.replace('_', ' ').title()}: {analysis_value}")
 
         return comparison
 
@@ -220,7 +212,7 @@ class MultiTurnLoadTest:
         if max_turns_list is None:
             max_turns_list = [1, 3, 5, 8, 10]
 
-        print(f"🚀 Starting turn complexity testing suite")
+        print("🚀 Starting turn complexity testing suite")
         print(f"🔄 Turn counts to test: {max_turns_list}")
         print(f"🎯 Target URL: {self.base_url}")
         print("=" * 70)
@@ -231,7 +223,7 @@ class MultiTurnLoadTest:
         try:
             single_result = await self.run_single_turn_test()
             results.append(single_result)
-            print(f"✅ Single-turn test completed")
+            print("✅ Single-turn test completed")
             await asyncio.sleep(10)  # Brief pause
         except Exception as e:
             print(f"❌ Single-turn test failed: {e}")
@@ -260,7 +252,7 @@ class MultiTurnLoadTest:
         if len(results) > 1:
             comparison = self.compare_turn_complexity_results(results)
 
-        print(f"\n🎉 Turn complexity testing suite completed!")
+        print("\n🎉 Turn complexity testing suite completed!")
         print(f"📊 Tests completed: {len(results)}/{len(max_turns_list)}")
 
         return results
@@ -318,9 +310,7 @@ async def main():
         "timestamp": datetime.now().isoformat(),
         "url_tested": args.url,
         "test_type": args.test_type,
-        "max_turns_tested": max(args.turn_counts)
-        if args.test_type == "suite"
-        else args.max_turns,
+        "max_turns_tested": max(args.turn_counts) if args.test_type == "suite" else args.max_turns,
         "results": [
             {
                 "test_type": r["test_type"],
@@ -333,8 +323,7 @@ async def main():
     }
 
     summary_file = (
-        results_dir
-        / f"multi_turn_test_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        results_dir / f"multi_turn_test_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     )
     with open(summary_file, "w") as f:
         import json

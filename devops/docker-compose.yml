@@ -1,0 +1,27 @@
+version: '3.8'
+services:
+  frontend:
+    platform: linux/amd64
+    build:
+      context: ./apps/artagent/frontend
+      # context: ./usecases/browser_RTMedAgent/frontend
+      dockerfile: Dockerfile
+      
+    env_file:
+      - ./apps/artagent/frontend/.env
+    ports:
+      - "8080:8080"
+    
+
+  # Be sure to run the devtunnel if developing locally
+  # and to update the root .env file with the tunnel URL
+  backend:
+    platform: linux/amd64
+    build:
+      context: ./
+      dockerfile: ./apps/artagent/backend/Dockerfile
+      # dockerfile: ./usecases/browser_RTMedAgent/backend/Dockerfile
+    env_file:
+      - ./.env
+    ports:
+      - "8010:8010"

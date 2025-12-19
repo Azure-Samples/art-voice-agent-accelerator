@@ -107,15 +107,9 @@ def main():
     subparsers = parser.add_subparsers(dest="action", help="Action to perform")
 
     # Purchase subcommand
-    purchase_parser = subparsers.add_parser(
-        "purchase", help="Purchase a new phone number"
-    )
-    purchase_parser.add_argument(
-        "--country-code", default="US", help="Country code (default: US)"
-    )
-    purchase_parser.add_argument(
-        "--area-code", default="833", help="Area code (default: 833)"
-    )
+    purchase_parser = subparsers.add_parser("purchase", help="Purchase a new phone number")
+    purchase_parser.add_argument("--country-code", default="US", help="Country code (default: US)")
+    purchase_parser.add_argument("--area-code", default="833", help="Area code (default: 833)")
     purchase_parser.add_argument(
         "--phone-number-type",
         choices=["TOLL_FREE", "GEOGRAPHIC"],
@@ -124,12 +118,8 @@ def main():
     )
 
     # Release subcommand
-    release_parser = subparsers.add_parser(
-        "release", help="Release an existing phone number"
-    )
-    release_parser.add_argument(
-        "phone_number", help="Phone number to release (e.g., +18001234567)"
-    )
+    release_parser = subparsers.add_parser("release", help="Release an existing phone number")
+    release_parser.add_argument("phone_number", help="Phone number to release (e.g., +18001234567)")
 
     args = parser.parse_args()
 

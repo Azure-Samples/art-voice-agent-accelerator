@@ -1,11 +1,10 @@
-import json
 import os
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import redis.asyncio as redis
 from utils.ml_logging import get_logger
 
-from .key_manager import Component, DataType, RedisKeyManager
+from .key_manager import RedisKeyManager
 
 
 class AsyncAzureRedisManager:
@@ -26,15 +25,15 @@ class AsyncAzureRedisManager:
 
     def __init__(
         self,
-        host: Optional[str] = None,
-        access_key: Optional[str] = None,
+        host: str | None = None,
+        access_key: str | None = None,
         port: int = None,
         ssl: bool = True,
-        credential: Optional[object] = None,  # For DefaultAzureCredential
-        user_name: Optional[str] = None,
-        scope: Optional[str] = None,
+        credential: object | None = None,  # For DefaultAzureCredential
+        user_name: str | None = None,
+        scope: str | None = None,
         default_ttl: int = 900,  # Default TTL: 15 minutes (900 seconds)
-        environment: Optional[str] = None,  # Environment for key manager
+        environment: str | None = None,  # Environment for key manager
     ):
         self.logger = get_logger(__name__)
         self.default_ttl = default_ttl  # Store default TTL
@@ -61,16 +60,12 @@ class AsyncAzureRedisManager:
                 ssl=self.ssl,
                 decode_responses=True,
             )
-            self.logger.info(
-                "Azure Redis async connection initialized with access key."
-            )
+            self.logger.info("Azure Redis async connection initialized with access key.")
         else:
             from utils.azure_auth import get_credential
 
             cred = credential or get_credential()
-            scope = scope or os.getenv(
-                "REDIS_SCOPE", "https://redis.azure.com/.default"
-            )
+            scope = scope or os.getenv("REDIS_SCOPE", "https://redis.azure.com/.default")
             user_name = user_name or os.getenv("REDIS_USER_NAME", "user")
             token = cred.get_token(scope)
 
@@ -90,9 +85,7 @@ class AsyncAzureRedisManager:
         """Check Redis connectivity."""
         return await self.redis_client.ping()
 
-    async def set_value(
-        self, key: str, value: str, ttl_seconds: Optional[int] = None
-    ) -> bool:
+    async def set_value(self, key: str, value: str, ttl_seconds: int | None = None) -> bool:
         """
         Set a string value in Redis with optional TTL.
         Uses default_ttl if ttl_seconds not specified and default_ttl > 0.
@@ -105,13 +98,13 @@ class AsyncAzureRedisManager:
         else:
             return await self.redis_client.set(key, value)
 
-    async def get_value(self, key: str) -> Optional[str]:
+    async def get_value(self, key: str) -> str | None:
         """Get a string value from Redis."""
         value = await self.redis_client.get(key)
         return value if value else None
 
     async def store_session_data(
-        self, session_id: str, data: Dict[str, Any], ttl_seconds: Optional[int] = None
+        self, session_id: str, data: dict[str, Any], ttl_seconds: int | None = None
     ) -> bool:
         """
         Store session data using a Redis hash.
@@ -128,7 +121,7 @@ class AsyncAzureRedisManager:
 
         return result
 
-    async def get_session_data(self, session_id: str) -> Dict[str, str]:
+    async def get_session_data(self, session_id: str) -> dict[str, str]:
         """Retrieve all session data for a given session ID."""
         data = await self.redis_client.hgetall(session_id)
         return {k: v for k, v in data.items()}
@@ -160,7 +153,7 @@ class AsyncAzureRedisManager:
         """Delete a session from Redis."""
         return await self.redis_client.delete(session_id)
 
-    async def list_connected_clients(self) -> List[Dict[str, str]]:
+    async def list_connected_clients(self) -> list[dict[str, str]]:
         """List currently connected clients."""
         return await self.redis_client.client_list()
 
@@ -173,7 +166,7 @@ class AsyncAzureRedisManager:
         """
         return await self.redis_client.ttl(key)
 
-    async def set_ttl(self, key: str, ttl_seconds: Optional[int] = None) -> bool:
+    async def set_ttl(self, key: str, ttl_seconds: int | None = None) -> bool:
         """
         Set TTL for an existing key.
 

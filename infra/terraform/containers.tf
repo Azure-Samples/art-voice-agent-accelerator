@@ -60,6 +60,19 @@ resource "azurerm_container_app_environment" "main" {
 # CONTAINER APPS
 # ============================================================================
 
+# Normalize memory format to match Azure API response (e.g., "4Gi" -> "4.0Gi")
+# This prevents frivolous Terraform updates due to format differences
+locals {
+  # Ensure memory format includes decimal (Azure returns "4.0Gi", not "4Gi")
+  normalized_backend_memory = replace(
+    var.container_memory_gb,
+    "/^([0-9]+)(Gi)$/",
+    "$1.0$2"
+  )
+  # Frontend uses fixed 1Gi
+  normalized_frontend_memory = "1.0Gi"
+}
+
 # Frontend Container App
 resource "azurerm_container_app" "frontend" {
   name                         = "${var.name}-frontend-${local.resource_token}"
@@ -69,9 +82,9 @@ resource "azurerm_container_app" "frontend" {
 
   // Image is managed outside of terraform (i.e azd deploy)
   // EasyAuth configs are managed outside of terraform
+  // Note: env vars are now managed via Azure App Configuration (apps read at runtime)
   lifecycle {
     ignore_changes = [
-      template[0].container[0].env,
       template[0].container[0].image,
       ingress[0].cors,
       ingress[0].client_certificate_mode,
@@ -106,7 +119,24 @@ resource "azurerm_container_app" "frontend" {
       name   = "main"
       image  = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
       cpu    = 0.5
-      memory = "1.0Gi"
+      memory = local.normalized_frontend_memory
+
+      # Azure App Configuration (PRIMARY CONFIG SOURCE)
+      env {
+        name  = "AZURE_APPCONFIG_ENDPOINT"
+        value = module.appconfig.endpoint
+      }
+
+      env {
+        name  = "AZURE_APPCONFIG_LABEL"
+        value = var.environment_name
+      }
+
+      # Managed Identity for authentication
+      env {
+        name  = "AZURE_CLIENT_ID"
+        value = azurerm_user_assigned_identity.frontend.client_id
+      }
 
       env {
         name  = "APPLICATIONINSIGHTS_CONNECTION_STRING"
@@ -142,12 +172,6 @@ resource "azurerm_container_app" "backend" {
     identity = azurerm_user_assigned_identity.backend.id
   }
 
-  secret {
-    name                = "acs-connection-string"
-    identity            = azurerm_user_assigned_identity.backend.id
-    key_vault_secret_id = azurerm_key_vault_secret.acs_connection_string.versionless_id
-  }
-
   ingress {
     external_enabled = true
     target_port      = 8000
@@ -165,339 +189,49 @@ resource "azurerm_container_app" "backend" {
       name   = "main"
       image  = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
       cpu    = var.container_cpu_cores
-      memory = var.container_memory_gb
+      memory = local.normalized_backend_memory
 
-      # Pool Configuration for Maximum Performance
-      env {
-        name  = "AOAI_POOL_ENABLED"
-        value = "true"
-      }
+      # ======================================================================
+      # BOOTSTRAP ENVIRONMENT VARIABLES
+      # ======================================================================
+      # Only essential vars for app startup. All other configuration
+      # (including secrets via Key Vault references) is fetched from
+      # Azure App Configuration at runtime.
+      # ======================================================================
 
+      # Azure App Configuration (PRIMARY CONFIG SOURCE)
       env {
-        name  = "AOAI_POOL_SIZE"
-        value = tostring(var.aoai_pool_size)
-      }
-
-      env {
-        name  = "POOL_SIZE_TTS"
-        value = tostring(var.tts_pool_size)
+        name  = "AZURE_APPCONFIG_ENDPOINT"
+        value = module.appconfig.endpoint
       }
 
       env {
-        name  = "POOL_SIZE_STT"
-        value = tostring(var.stt_pool_size)
+        name  = "AZURE_APPCONFIG_LABEL"
+        value = var.environment_name
       }
 
-      env {
-        name  = "TTS_POOL_PREWARMING_ENABLED"
-        value = "true"
-      }
-
-      env {
-        name  = "STT_POOL_PREWARMING_ENABLED"
-        value = "true"
-      }
-
-      # Performance Optimization Settings
-      env {
-        name  = "POOL_PREWARMING_BATCH_SIZE"
-        value = "10"
-      }
-
-      env {
-        name  = "CLIENT_MAX_AGE_SECONDS"
-        value = "3600"
-      }
-
-      env {
-        name  = "CLEANUP_INTERVAL_SECONDS"
-        value = "180"
-      }
-
-      # Azure Communication Services Configuration
-      env {
-        name  = "BASE_URL"
-        value = var.backend_api_public_url != null ? var.backend_api_public_url : "https://<REPLACE_ME>"
-      }
-
-      env {
-        name  = "ACS_AUDIENCE"
-        value = azapi_resource.acs.output.properties.immutableResourceId
-      }
-
-      dynamic "env" {
-        for_each = var.disable_local_auth ? [1] : []
-        content {
-          name  = "ACS_ENDPOINT"
-          value = "https://${azapi_resource.acs.output.properties.hostName}"
-        }
-      }
-
-      env {
-        name        = "ACS_CONNECTION_STRING"
-        secret_name = "acs-connection-string"
-      }
-
-      env {
-        name  = "ACS_STREAMING_MODE"
-        value = "media"
-      }
-
-      env {
-        name  = "ACS_STREAMING_TRANSPORT"
-        value = "websocket"
-      }
-
-      env {
-        name  = "ACS_MEDIA_STREAMING_LOCALE"
-        value = "en-US"
-      }
-
-      env {
-        name  = "ACS_MEDIA_STREAMING_FORMAT"
-        value = "Pcm16Khz16BitMono"
-      }
-
-      env {
-        name  = "ACS_CONNECTION_POOL_SIZE"
-        value = "100"
-      }
-
-      env {
-        name = "ACS_SOURCE_PHONE_NUMBER"
-        value = (
-          var.acs_source_phone_number != null && var.acs_source_phone_number != ""
-          ? var.acs_source_phone_number
-          : "TODO: Acquire an ACS phone number. See https://learn.microsoft.com/en-us/azure/communication-services/quickstarts/telephony/get-phone-number?tabs=windows&pivots=platform-azp-new"
-        )
-      }
-
-      env {
-        name  = "PORT"
-        value = "8000"
-      }
-
-      # Azure Client ID for managed identity
+      # Managed Identity for authentication to Azure services
       env {
         name  = "AZURE_CLIENT_ID"
         value = azurerm_user_assigned_identity.backend.client_id
       }
 
-      # Application Insights
+      # Application port
+      env {
+        name  = "PORT"
+        value = "8000"
+      }
+
+      # Application Insights (needed early for telemetry)
       env {
         name  = "APPLICATIONINSIGHTS_CONNECTION_STRING"
         value = azurerm_application_insights.main.connection_string
       }
 
-      env {
-        name  = "DISABLE_CLOUD_TELEMETRY"
-        value = "false"
-      }
-
-      # Redis Configuration
-      env {
-        name  = "REDIS_HOST"
-        value = data.azapi_resource.redis_enterprise_fetched.output.properties.hostName
-      }
-
-      env {
-        name  = "REDIS_PORT"
-        value = tostring(var.redis_port)
-      }
-
-      # Azure Speech Services
-      env {
-        name  = "AZURE_SPEECH_ENDPOINT"
-        value = module.ai_foundry.endpoint
-        # value = "https://${azurerm_cognitive_account.speech.custom_subdomain_name}.cognitiveservices.azure.com/"
-      }
-
-      env {
-        name  = "AZURE_SPEECH_DOMAIN_ENDPOINT"
-        value = module.ai_foundry.endpoint
-        # value = "https://${azurerm_cognitive_account.speech.custom_subdomain_name}.cognitiveservices.azure.com/"
-      }
-
-      env {
-        name  = "AZURE_SPEECH_RESOURCE_ID"
-        value = module.ai_foundry.account_id
-        # value = azurerm_cognitive_account.speech.id
-      }
-
-      env {
-        name  = "AZURE_SPEECH_REGION"
-        value = module.ai_foundry.location
-      }
-
-      dynamic "env" {
-        for_each = var.disable_local_auth ? [] : [1]
-        content {
-          name        = "AZURE_SPEECH_KEY"
-          secret_name = "speech-key"
-        }
-      }
-
-      env {
-        name  = "TTS_ENABLE_LOCAL_PLAYBACK"
-        value = "false"
-      }
-
-      # Azure Cosmos DB
-      env {
-        name  = "AZURE_COSMOS_DATABASE_NAME"
-        value = var.mongo_database_name
-      }
-
-      env {
-        name  = "AZURE_COSMOS_COLLECTION_NAME"
-        value = var.mongo_collection_name
-      }
-
-      env {
-        name = "AZURE_COSMOS_CONNECTION_STRING"
-        value = replace(
-          data.azapi_resource.mongo_cluster_info.output.properties.connectionString,
-          "/mongodb\\+srv:\\/\\/[^@]+@([^?]+)\\?(.*)$/",
-          "mongodb+srv://$1?tls=true&authMechanism=MONGODB-OIDC&retrywrites=false&maxIdleTimeMS=120000"
-        )
-      }
-
-      # Azure OpenAI
-      env {
-        name  = "AZURE_OPENAI_ENDPOINT"
-        value = module.ai_foundry.openai_endpoint
-      }
-
-      env {
-        name  = "AZURE_OPENAI_CHAT_DEPLOYMENT_ID"
-        value = "gpt-4o"
-      }
-
-      env {
-        name  = "AZURE_OPENAI_API_VERSION"
-        value = "2025-01-01-preview"
-      }
-
-      env {
-        name  = "AZURE_OPENAI_CHAT_DEPLOYMENT_VERSION"
-        value = "2024-10-01-preview"
-      }
-
-      dynamic "env" {
-        for_each = var.disable_local_auth ? [] : [1]
-        content {
-          name        = "AZURE_OPENAI_KEY"
-          secret_name = "openai-key"
-        }
-      }
-
-      # Python-specific settings for performance
-      env {
-        name  = "PYTHONPATH"
-        value = "/home/site/wwwroot"
-      }
-
+      # Python runtime
       env {
         name  = "PYTHONUNBUFFERED"
         value = "1"
-      }
-
-      env {
-        name  = "PYTHONDONTWRITEBYTECODE"
-        value = "1"
-      }
-
-      env {
-        name  = "UVICORN_WORKERS"
-        value = "4"
-      }
-
-      env {
-        name  = "UVICORN_HOST"
-        value = "0.0.0.0"
-      }
-
-      env {
-        name  = "UVICORN_PORT"
-        value = "8000"
-      }
-
-      env {
-        name  = "UVICORN_LOOP"
-        value = "uvloop"
-      }
-
-      env {
-        name  = "UVICORN_HTTP"
-        value = "httptools"
-      }
-
-      # Performance Monitoring and Optimization
-      env {
-        name  = "ENABLE_PERFORMANCE_MONITORING"
-        value = "true"
-      }
-
-      env {
-        name  = "POOL_HEALTH_CHECK_INTERVAL"
-        value = "30"
-      }
-
-      env {
-        name  = "CONNECTION_POOL_MAX_SIZE"
-        value = "200"
-      }
-
-      env {
-        name  = "CONNECTION_POOL_MIN_SIZE"
-        value = "10"
-      }
-
-      env {
-        name  = "ASYNC_TASK_POOL_SIZE"
-        value = "100"
-      }
-
-      # WebSocket Optimization for High Concurrency
-      env {
-        name  = "WEBSOCKET_MAX_CONNECTIONS"
-        value = "5000"
-      }
-
-      env {
-        name  = "WEBSOCKET_BUFFER_SIZE"
-        value = "65536"
-      }
-
-      env {
-        name  = "WEBSOCKET_HEARTBEAT_INTERVAL"
-        value = "30"
-      }
-
-      env {
-        name  = "WEBSOCKET_CONNECTION_TIMEOUT"
-        value = "300"
-      }
-
-      # FastAPI Performance Settings
-      env {
-        name  = "FASTAPI_LIFESPAN_TIMEOUT"
-        value = "30"
-      }
-
-      env {
-        name  = "FASTAPI_REQUEST_TIMEOUT"
-        value = "300"
-      }
-
-      env {
-        name  = "WEBSOCKET_PING_INTERVAL"
-        value = "20"
-      }
-
-      env {
-        name  = "WEBSOCKET_PING_TIMEOUT"
-        value = "60"
       }
     }
   }
@@ -507,10 +241,10 @@ resource "azurerm_container_app" "backend" {
   })
 
   // Image is managed outside of terraform (i.e azd deploy)
+  // Note: env vars are now managed via Azure App Configuration (apps read at runtime)
   lifecycle {
     ignore_changes = [
-      template[0].container[0].image,
-      template[0].container[0].env
+      template[0].container[0].image
     ]
   }
   depends_on = [
@@ -582,5 +316,5 @@ output "BACKEND_CONTAINER_APP_URL" {
 
 output "BACKEND_API_URL" {
   description = "Backend API URL"
-  value       = var.backend_api_public_url != null ? var.backend_api_public_url : "https://${azurerm_container_app.backend.ingress[0].fqdn}"
+  value       = "https://${azurerm_container_app.backend.ingress[0].fqdn}"
 }

@@ -1,329 +1,369 @@
 # Utilities and Infrastructure Services
 
-Supporting utilities and infrastructure services provide the foundation for the Real-Time Voice Agent's scalability, resilience, and configurability. These modules are shared across all API endpoints and handlers.
-
-## Handler Selection and Routing
-
-The API uses a **factory pattern** to select appropriate handlers based on configuration and endpoint:
-
-### Handler Factory (`/api/v1/endpoints/media.py`)
-
-```python
-async def _create_media_handler(websocket, call_connection_id, session_id, orchestrator):
-    """Factory function creates handler based on ACS_STREAMING_MODE"""
-    
-    if ACS_STREAMING_MODE == StreamMode.MEDIA:
-        # Three-thread architecture for traditional STT → LLM → TTS
-        return ACSMediaHandler(
-            websocket=websocket,
-            orchestrator_func=orchestrator,
-            call_connection_id=call_connection_id,
-            recognizer=await stt_pool.acquire(),
-            memory_manager=memory_manager,
-            session_id=session_id,
-        )
-    
-    elif ACS_STREAMING_MODE == StreamMode.VOICE_LIVE:
-        # Azure Voice Live API integration
-        return VoiceLiveHandler(
-            azure_endpoint=AZURE_VOICE_LIVE_ENDPOINT,
-            model_name=AZURE_VOICE_LIVE_MODEL,
-            session_id=session_id,
-            websocket=websocket,
-            orchestrator=orchestrator,
-            lva_agent=injected_agent,
-        )
-```
-
-### Configuration-Driven Routing
-
-```python
-# Environment configuration determines handler selection
-ACS_STREAMING_MODE = StreamMode.MEDIA      # Default: three-thread architecture
-ACS_STREAMING_MODE = StreamMode.VOICE_LIVE # Azure Voice Live integration  
-ACS_STREAMING_MODE = StreamMode.TRANSCRIPTION # Lightweight transcription only
-
-# Handlers automatically selected at runtime based on configuration
-# No code changes required to switch between modes
-```
+Supporting utilities and infrastructure services provide the foundation for the Real-Time Voice Agent's scalability, resilience, and configurability.
 
 ## Resource Pool Management
 
-### Speech-to-Text Pool (`src.pools.stt_pool`)
+### Speech Resource Pools
+
+The platform uses `WarmableResourcePool` for managing TTS and STT clients:
 
 ```python
-from src.pools.stt_pool import STTResourcePool
+from src.pools import WarmableResourcePool, AllocationTier
 
-# Managed pool of speech recognizers
-stt_pool = STTResourcePool(
-    pool_size=4,  # Concurrent recognizers
-    region="eastus",
-    enable_diarization=True
+# Create TTS pool with pre-warming
+tts_pool = WarmableResourcePool(
+    factory=create_tts_client,
+    name="tts_pool",
+    warm_pool_size=3,              # Pre-warm 3 clients
+    enable_background_warmup=True, # Keep pool filled
+    session_awareness=True,        # Per-session caching
 )
 
-# Automatic resource lifecycle in handlers
-recognizer = await stt_pool.acquire()  # Get from pool
-# ... use recognizer ...
-await stt_pool.release(recognizer)     # Return to pool
+await tts_pool.prepare()  # Initialize and pre-warm
 ```
 
-### Text-to-Speech Pool (`src.pools.tts_pool`)
+### Allocation Tiers
 
-```python  
-from src.pools.tts_pool import TTSResourcePool
+| Tier | Source | Latency | Use Case |
+|------|--------|---------|----------|
+| `DEDICATED` | Session cache | 0ms | Same session requesting again |
+| `WARM` | Pre-warmed queue | <50ms | First request with warmed pool |
+| `COLD` | Factory creation | ~200ms | Pool empty, on-demand creation |
 
-# Shared TTS synthesizers across connections
-tts_pool = TTSResourcePool(
-    pool_size=4,  # Concurrent synthesizers
-    region="eastus",
-    voice_name="en-US-JennyMultilingualV2Neural"
-)
-
-# Pool-based resource management
-synthesizer = await tts_pool.acquire()
-await synthesizer.speak_text_async("Hello world")
-await tts_pool.release(synthesizer)
-```
-
-### Azure OpenAI Pool (`src.pools.aoai_pool`)
+### Usage Pattern
 
 ```python
-from src.pools.aoai_pool import AOAIResourcePool
+# Session-aware acquisition (recommended)
+synth, tier = await pool.acquire_for_session(session_id)
+# ... use synth ...
+await pool.release_for_session(session_id)
 
-# Managed OpenAI client connections
-aoai_pool = AOAIResourcePool(
-    pool_size=8,  # Higher concurrency for AI processing
-    endpoint=AZURE_OPENAI_ENDPOINT,
-    model="gpt-4o",
-    max_tokens=150
-)
-
-# Used by orchestrator for conversation processing
-client = await aoai_pool.acquire()
-response = await client.chat_completions_create(messages=conversation_history)
-await aoai_pool.release(client)
+# Anonymous acquisition
+synth = await pool.acquire(timeout=2.0)
+await pool.release(synth)
 ```
 
-## Connection Management (`src.pools.connection_manager`)
+> **See Also**: [Resource Pools Documentation](../architecture/speech/resource-pools.md)
 
-Centralized WebSocket connection tracking and lifecycle management:
+---
+
+## Tool Registry
+
+### Overview
+
+The unified tool registry (`registries/toolstore/`) provides centralized tool management for all agents:
 
 ```python
-from src.pools.connection_manager import ConnectionManager
-
-# Single connection manager instance per application
-conn_manager = ConnectionManager()
-
-# Register connections with metadata and topic subscriptions
-conn_id = await conn_manager.register(
-    websocket=websocket,
-    client_type="media",  # or "dashboard", "conversation"
-    call_id=call_connection_id,
-    session_id=session_id,
-    topics={"media", "session"}
+from apps.artagent.backend.registries.toolstore import (
+    register_tool,
+    get_tools_for_agent,
+    execute_tool,
+    initialize_tools,
 )
 
-# Topic-based broadcasting
-await conn_manager.broadcast_topic("media", {
-    "type": "audio_status", 
-    "status": "playing"
+# Initialize all tools at startup
+initialize_tools()
+
+# Get tools for a specific agent
+tools = get_tools_for_agent(["get_account_summary", "handoff_fraud_agent"])
+
+# Execute a tool
+result = await execute_tool("get_account_summary", {"client_id": "123"})
+```
+
+### Available Tool Categories
+
+| Module | Purpose | Example Tools |
+|--------|---------|---------------|
+| `banking/banking.py` | Account operations | `get_account_summary`, `get_recent_transactions`, `refund_fee` |
+| `banking/investments.py` | Investment tools | `get_portfolio_summary`, `execute_trade` |
+| `auth.py` | Identity verification | `verify_client_identity`, `send_mfa_code` |
+| `handoffs.py` | Agent transfers | `handoff_concierge`, `handoff_fraud_agent`, `handoff_policy_advisor` |
+| `insurance.py` | Policy & claims | `get_policy_details`, `file_new_claim`, `check_claim_status` |
+| `fraud.py` | Fraud detection | `flag_suspicious_transaction`, `verify_transaction` |
+| `compliance.py` | Compliance checks | `check_aml_status`, `verify_fatca` |
+| `escalation.py` | Human escalation | `escalate_human`, `transfer_call_to_call_center` |
+| `knowledge_base.py` | RAG search | `search_knowledge_base` |
+| `call_transfer.py` | Call routing | `transfer_call`, `warm_transfer` |
+| `voicemail.py` | Voicemail | `leave_voicemail`, `check_voicemail` |
+
+### Registering Custom Tools
+
+```python
+# In registries/toolstore/my_tools.py
+
+from apps.artagent.backend.registries.toolstore.registry import register_tool
+
+# Define schema (OpenAI function calling format)
+my_tool_schema = {
+    "name": "my_custom_tool",
+    "description": "Does something useful",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "param1": {"type": "string", "description": "First parameter"},
+            "param2": {"type": "integer", "description": "Second parameter"},
+        },
+        "required": ["param1"],
+    },
+}
+
+# Define executor
+async def my_custom_tool(args: dict) -> dict:
+    param1 = args.get("param1", "")
+    param2 = args.get("param2", 0)
+    
+    # Your logic here
+    return {"success": True, "result": f"Processed {param1}"}
+
+# Register the tool
+register_tool(
+    "my_custom_tool",
+    my_tool_schema,
+    my_custom_tool,
+    tags={"custom"},  # Optional categorization
+)
+```
+
+### Knowledge Base Tool
+
+The `search_knowledge_base` tool provides semantic search:
+
+```python
+# Tool usage in agent
+result = await execute_tool("search_knowledge_base", {
+    "query": "What is the fee refund policy?",
+    "collection": "policies",
+    "top_k": 5,
 })
 
-# Session-isolated broadcasting  
-await conn_manager.broadcast_session(session_id, {
-    "type": "transcript",
-    "text": "User spoke something"
-})
-
-# Automatic cleanup on disconnect
-await conn_manager.unregister(conn_id)
+# Returns:
+# {
+#     "success": True,
+#     "results": [
+#         {"title": "Fee Refund Policy", "content": "...", "score": 0.92},
+#         ...
+#     ],
+#     "source": "cosmos_vector"  # or "mock" if Cosmos not configured
+# }
 ```
 
-## State Management and Persistence
+---
 
-### Memory Manager (`src.stateful.state_managment.MemoManager`)
+## Agent Registry
 
-Conversation state and session persistence:
+### Overview
+
+The agent registry (`registries/agentstore/`) manages agent definitions:
+
+```python
+from apps.artagent.backend.registries.agentstore.loader import AgentLoader
+
+# Load an agent
+loader = AgentLoader()
+agent = loader.load_agent("concierge")
+
+# Get agent tools
+tools = agent.tools  # List of tool names
+```
+
+### Agent Structure
+
+Each agent folder contains:
+
+```
+📁 registries/agentstore/concierge/
+├── 📄 agent.yaml      # Agent configuration
+└── 📄 prompt.md       # System prompt template (Jinja2)
+```
+
+### Scenario Registry
+
+Scenarios group agents and provide overrides:
+
+```python
+from apps.artagent.backend.registries.scenariostore.loader import ScenarioLoader
+
+# Load a scenario
+loader = ScenarioLoader()
+scenario = loader.load_scenario("banking")
+
+# Get scenario agents
+agents = scenario.agents  # List of agent names
+start_agent = scenario.start_agent  # Entry point agent
+```
+
+---
+
+## State Management
+
+### Memory Manager
+
+Session state and conversation history:
 
 ```python
 from src.stateful.state_managment import MemoManager
 
-# Load existing conversation or create new session
+# Load or create session
 memory_manager = MemoManager.from_redis(session_id, redis_mgr)
 
-# Conversation history management
+# Conversation history
 memory_manager.append_to_history("user", "Hello")
 memory_manager.append_to_history("assistant", "Hi there!")
 
-# Context storage and retrieval
+# Context storage
 memory_manager.set_context("target_number", "+1234567890")
-phone_number = memory_manager.get_context("target_number")
 
-# Persistent storage to Redis
+# Persist to Redis
 await memory_manager.persist_to_redis_async(redis_mgr)
 ```
 
-### Redis Session Management (`src.redis.manager`)
+### Redis Session Management
 
 ```python
 from src.redis.manager import AzureRedisManager
 
-# Azure-native Redis integration with Entra ID
 redis_mgr = AzureRedisManager(
     host="your-redis.redis.cache.windows.net",
     credential=DefaultAzureCredential()
 )
 
-# Session data storage with TTL
-await redis_mgr.set_value_async(f"session:{session_id}", session_data, expire=3600)
-
-# Call connection mapping for UI coordination
-await redis_mgr.set_value_async(
-    f"call_session_map:{call_connection_id}", 
-    browser_session_id
-)
+# Session data with TTL
+await redis_mgr.set_value_async(f"session:{session_id}", data, expire=3600)
 ```
 
-## Voice Configuration and Neural Voices
+---
 
-### Voice Configuration (`config.voice_config`)
+## Observability
 
-```python
-from config.voice_config import VoiceConfiguration
-
-# Centralized voice metadata and selection
-voice_config = VoiceConfiguration.from_env()
-
-# Get optimized voice for use case
-support_voice = voice_config.get_voice_alias("support_contact_center")
-print(f"Voice: {support_voice.neural_voice}")
-print(f"Style: {support_voice.style}")  # cheerful, empathetic, etc.
-
-# Multi-language voice selection
-spanish_voice = voice_config.get_voice_for_language("es-ES")
-```
-
-## Authentication and Security
-
-### Azure Entra ID Integration (`src.auth`)
-
-```python
-from azure.identity import DefaultAzureCredential
-
-# Keyless authentication for all Azure services
-credential = DefaultAzureCredential()
-
-# Automatic token refresh and service principal authentication
-# Used by STT/TTS pools, Redis manager, and ACS clients
-```
-
-### WebSocket Authentication (`apps.rtagent.backend.src.utils.auth`)
-
-```python
-from apps.rtagent.backend.src.utils.auth import validate_acs_ws_auth
-
-# Optional WebSocket authentication for secure environments
-try:
-    await validate_acs_ws_auth(websocket, required_scope="media.stream")
-    # Proceed with authenticated connection
-except AuthError as e:
-    await websocket.close(code=4001, reason="Authentication required")
-```
-
-## Observability and Monitoring
-
-### OpenTelemetry Integration (`utils.telemetry_config`)
+### OpenTelemetry Tracing
 
 ```python
 from utils.telemetry_config import configure_tracing
 
-# Comprehensive distributed tracing
 configure_tracing(
     service_name="voice-agent-api",
     service_version="v1.0.0",
     otlp_endpoint=OTEL_EXPORTER_OTLP_ENDPOINT
 )
-
-# Automatic span creation for:
-# - WebSocket connections and lifecycle
-# - Speech recognition sessions  
-# - TTS synthesis operations
-# - Azure service calls
-# - Orchestrator processing
 ```
 
-### Structured Logging (`utils.ml_logging`)
+### Structured Logging
 
 ```python
 from utils.ml_logging import get_logger
 
 logger = get_logger("api.v1.media")
 
-# Consistent JSON logging with correlation IDs
 logger.info(
-    "Media session started",
+    "Session started",
     extra={
         "session_id": session_id,
         "call_connection_id": call_connection_id,
-        "streaming_mode": str(ACS_STREAMING_MODE)
     }
 )
 ```
 
-### Performance Monitoring (`src.tools.latency_tool`)
+### Latency Tracking
 
 ```python
 from src.tools.latency_tool import LatencyTool
 
-# Track conversation timing metrics
 latency_tool = LatencyTool(memory_manager)
 
-# Measure time to first byte for greeting
 latency_tool.start("greeting_ttfb")
 await send_greeting_audio()
 latency_tool.stop("greeting_ttfb")
-
-# Automatic span attributes for performance analysis
 ```
 
-## Development and Testing Utilities
+---
 
-### Load Testing Framework (`tests/load/`)
+## Authentication
+
+### Azure Entra ID Integration
 
 ```python
-from tests.load.utils.load_test_conversations import ConversationSimulator
+from azure.identity import DefaultAzureCredential
 
-# Simulate high-load scenarios
-simulator = ConversationSimulator(
-    base_url="wss://api.domain.com",
-    concurrent_sessions=50,
-    conversation_length=10
+# Keyless authentication for all Azure services
+credential = DefaultAzureCredential()
+```
+
+### WebSocket Authentication
+
+```python
+from apps.artagent.backend.src.utils.auth import validate_acs_ws_auth
+
+try:
+    await validate_acs_ws_auth(websocket, required_scope="media.stream")
+except AuthError:
+    await websocket.close(code=4001, reason="Authentication required")
+```
+
+---
+
+## Configuration Management
+
+### Azure App Configuration
+
+The application pulls configuration from Azure App Configuration:
+
+```python
+from apps.artagent.backend.config.appconfig_provider import AppConfigProvider
+
+# Initialize provider
+provider = AppConfigProvider(
+    endpoint=os.getenv("AZURE_APPCONFIG_ENDPOINT"),
+    label=os.getenv("AZURE_APPCONFIG_LABEL"),
 )
 
-await simulator.run_load_test()
+# Get configuration
+config = await provider.get_all_settings()
 ```
 
-### ACS Event Simulation (`tests/conftest.py`)
+### Environment Variables
+
+Key environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `AZURE_APPCONFIG_ENDPOINT` | App Configuration endpoint |
+| `AZURE_APPCONFIG_LABEL` | Configuration label (environment) |
+| `ACS_STREAMING_MODE` | `voice_live` or `media` (cascade) |
+| `AZURE_SPEECH_KEY` | Speech service API key |
+| `AZURE_SPEECH_REGION` | Speech service region |
+| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint |
+
+---
+
+## Demo Environment
+
+### Mock User Generation
+
+The demo environment endpoint generates mock users for testing:
 
 ```python
-# Test fixtures for ACS webhook simulation
-@pytest.fixture
-def acs_call_connected_event():
-    return {
-        "eventType": "Microsoft.Communication.CallConnected",
-        "data": {
-            "callConnectionId": "test-call-123",
-            "correlationId": "test-correlation-456"
-        }
-    }
-
-# Integration testing with mock ACS events
-async def test_call_lifecycle(acs_call_connected_event):
-    response = await client.post("/api/v1/calls/callbacks", 
-                               json=[acs_call_connected_event])
-    assert response.status_code == 200
+# GET /api/v1/demo/user
+# Returns a randomly generated user with:
+# - Profile (name, email, phone)
+# - Accounts (checking, savings)
+# - Transactions (including international)
+# - Credit cards
+# - Investments
 ```
 
-## Integration Patterns
+### Features
 
-See **[Streaming Modes](streaming-modes.md)** for detailed configuration options, **[Speech Recognition](speech-recognition.md)** for STT integration patterns, and **[Speech Synthesis](speech-synthesis.md)** for TTS implementation details.
+- **Mock Transactions**: Realistic transaction data with merchants and categories
+- **International Transactions**: Foreign transactions with 3% fees
+- **Policy/Claims Data**: Insurance demo data for policy advisor scenarios
+
+---
+
+## Related Documentation
+
+- [Resource Pools](../architecture/speech/README.md) - Pool configuration and troubleshooting
+- [Agent Registry](../architecture/agents/README.md) - Creating and configuring agents
+- [API Reference](../api/api-reference.md) - Building custom tools
+- [Streaming Modes](../architecture/speech/README.md) - SpeechCascade vs VoiceLive

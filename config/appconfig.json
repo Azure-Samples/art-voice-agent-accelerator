@@ -1,0 +1,69 @@
+{
+  "$schema": "./appconfig.schema.json",
+  "_comment": "Application-tier settings loaded via post-provisioning. Changes here do NOT require azd provision.",
+
+  "pools": {
+    "tts-size": 100,
+    "stt-size": 100,
+    "aoai-size": 50,
+    "low-water-mark": 10,
+    "high-water-mark": 45,
+    "acquire-timeout": 5
+  },
+
+  "connections": {
+    "max-websocket": 200,
+    "queue-size": 50,
+    "warning-threshold": 150,
+    "critical-threshold": 180,
+    "timeout-seconds": 300,
+    "heartbeat-interval": 30
+  },
+
+  "session": {
+    "ttl-seconds": 1800,
+    "cleanup-interval": 300,
+    "state-ttl": 86400,
+    "max-concurrent": 1000
+  },
+
+  "voice": {
+    "tts-sample-rate-ui": 48000,
+    "tts-sample-rate-acs": 16000,
+    "tts-chunk-size": 1024,
+    "tts-processing-timeout": 8,
+    "stt-processing-timeout": 10,
+    "silence-duration-ms": 1300,
+    "recognized-languages": "en-US,es-ES,fr-FR,ko-KR,it-IT,pt-PT,pt-BR",
+    "default-tts-voice": "en-US-EmmaMultilingualNeural"
+  },
+
+  "aoai": {
+    "default-temperature": 0.7,
+    "default-max-tokens": 500,
+    "request-timeout": 30
+  },
+
+  "warm-pool": {
+    "tts-size": 3,
+    "stt-size": 2,
+    "refresh-interval": 30,
+    "session-max-age": 1800
+  },
+
+  "monitoring": {
+    "metrics-collection-interval": 60,
+    "pool-metrics-interval": 30
+  },
+
+  "features": {
+    "dtmf-validation": false,
+    "auth-validation": false,
+    "call-recording": false,
+    "warm-pool": true,
+    "session-persistence": true,
+    "performance-logging": true,
+    "tracing": true,
+    "connection-limits": true
+  }
+}

@@ -1,16 +1,27 @@
 # locustfile.py
-import base64, json, os, time, uuid
-from pathlib import Path
-from gevent import sleep
+import base64
+import json
+import os
 import random
+import ssl
+import time
+import urllib.parse
+import uuid
+from pathlib import Path
+from ssl import SSLEOFError, SSLError, SSLZeroReturnError
 
-from locust import User, task, events, between
+import certifi
 import websocket
+from gevent import sleep
+from locust import User, between, task
 from websocket import WebSocketConnectionClosedException
-import ssl, urllib.parse, certifi, websocket
 
 # Treat benign WebSocket closes as non-errors (1000/1001/1006 often benign in load)
-WS_IGNORE_CLOSE_EXCEPTIONS = os.getenv("WS_IGNORE_CLOSE_EXCEPTIONS", "true").lower() in {"1", "true", "yes"}
+WS_IGNORE_CLOSE_EXCEPTIONS = os.getenv("WS_IGNORE_CLOSE_EXCEPTIONS", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+}
 
 ## For debugging websocket connections
 # websocket.enableTrace(True)
@@ -18,27 +29,40 @@ WS_IGNORE_CLOSE_EXCEPTIONS = os.getenv("WS_IGNORE_CLOSE_EXCEPTIONS", "true").low
 #
 # --- Config ---
 DEFAULT_WS_URL = os.getenv("WS_URL")
-PCM_DIR = os.getenv("PCM_DIR", "tests/load/audio_cache")  # If set, iterate .pcm files in this directory per turn
+PCM_DIR = os.getenv(
+    "PCM_DIR", "tests/load/audio_cache"
+)  # If set, iterate .pcm files in this directory per turn
 # PCM_PATH = os.getenv("PCM_PATH", "sample_16k_s16le_mono.pcm")  # Used if no directory provided
 SAMPLE_RATE = int(os.getenv("SAMPLE_RATE", "16000"))  # Hz
 BYTES_PER_SAMPLE = int(os.getenv("BYTES_PER_SAMPLE", "2"))  # 1 => PCM8 unsigned, 2 => PCM16LE
 CHANNELS = int(os.getenv("CHANNELS", "1"))
 CHUNK_MS = int(os.getenv("CHUNK_MS", "20"))  # 20 ms
 CHUNK_BYTES = int(SAMPLE_RATE * BYTES_PER_SAMPLE * CHANNELS * CHUNK_MS / 1000)  # default 640
-TURNS_PER_USER = int(os.getenv("TURNS_PER_USER", "3"))
+TURNS_PER_USER = int(os.getenv("TURNS_PER_USER", "60"))
 CHUNKS_PER_TURN = int(os.getenv("CHUNKS_PER_TURN", "100"))  # ~2s @20ms
 TURN_TIMEOUT_SEC = float(os.getenv("TURN_TIMEOUT_SEC", "15.0"))
 PAUSE_BETWEEN_TURNS_SEC = float(os.getenv("PAUSE_BETWEEN_TURNS_SEC", "1.5"))
+RETRY_BACKOFF_BASE = float(os.getenv("WS_RECONNECT_BACKOFF_BASE_SEC", "0.2"))
+RETRY_BACKOFF_FACTOR = float(os.getenv("WS_RECONNECT_BACKOFF_FACTOR", "1.8"))
+RETRY_BACKOFF_MAX = float(os.getenv("WS_RECONNECT_BACKOFF_MAX_SEC", "3.0"))
+MAX_SEQUENTIAL_SSL_FAILS = int(os.getenv("WS_MAX_SSL_FAILS", "4"))
 
 # If your endpoint requires explicit empty AudioData frames, use this (preferred for semantic VAD)
-FIRST_BYTE_TIMEOUT_SEC = float(os.getenv("FIRST_BYTE_TIMEOUT_SEC", "5.0"))  # max wait for first server byte
-BARGE_QUIET_MS = int(os.getenv("BARGE_QUIET_MS", "400"))  # consider response ended after this quiet gap
+FIRST_BYTE_TIMEOUT_SEC = float(
+    os.getenv("FIRST_BYTE_TIMEOUT_SEC", "5.0")
+)  # max wait for first server byte
+BARGE_QUIET_MS = int(
+    os.getenv("BARGE_QUIET_MS", "400")
+)  # consider response ended after this quiet gap
 # Any server message containing these tokens completes a turn:
-RESPONSE_TOKENS = tuple((os.getenv("RESPONSE_TOKENS", "recognizer,greeting,response,transcript,result")
-                         .lower().split(",")))
+RESPONSE_TOKENS = tuple(
+    os.getenv("RESPONSE_TOKENS", "recognizer,greeting,response,transcript,result")
+    .lower()
+    .split(",")
+)
 
 # End-of-response detection tokens for barge-in
-END_TOKENS = tuple((os.getenv("END_TOKENS", "final,end,completed,stopped,barge").lower().split(",")))
+END_TOKENS = tuple(os.getenv("END_TOKENS", "final,end,completed,stopped,barge").lower().split(","))
 
 
 # Module-level zeroed chunk buffer for explicit silence
@@ -49,8 +73,10 @@ else:
     # PCM16LE (and other signed PCM) silence is 0x00
     ZERO_CHUNK = b"\x00" * CHUNK_BYTES
 
+
 def b64(buf: bytes) -> str:
     return base64.b64encode(buf).decode("ascii")
+
 
 def generate_silence_chunk(duration_ms: float = 100.0, sample_rate: int = 16000) -> bytes:
     """Generate a silent audio chunk with very low-level noise for VAD continuity."""
@@ -58,13 +84,17 @@ def generate_silence_chunk(duration_ms: float = 100.0, sample_rate: int = 16000)
     # Generate very quiet background noise instead of pure silence
     # This is more realistic and helps trigger final speech recognition
     import struct
+
     audio_data = bytearray()
     for _ in range(samples):
         # Add very quiet random noise (-10 to +10 amplitude in 16-bit range)
         noise = random.randint(-10, 10)
-        audio_data.extend(struct.pack('<h', noise))
+        audio_data.extend(struct.pack("<h", noise))
     return bytes(audio_data)
-  # PCM16LE and other signed
+
+
+# PCM16LE and other signed
+
 
 class ACSUser(User):
     def _resolve_ws_url(self) -> str:
@@ -135,6 +165,7 @@ class ACSUser(User):
                 if last_msg_at and (time.time() - last_msg_at) >= quiet_sec:
                     return True, (time.time() - start) * 1000.0
         return False, (time.time() - start) * 1000.0
+
     wait_time = between(0.3, 1.1)
 
     def _record(self, name: str, response_time_ms: float, exc: Exception | None = None):
@@ -145,7 +176,7 @@ class ACSUser(User):
             response_time=response_time_ms,
             response_length=0,
             exception=exc,
-            context={"call_connection_id": getattr(self, "call_connection_id", None)}
+            context={"call_connection_id": getattr(self, "call_connection_id", None)},
         )
 
     def _connect_ws(self):
@@ -166,24 +197,41 @@ class ACSUser(User):
         sslopt = {}
         if url.startswith("wss://"):
             sslopt = {
+                "ssl_context": self._ssl_context,
                 "cert_reqs": ssl.CERT_REQUIRED,
-                "ca_certs": certifi.where(),
                 "check_hostname": True,
-                "server_hostname": host,   # ensure SNI
+                "server_hostname": host,
             }
         origin_scheme = "https" if url.startswith("wss://") else "http"
         # Explicitly disable proxies even if env vars are set
-        self.ws = websocket.create_connection(
-            url,
-            header=headers,
-            origin=f"{origin_scheme}://{host}",
-            enable_multithread=True,
-            sslopt=sslopt,
-            http_proxy_host=None,
-            http_proxy_port=None,
-            proxy_type=None,
-            # subprotocols=["your-protocol"]  # uncomment if your server requires one
-        )
+        backoff = RETRY_BACKOFF_BASE * (RETRY_BACKOFF_FACTOR ** min(self._sequential_ssl_fails, 5))
+        while True:
+            try:
+                self.ws = websocket.create_connection(
+                    url,
+                    header=headers,
+                    origin=f"{origin_scheme}://{host}",
+                    enable_multithread=True,
+                    sslopt=sslopt,
+                    http_proxy_host=None,
+                    http_proxy_port=None,
+                    proxy_type=None,
+                )
+                self._sequential_ssl_fails = 0
+                break
+            except (
+                SSLError,
+                SSLEOFError,
+                SSLZeroReturnError,
+                WebSocketConnectionClosedException,
+            ) as err:
+                self._sequential_ssl_fails += 1
+                if self._sequential_ssl_fails > MAX_SEQUENTIAL_SSL_FAILS:
+                    raise RuntimeError(
+                        f"WS SSL handshake keeps failing ({self._sequential_ssl_fails}x): {err}"
+                    ) from err
+                sleep(min(backoff, RETRY_BACKOFF_MAX))
+                backoff *= RETRY_BACKOFF_FACTOR
 
         # Send initial AudioMetadata once per connection
         meta = {
@@ -193,8 +241,8 @@ class ACSUser(User):
                 "encoding": "PCM",
                 "sampleRate": SAMPLE_RATE,
                 "channels": CHANNELS,
-                "length": CHUNK_BYTES
-            }
+                "length": CHUNK_BYTES,
+            },
         }
         self.ws.send(json.dumps(meta))
 
@@ -222,6 +270,10 @@ class ACSUser(User):
         self.audio = b""
         self.offset = 0
 
+        self._ssl_context = ssl.create_default_context(cafile=certifi.where())
+        self._ssl_context.check_hostname = True
+        self._ssl_context.verify_mode = ssl.CERT_REQUIRED
+        self._sequential_ssl_fails = 0
         self._connect_ws()
 
     def on_stop(self):
@@ -235,10 +287,10 @@ class ACSUser(User):
     def _next_chunk(self) -> bytes:
         end = self.offset + CHUNK_BYTES
         if end <= len(self.audio):
-            chunk = self.audio[self.offset:end]
+            chunk = self.audio[self.offset : end]
         else:
             # wrap
-            chunk = self.audio[self.offset:] + self.audio[:end % len(self.audio)]
+            chunk = self.audio[self.offset :] + self.audio[: end % len(self.audio)]
         self.offset = end % len(self.audio)
         return chunk
 
@@ -249,25 +301,22 @@ class ACSUser(User):
         self.audio = Path(file_path).read_bytes()
         self.offset = 0
         return file_path
-    
 
-    
     def _send_audio_chunk(self):
         payload = {
             "kind": "AudioData",
             "audioData": {
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.", time.gmtime())
-                             + f"{int(time.time_ns()%1_000_000_000/1_000_000):03d}Z",
+                + f"{int(time.time_ns()%1_000_000_000/1_000_000):03d}Z",
                 "participantRawID": self.call_connection_id,
                 "data": b64(self._next_chunk()),
                 "length": CHUNK_BYTES,
-                "silent": False
-            }
+                "silent": False,
+            },
         }
         try:
             self.ws.send(json.dumps(payload))
-        except WebSocketConnectionClosedException:
-            # Reconnect and resend metadata, then retry once
+        except (WebSocketConnectionClosedException, SSLError, SSLEOFError, SSLZeroReturnError):
             self._connect_ws()
             self.ws.send(json.dumps(payload))
 
@@ -309,14 +358,16 @@ class ACSUser(User):
                         silence_msg = {
                             "kind": "AudioData",
                             "audioData": {
-                                "data": base64.b64encode(generate_silence_chunk(100)).decode('utf-8'),
+                                "data": base64.b64encode(generate_silence_chunk(100)).decode(
+                                    "utf-8"
+                                ),
                                 "silent": False,  # keep VAD engaged for graceful end
-                                "timestamp": time.time()
-                            }
+                                "timestamp": time.time(),
+                            },
                         }
                         self.ws.send(json.dumps(silence_msg))
                         time.sleep(0.1)
-                except WebSocketConnectionClosedException as e:
+                except WebSocketConnectionClosedException:
                     # Benign: server may close after completing turn; avoid counting as error
                     if WS_IGNORE_CLOSE_EXCEPTIONS:
                         # Reconnect for next operations/turns and continue
@@ -329,7 +380,11 @@ class ACSUser(User):
 
                 # TTFB: measure time from now (after EOS) to first server frame
                 ttfb_ok, ttfb_ms = self._measure_ttfb(FIRST_BYTE_TIMEOUT_SEC)
-                self._record(name=f"ttfb[{Path(file_used).name}]", response_time_ms=ttfb_ms, exc=None if ttfb_ok else Exception("tffb_timeout"))
+                self._record(
+                    name=f"ttfb[{Path(file_used).name}]",
+                    response_time_ms=ttfb_ms,
+                    exc=None if ttfb_ok else Exception("tffb_timeout"),
+                )
 
                 # Barge-in: start next turn immediately with a single audio frame
                 next_file_used = self._begin_turn_audio()
@@ -337,26 +392,46 @@ class ACSUser(User):
                 try:
                     self._send_audio_chunk()  # one chunk to trigger barge-in
                 except Exception as e:
-                    self._record(name=f"barge_in[{Path(file_used).name}->{Path(next_file_used).name}]", response_time_ms=(time.time() - barge_start_sent) * 1000.0, exc=e)
+                    self._record(
+                        name=f"barge_in[{Path(file_used).name}->{Path(next_file_used).name}]",
+                        response_time_ms=(time.time() - barge_start_sent) * 1000.0,
+                        exc=e,
+                    )
                     # if barge failed to send, continue to next loop iteration
                     continue
                 # Measure time until 'end of previous response' using heuristic
-                barge_ok, barge_ms = self._wait_for_end_of_response(BARGE_QUIET_MS, TURN_TIMEOUT_SEC)
+                barge_ok, barge_ms = self._wait_for_end_of_response(
+                    BARGE_QUIET_MS, TURN_TIMEOUT_SEC
+                )
                 self._record(
                     name=f"barge_in[{Path(file_used).name}->{Path(next_file_used).name}]",
-                    response_time_ms=barge_ms, 
-                    exc=None if barge_ok else Exception("barge_end_timeout")
+                    response_time_ms=barge_ms,
+                    exc=None if barge_ok else Exception("barge_end_timeout"),
                 )
 
-            except WebSocketConnectionClosedException as e:
-                # Treat normal/idle WS closes as non-errors to reduce false positives in load reports
+            except (
+                WebSocketConnectionClosedException,
+                SSLError,
+                SSLEOFError,
+                SSLZeroReturnError,
+            ) as e:
                 if WS_IGNORE_CLOSE_EXCEPTIONS:
-                    # Optionally record a benign close event as success for observability
-                    self._record(name="websocket_closed", response_time_ms=(time.time() - t0) * 1000.0, exc=None)
+                    self._record(
+                        name="websocket_closed",
+                        response_time_ms=(time.time() - t0) * 1000.0,
+                        exc=None,
+                    )
                 else:
-                    self._record(name=f"turn_error[{Path(file_used).name if 'file_used' in locals() else 'unknown'}]",
-                                 response_time_ms=(time.time() - t0) * 1000.0, exc=e)
+                    self._record(
+                        name=f"turn_error[{Path(file_used).name if 'file_used' in locals() else 'unknown'}]",
+                        response_time_ms=(time.time() - t0) * 1000.0,
+                        exc=e,
+                    )
             except Exception as e:
-                turn_name = f"{Path(file_used).name}" if 'file_used' in locals() else "unknown"
-                self._record(name=f"turn_error[{turn_name}]", response_time_ms=(time.time() - t0) * 1000.0, exc=e)
+                turn_name = f"{Path(file_used).name}" if "file_used" in locals() else "unknown"
+                self._record(
+                    name=f"turn_error[{turn_name}]",
+                    response_time_ms=(time.time() - t0) * 1000.0,
+                    exc=e,
+                )
             sleep(PAUSE_BETWEEN_TURNS_SEC)

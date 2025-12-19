@@ -4,13 +4,13 @@ Test DTMF validation failure cancellation logic.
 This test verifies that calls are properly cancelled when DTMF validation fails.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from apps.rtagent.backend.api.v1.handlers.dtmf_validation_lifecycle import (
+import pytest
+from apps.artagent.backend.api.v1.events.types import CallEventContext
+from apps.artagent.backend.api.v1.handlers.dtmf_validation_lifecycle import (
     DTMFValidationLifecycle,
 )
-from apps.rtagent.backend.api.v1.events.types import CallEventContext
 
 
 @pytest.fixture
@@ -44,9 +44,7 @@ async def test_aws_connect_validation_success_no_cancellation(mock_context):
     # Assert - call should NOT be cancelled on success
     mock_cancel.assert_not_called()
     mock_context.memo_manager.set_context.assert_any_call("dtmf_validated", True)
-    mock_context.memo_manager.set_context.assert_any_call(
-        "dtmf_validation_gate_open", True
-    )
+    mock_context.memo_manager.set_context.assert_any_call("dtmf_validation_gate_open", True)
 
 
 @pytest.mark.asyncio
@@ -101,9 +99,7 @@ async def test_sequence_validation_success_no_cancellation(mock_context):
     # Assert - call should NOT be cancelled on success
     mock_cancel.assert_not_called()
     mock_context.memo_manager.update_context.assert_any_call("dtmf_validated", True)
-    mock_context.memo_manager.update_context.assert_any_call(
-        "dtmf_validation_gate_open", True
-    )
+    mock_context.memo_manager.update_context.assert_any_call("dtmf_validation_gate_open", True)
 
 
 @pytest.mark.asyncio
@@ -116,7 +112,7 @@ async def test_cancel_call_for_validation_failure_with_session_terminator(mock_c
 
     # Act
     with patch(
-        "apps.rtagent.backend.api.v1.handlers.dtmf_validation_lifecycle.terminate_session",
+        "apps.artagent.backend.api.v1.handlers.dtmf_validation_lifecycle.terminate_session",
         new_callable=AsyncMock,
     ) as mock_terminate:
         await DTMFValidationLifecycle._cancel_call_for_validation_failure(mock_context)
@@ -129,12 +125,8 @@ async def test_cancel_call_for_validation_failure_with_session_terminator(mock_c
     assert call_args.kwargs["call_connection_id"] == "test-call-123"
 
     # Verify context updates
-    mock_context.memo_manager.set_context.assert_any_call(
-        "call_cancelled_dtmf_failure", True
-    )
-    mock_context.memo_manager.set_context.assert_any_call(
-        "dtmf_validation_gate_open", False
-    )
+    mock_context.memo_manager.set_context.assert_any_call("call_cancelled_dtmf_failure", True)
+    mock_context.memo_manager.set_context.assert_any_call("dtmf_validation_gate_open", False)
 
     # Verify Redis event publication
     mock_context.redis_mgr.publish_event_async.assert_called_once()

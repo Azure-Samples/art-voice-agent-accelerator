@@ -1,10 +1,8 @@
 {
-  "name": "rtaudioagent",
+  "name": "artaudioagent",
   "location": "eastus",
   "openai_location": null,
   "cosmosdb_location": null,
-  "backend_api_public_url": null,
-  "acs_source_phone_number": null,
   "acs_data_location": "United States",
   "disable_local_auth": true,
   "enable_redis_ha": false,
@@ -27,6 +25,12 @@
       "name": "gpt-4.1-mini",
       "version": "2025-04-14",
       "sku_name": "GlobalStandard",
+      "capacity": 500
+    },
+    {
+      "name": "text-embedding-3-large",
+      "version": "2025-04-14",
+      "sku_name": "DataZoneStandard",
       "capacity": 500
     }
   ],

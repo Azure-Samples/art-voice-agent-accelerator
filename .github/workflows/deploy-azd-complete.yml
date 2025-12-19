@@ -1,4 +1,5 @@
-name: 🎯 AZD Deployment Orchestration
+name: 🚀 Deploy to Azure
+run-name: 🚀 Deploy to Azure (${{ inputs.environment || (github.event_name == 'pull_request' && github.base_ref == 'main' && 'ci preview prod') || (github.event_name == 'pull_request' && github.base_ref == 'staging' && 'ci preview staging') || (github.event_name == 'push' && github.ref == 'refs/heads/main' && 'prod') || (github.event_name == 'push' && github.ref == 'refs/heads/staging' && 'staging') || 'dev' }} - ${{ inputs.action || (github.event_name == 'pull_request' && 'provision') || 'up' }})
 
 on:
   workflow_dispatch:
@@ -26,95 +27,35 @@ on:
   push:
     branches:
       - main
+      - staging
     paths:
       - 'infra/terraform/**'
       - 'src/**'
       - 'apps/**'
       - 'azure.yaml'
-      - '.github/workflows/deploy-azd.yml'
+      - '.github/workflows/_template-deploy-azd.yml'
+
   pull_request:
     branches:
       - main
+      - staging
     paths:
       - 'infra/terraform/**'
       - 'azure.yaml'
-      - '.github/workflows/deploy-azd.yml'
+      - '.github/workflows/_template-deploy-azd.yml'
 
 jobs:
   # ============================================================================
-  # UNIFIED DEPLOYMENT WITH AZD
+  # DEPLOY - Calls the reusable template workflow
   # ============================================================================
   deploy:
-    name: 🚀 Deploy with Azure Developer CLI
-    uses: ./.github/workflows/deploy-azd.yml
+    name: 🚀 Deploy
+    uses: ./.github/workflows/_template-deploy-azd.yml
     with:
-      environment: ${{ inputs.environment || 'dev' }}
-      action: ${{ inputs.action || 'up' }}
-      # # Use repository variables for remote state with fallbacks
-      # rs_resource_group: ${{ vars.RS_RESOURCE_GROUP || 'Default-ActivityLogAlerts' }}
-      # rs_storage_account: ${{ vars.RS_STORAGE_ACCOUNT || 'rtagent' }}
-      # rs_container_name: ${{ vars.RS_CONTAINER_NAME || 'tfstate' }}
+      # For workflow_dispatch: use input
+      # For push to main: deploy to prod
+      # For push to staging: deploy to staging
+      # For pull_request: use target branch to determine environment (staging for staging, dev for main)
+      environment: ${{ inputs.environment || (github.event_name == 'push' && github.ref == 'refs/heads/main' && 'prod') || (github.event_name == 'push' && github.ref == 'refs/heads/staging' && 'staging') || (github.event_name == 'pull_request' && github.base_ref == 'main' && 'prod') || (github.event_name == 'pull_request' && github.base_ref == 'staging' && 'staging') || 'dev' }}
+      action: ${{ inputs.action || (github.event_name == 'pull_request' && 'provision') || 'up' }}
     secrets: inherit
-
-  # ============================================================================
-  # DEPLOYMENT SUMMARY
-  # ============================================================================
-  summary:
-    name: 📋 Deployment Summary
-    runs-on: ubuntu-latest
-    needs: [deploy]
-    if: always() && github.event_name != 'pull_request'
-    
-    steps:
-      - name: 📋 Generate Summary
-        run: |
-          echo "## 🎯 Azure Developer CLI Deployment Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          DEPLOYMENT_STATUS="${{ needs.deploy.result }}"
-          ACTION="${{ inputs.action || 'up' }}"
-          ENVIRONMENT="${{ inputs.environment || 'dev' }}"
-          
-          echo "| Component | Status | Environment | Action |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----------|--------|-------------|---------|" >> $GITHUB_STEP_SUMMARY
-          
-          if [ "$DEPLOYMENT_STATUS" = "success" ]; then
-            echo "| 🚀 Deployment | ✅ Success | \`$ENVIRONMENT\` | \`$ACTION\` |" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "| 🚀 Deployment | ❌ Failed | \`$ENVIRONMENT\` | \`$ACTION\` |" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [ "$ACTION" != "down" ] && [ "$DEPLOYMENT_STATUS" = "success" ]; then
-            echo "### 🔗 Application URLs" >> $GITHUB_STEP_SUMMARY
-            
-            if [ -n "${{ needs.deploy.outputs.frontend_url }}" ]; then
-              echo "- 🌐 **Frontend**: [${{ needs.deploy.outputs.frontend_url }}](${{ needs.deploy.outputs.frontend_url }})" >> $GITHUB_STEP_SUMMARY
-            fi
-            
-            if [ -n "${{ needs.deploy.outputs.backend_url }}" ]; then
-              echo "- 🔧 **Backend**: [${{ needs.deploy.outputs.backend_url }}](${{ needs.deploy.outputs.backend_url }})" >> $GITHUB_STEP_SUMMARY
-            fi
-            
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### 📊 Resource Information" >> $GITHUB_STEP_SUMMARY
-            echo "- 📦 **Resource Group**: \`${{ needs.deploy.outputs.resource_group }}\`" >> $GITHUB_STEP_SUMMARY
-            echo "- 🌍 **Environment**: \`$ENVIRONMENT\`" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🛠️ Azure Developer CLI" >> $GITHUB_STEP_SUMMARY
-          echo "This deployment was managed using Azure Developer CLI (azd) with:" >> $GITHUB_STEP_SUMMARY
-          echo "- 🏗️ **Infrastructure**: Terraform-based provisioning" >> $GITHUB_STEP_SUMMARY
-          echo "- 📦 **Application**: Container-based deployment" >> $GITHUB_STEP_SUMMARY
-          echo "- 🔄 **Lifecycle**: Complete deployment lifecycle management" >> $GITHUB_STEP_SUMMARY
-          echo "- 📋 **Preview**: Terraform plan preview for pull requests" >> $GITHUB_STEP_SUMMARY
-          
-          if [ "$DEPLOYMENT_STATUS" = "success" ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### 🎯 Next Steps" >> $GITHUB_STEP_SUMMARY
-            echo "- Test your application using the URLs above" >> $GITHUB_STEP_SUMMARY
-            echo "- Monitor resources in the [Azure Portal](https://portal.azure.com)" >> $GITHUB_STEP_SUMMARY
-            echo "- Check logs with \`azd monitor\`" >> $GITHUB_STEP_SUMMARY
-          fi

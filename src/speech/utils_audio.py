@@ -51,9 +51,7 @@ def check_audio_file(file_path: str) -> bool:
         logger.info(f"Two-block Aligned: {is_two_block_aligned}")
 
         # Return False if any condition is not met
-        return (
-            is_pcm_format and is_mono and is_valid_sample_rate and is_two_block_aligned
-        )
+        return is_pcm_format and is_mono and is_valid_sample_rate and is_two_block_aligned
 
 
 def log_audio_characteristics(file_path: str):

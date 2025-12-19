@@ -5,9 +5,9 @@ Simplified Test for ACS Events Architecture
 Tests the core refactoring without heavy dependencies.
 """
 
-import pytest
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
+
 from azure.core.messaging import CloudEvent
 
 
@@ -72,9 +72,7 @@ class MockCallEventHandlers:
 
             event_data = context.get_event_data()
             if "target_number" in event_data:
-                context.memo_manager.update_context(
-                    "target_number", event_data["target_number"]
-                )
+                context.memo_manager.update_context("target_number", event_data["target_number"])
 
             context.memo_manager.update_context("call_direction", "outbound")
 
@@ -170,13 +168,13 @@ class MockCallEventProcessor:
                 for handler in handlers:
                     try:
                         await handler(context)
-                    except Exception as e:
+                    except Exception:
                         # Individual handler failure doesn't fail the event processing
                         pass
 
                 processed += 1
 
-            except Exception as e:
+            except Exception:
                 failed += 1
 
         self._stats["events_processed"] += processed

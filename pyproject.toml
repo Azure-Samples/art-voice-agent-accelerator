@@ -11,7 +11,7 @@ requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [
     { name = "Pablo Salvador", email = "pablosalvador11@gmail.com" },
-    { name = "Jin Lee" }
+    { name = "Jin Lee", email = "jinle@microsoft.com" }
 ]
 keywords = ["azure", "speech", "voice", "tts", "stt", "real-time", "audio", "ai", "communication-services"]
 classifiers = [
@@ -26,56 +26,130 @@ classifiers = [
     "Topic :: Communications :: Telephony",
     "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
+dependencies = [
+    # Core FastAPI microservices stack
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.5.0",
+    "pydantic[email]",
+    "pydantic-settings>=2.1.0",
+    "starlette>=0.27.0",
+    "redis>=5.0.0",
+    "redis-entraid>=1.0.0",
+    "aiohttp>=3.9.0",
+    "python-multipart>=0.0.6",
+    "pyjwt",
+    # Azure services
+    "azure-cosmos>=4.5.0",
+    "azure-identity>=1.15.0",
+    "azure-storage-blob>=12.19.0",
+    "azure-cognitiveservices-speech>=1.45.0",
+    "azure-communication-callautomation>=1.4.0",
+    "azure-communication-sms",
+    "azure-communication-email",
+    "azure-communication-identity>=1.5.0",
+    "azure-keyvault-secrets>=4.7.0",
+    "azure-eventgrid>=4.10.0",
+    "azure-appconfiguration>=1.7.0",
+    "azure-appconfiguration-provider>=1.0.0",
+    "azure-ai-agents==1.2.0b5",
+    "azure-ai-projects==1.0.0",
+    "azure-ai-voicelive==1.0.0",
+    # Azure monitoring and telemetry
+    "azure-monitor-opentelemetry>=1.6.11",
+    "opentelemetry-sdk",
+    "opentelemetry-instrumentation",
+    "opentelemetry-instrumentation-fastapi",
+    "opentelemetry-instrumentation-requests",
+    "opentelemetry-instrumentation-urllib",
+    "opentelemetry-instrumentation-urllib3",
+    # Azure + misc
+    "azure-core>=1.29.0",
+    "colorama>=0.4.6",
+    # AI and OpenAI integration
+    "openai>=1.50.0",
+    # HTTP clients
+    "httpx>=0.27.0",
+    "aiofiles>=23.0.0",
+    # Async and networking tools
+    "tenacity>=8.5.0",
+    "websockets>=12.0",
+    "websocket-client>=1.6.0",
+    "backoff>=2.0.0",
+    # Data processing and YAML configuration
+    "numpy>=1.24.0",
+    "python-dotenv>=1.0.0",
+    "python-json-logger>=2.0.0",
+    "jinja2>=3.1.0",
+    "typing-extensions>=4.8.0",
+    "langdetect>=1.0.9",
+    "pyyaml>=6.0.0",
+    "pyyaml-include>=1.3.0",
+    # Audio processing
+    # NOTE: local microphone capture/playback deps live in the `dev` extra.
+    # Database drivers
+    "pymongo>=4.6.0",
+    "rapidfuzz>=3.13.0",
+]
 
 [project.urls]
-Documentation = "https://azure-samples.github.io/art-voice-agent-accelerator/"
-Source = "https://github.com/Azure-Samples/art-voice-agent-accelerator"
-Tracker = "https://github.com/Azure-Samples/art-voice-agent-accelerator/issues"
-
-# Read dependencies from requirements.txt
-dynamic = ["dependencies"]
+Documentation = "https://aiappsgbbfactory.github.io/art-voice-agent-accelerator/"
+Source = "https://github.com/aiappsgbbfactory/art-voice-agent-accelerator"
+Tracker = "https://github.com/aiappsgbbfactory/art-voice-agent-accelerator/issues"
 
 [project.optional-dependencies]
 dev = [
-  # Code quality and tooling
-  "isort==5.9.3",
-  "black[jupyter]==25.1.0",
-  "flake8==3.9.2",
-  "interrogate==1.4.0",
-  "pre-commit==2.14.0",
-  "types-requests",
-  "ruff",
-  "bandit",
-  "pylint",
-  "pytest",
-  "pytest-asyncio",
-  "pytest-cov",
-  "types-PyYAML",
-  "uvicorn"
+    # Testing
+    "pytest>=7.4.0",
+    "pytest-asyncio",
+    "pytest-cov",
+    "anyio",
+    # Code quality
+    "black[jupyter]==25.1.0",
+    "isort==5.9.3",
+    "flake8==3.9.2",
+    "ruff",
+    "pylint",
+    "bandit",
+    # Type checking
+    "types-requests",
+    "types-PyYAML",
+    # Docstring coverage
+    "interrogate==1.4.0",
+    # Pre-commit hooks
+    "pre-commit==2.14.0",
+    # Load testing
+    "locust>=2.20.0",
+
+    # Local audio (mic capture / playback)
+    "sounddevice>=0.4.6",
+    "pyaudio>=0.2.11",
 ]
 
 docs = [
-    "mkdocs>=1.5.0",
-    "mkdocs-material>=9.0.0",
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.4.0",
     "mkdocstrings[python]>=0.20.0",
     "pymdown-extensions>=10.0.0",
+    "mkdocs-mermaid2-plugin>=1.2.2",
+    "neoteroi-mkdocs==1.1.3",
 ]
+
 [project.scripts]
-# Define entry points for uv run
-rtagent-server = "apps.rtagent.backend.main:main"
+artagent-server = "apps.artagent.backend.main:main"
 
-[tool.setuptools.dynamic]
-dependencies = {file = ["requirements.txt"]}
-
+# =============================================================================
+# uv Configuration
+# =============================================================================
 [tool.uv]
-# UV-specific configuration
-dev-dependencies = [
-  "uvicorn[standard]>=0.24.0",
-]
+# uv will use [project.optional-dependencies].dev automatically with --extra dev
 
 [tool.uv.sources]
-# Optional: specify custom package sources if needed
+# Use default PyPI index
 
+# =============================================================================
+# Code Formatting & Linting
+# =============================================================================
 [tool.black]
 line-length = 100
 target-version = ["py311"]
