@@ -4,7 +4,7 @@
 
 # Azure Real-Time (ART) Agent Accelerator
 
-[📖 Documentation](https://azure-samples.github.io/art-voice-agent-accelerator/) · [🚀 Quick Start](#getting-started) · [🏗️ Architecture](#the-how-architecture) · [🎨 Community](docs/community/artist-certification.md)
+[📖 Documentation](https://aiappsgbbfactory.github.io/art-voice-agent-accelerator/) · [🚀 Quick Start](#getting-started) · [🏗️ Architecture](#the-how-architecture) · [🎨 Community](docs/community/artist-certification.md)
 
 > **TL;DR**: Build real-time, multimodal and omnichannel agents on Azure in minutes, not months. Our approach is code-first, modular, ops-friendly & extensible.
 
@@ -152,27 +152,31 @@ azd up   # ~15 min for complete infra and code deployment
 ### 🗺️ Repository Structure
 
 ```
-📁 apps/artagent/           # Main application
-  ├── 🔧 backend/          # FastAPI + WebSockets voice pipeline
-  ├── 🌐 frontend/         # Vite + React demo client
-  └── 📜 scripts/          # Helper launchers
-📁 src/                    # Core libraries (ACS, Speech, AOAI, Redis, Cosmos, VAD, tools)
-📁 samples/                # Tutorials and examples (hello_world, labs)
-📁 infra/                  # Infrastructure as Code (Terraform)
-📁 docs/                   # Guides and references
-📁 tests/                  # Pytest suite and load testing
-📁 utils/                  # Logging/telemetry helpers
+📁 apps/artagent/              # Main application
+  ├── 🔧 backend/             # FastAPI + WebSockets voice pipeline
+  │   ├── registries/         # Agent & scenario definitions
+  │   │   ├── agentstore/     # YAML agent configs + Jinja2 prompts
+  │   │   ├── scenariostore/  # Multi-agent orchestration flows
+  │   │   └── toolstore/      # Pluggable business tools
+  │   └── voice/              # Orchestrators (SpeechCascade, VoiceLive)
+  └── 🌐 frontend/            # Vite + React demo client
+📁 src/                       # Core libraries (ACS, Speech, AOAI, Redis, Cosmos, VAD)
+📁 samples/                   # Tutorials (hello_world, voice_live_sdk, labs)
+📁 infra/                     # Infrastructure as Code (Terraform + Bicep)
+📁 docs/                      # Guides and references
+📁 tests/                     # Pytest suite and load testing
+📁 utils/                     # Logging/telemetry helpers
 ```
 
 ### 📚 Documentation Guides
 
-- Start here: [Getting started](https://azure-samples.github.io/art-voice-agent-accelerator/getting-started/)
-- Deploy in ~15 minutes: [Quick start](https://azure-samples.github.io/art-voice-agent-accelerator/getting-started/quickstart/)
-- Run locally: [Local development](https://azure-samples.github.io/art-voice-agent-accelerator/getting-started/local-development/)
-- Setup: [Prerequisites](https://azure-samples.github.io/art-voice-agent-accelerator/getting-started/prerequisites/)
-- Try the UI: [Demo guide](https://azure-samples.github.io/art-voice-agent-accelerator/getting-started/demo-guide/)
-- Production guidance: [Deployment guide](https://azure-samples.github.io/art-voice-agent-accelerator/deployment/)
-- Understand the system: [Architecture](https://azure-samples.github.io/art-voice-agent-accelerator/architecture/)
+- Start here: [Getting started](https://aiappsgbbfactory.github.io/art-voice-agent-accelerator/getting-started/)
+- Deploy in ~15 minutes: [Quick start](https://aiappsgbbfactory.github.io/art-voice-agent-accelerator/getting-started/quickstart/)
+- Run locally: [Local development](https://aiappsgbbfactory.github.io/art-voice-agent-accelerator/getting-started/local-development/)
+- Setup: [Prerequisites](https://aiappsgbbfactory.github.io/art-voice-agent-accelerator/getting-started/prerequisites/)
+- Try the UI: [Demo guide](https://aiappsgbbfactory.github.io/art-voice-agent-accelerator/getting-started/demo-guide/)
+- Production guidance: [Deployment guide](https://aiappsgbbfactory.github.io/art-voice-agent-accelerator/deployment/)
+- Understand the system: [Architecture](https://aiappsgbbfactory.github.io/art-voice-agent-accelerator/architecture/)
 - IaC details (repo): [infra/README.md](infra/README.md)
 
 

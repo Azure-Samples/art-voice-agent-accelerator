@@ -1,12 +1,3 @@
-### UI Orientation (Screenshots)
-
-For a fast orientation to the UI and agent setup:
-
-- Agent Builder initial view: ![Agent Builder - Initial](../assets/01-agent-builder-initial.png)
-- Template selection flow: ![Template Selected](../assets/02-template-selected.png)
-
-Prefer a full walkthrough? See [Quickstart: Step-by-Step](quickstart.md#step-by-step-build-your-first-agent) for numbered instructions with images.
-
 # :material-laptop: Local Development
 
 !!! info "Prerequisite: Azure Resources"
@@ -139,7 +130,8 @@ cp .env.sample .env
 Required for ACS callbacks (phone calls). Skip if only using browser.
 
 ```bash
-devtunnel host -p 8010 --allow-anonymous
+# Verify it exists
+cat .env.local
 ```
 
 Copy the HTTPS URL (e.g., `https://abc123-8010.usw3.devtunnels.ms`) and set it:
@@ -152,7 +144,7 @@ BASE_URL=https://abc123-8010.usw3.devtunnels.ms
 !!! warning "URL Changes on Restart"
     If the tunnel restarts, you get a new URL. Update `BASE_URL` and any ACS Event Grid subscriptions.
 
----
+### Option B: Legacy — Full `.env` File (Manual Setup)
 
 ## :material-numeric-4-circle: Start Backend
 
@@ -239,7 +231,13 @@ docker-compose up --build
 | Frontend | http://localhost:8080 |
 | Backend | http://localhost:8010 |
 
----
+1. Open http://localhost:5173
+2. Allow microphone access
+3. Start talking
+4. You should see:
+    - Transcripts appearing
+    - AI responses
+    - Audio playback
 
 ## :material-phone: Phone (PSTN) Setup
 
@@ -259,7 +257,10 @@ docker-compose up --build
 
 📚 **Full guide:** [Phone Number Setup](../deployment/phone-number-setup.md)
 
----
+| Configuration | What It Does |
+|---------------|--------------|
+| `[RT Agent] Python Debugger: FastAPI` | Debug backend with breakpoints |
+| `[RT Agent] React App: Browser Debug` | Debug frontend in browser |
 
 ## :material-bug: Troubleshooting
 
