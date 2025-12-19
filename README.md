@@ -152,16 +152,20 @@ azd up   # ~15 min for complete infra and code deployment
 ### 🗺️ Repository Structure
 
 ```
-📁 apps/artagent/           # Main application
-  ├── 🔧 backend/          # FastAPI + WebSockets voice pipeline
-  ├── 🌐 frontend/         # Vite + React demo client
-  └── 📜 scripts/          # Helper launchers
-📁 src/                    # Core libraries (ACS, Speech, AOAI, Redis, Cosmos, VAD, tools)
-📁 samples/                # Tutorials and examples (hello_world, labs)
-📁 infra/                  # Infrastructure as Code (Terraform)
-📁 docs/                   # Guides and references
-📁 tests/                  # Pytest suite and load testing
-📁 utils/                  # Logging/telemetry helpers
+📁 apps/artagent/              # Main application
+  ├── 🔧 backend/             # FastAPI + WebSockets voice pipeline
+  │   ├── registries/         # Agent & scenario definitions
+  │   │   ├── agentstore/     # YAML agent configs + Jinja2 prompts
+  │   │   ├── scenariostore/  # Multi-agent orchestration flows
+  │   │   └── toolstore/      # Pluggable business tools
+  │   └── voice/              # Orchestrators (SpeechCascade, VoiceLive)
+  └── 🌐 frontend/            # Vite + React demo client
+📁 src/                       # Core libraries (ACS, Speech, AOAI, Redis, Cosmos, VAD)
+📁 samples/                   # Tutorials (hello_world, voice_live_sdk, labs)
+📁 infra/                     # Infrastructure as Code (Terraform + Bicep)
+📁 docs/                      # Guides and references
+📁 tests/                     # Pytest suite and load testing
+📁 utils/                     # Logging/telemetry helpers
 ```
 
 ### 📚 Documentation Guides
