@@ -450,59 +450,57 @@ task_enable_easyauth() {
         footer
         return 0
     fi
+    # Interactive mode
+    log ""
+    log "EasyAuth adds Microsoft Entra ID authentication to your frontend."
+    log "Users will need to sign in with their organizational account."
+    log ""
+    log "Benefits:"
+    log "  • Secure access with Microsoft Entra ID"
+    log "  • No secrets to manage (uses Federated Identity Credentials)"
+    log "  • Works with your organization's identity policies"
+    log ""
+    log "Note: The backend API remains unsecured (accessible within your network)."
+    log ""
+    log "  1) Enable EasyAuth now"
+    log "  2) Skip for now (can enable later)"
+    log ""
+    log "(Auto-skipping in 15 seconds if no input...)"
+    
+    if read -t 15 -rp "│ Choice (1-2): " choice; then
+        : # Got input
     else
-        # Interactive mode
         log ""
-        log "EasyAuth adds Microsoft Entra ID authentication to your frontend."
-        log "Users will need to sign in with their organizational account."
-        log ""
-        log "Benefits:"
-        log "  • Secure access with Microsoft Entra ID"
-        log "  • No secrets to manage (uses Federated Identity Credentials)"
-        log "  • Works with your organization's identity policies"
-        log ""
-        log "Note: The backend API remains unsecured (accessible within your network)."
-        log ""
-        log "  1) Enable EasyAuth now"
-        log "  2) Skip for now (can enable later)"
-        log ""
-        log "(Auto-skipping in 15 seconds if no input...)"
-        
-        if read -t 15 -rp "│ Choice (1-2): " choice; then
-            : # Got input
-        else
-            log ""
-            info "No input received, skipping EasyAuth configuration"
-            choice="2"
-        fi
-        
-        case "$choice" in
-            1)
-                log ""
-                log "Enabling EasyAuth..."
-                if bash "$easyauth_script" -g "$resource_group" -a "$container_app" -i "$uami_client_id"; then
-                    success "EasyAuth enabled successfully"
-                    # Set azd env variable to prevent re-running
-                    azd_set "EASYAUTH_ENABLED" "true"
-                    log ""
-                    log "Your frontend now requires authentication."
-                    log "Users will be redirected to Microsoft login."
-                else
-                    fail "Failed to enable EasyAuth"
-                fi
-                ;;
-            *)
-                info "Skipped - you can enable EasyAuth later by running:"
-                log ""
-                log "  ./devops/scripts/azd/helpers/enable-easyauth.sh \\"
-                log "    -g \"$resource_group\" \\"
-                log "    -a \"$container_app\" \\"
-                log "    -i \"$uami_client_id\""
-                ;;
-        esac
-        
-        footer
+        info "No input received, skipping EasyAuth configuration"
+        choice="2"
     fi
+    
+    case "$choice" in
+        1)
+            log ""
+            log "Enabling EasyAuth..."
+            if bash "$easyauth_script" -g "$resource_group" -a "$container_app" -i "$uami_client_id"; then
+                success "EasyAuth enabled successfully"
+                # Set azd env variable to prevent re-running
+                azd_set "EASYAUTH_ENABLED" "true"
+                log ""
+                log "Your frontend now requires authentication."
+                log "Users will be redirected to Microsoft login."
+            else
+                fail "Failed to enable EasyAuth"
+            fi
+            ;;
+        *)
+            info "Skipped - you can enable EasyAuth later by running:"
+            log ""
+            log "  ./devops/scripts/azd/helpers/enable-easyauth.sh \\"
+            log "    -g \"$resource_group\" \\"
+            log "    -a \"$container_app\" \\"
+            log "    -i \"$uami_client_id\""
+            ;;
+    esac
+    
+    footer
 }
 
 # ============================================================================
