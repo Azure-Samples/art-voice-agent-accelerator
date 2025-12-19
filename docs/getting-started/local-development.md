@@ -1,12 +1,3 @@
-### UI Orientation (Screenshots)
-
-For a fast orientation to the UI and agent setup:
-
-- Agent Builder initial view: ![Agent Builder - Initial](../assets/01-agent-builder-initial.png)
-- Template selection flow: ![Template Selected](../assets/02-template-selected.png)
-
-Prefer a full walkthrough? See [Quickstart: Step-by-Step](quickstart.md#step-by-step-build-your-first-agent) for numbered instructions with images.
-
 # :material-laptop: Local Development
 
 !!! info "Prerequisite: Azure Resources"
