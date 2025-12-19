@@ -202,26 +202,16 @@ jobs:
           azd env set RS_RESOURCE_GROUP "$RS_RESOURCE_GROUP"
           azd env set RS_STORAGE_ACCOUNT "$RS_STORAGE_ACCOUNT"
           azd env set RS_CONTAINER_NAME "$RS_CONTAINER_NAME"
+          azd env set RS_STATE_KEY "${AZURE_ENV_NAME}.tfstate"
           
           # Set location from tfvars
           TFVARS_FILE="infra/terraform/params/main.tfvars.${AZURE_ENV_NAME}.json"
           [ -f "$TFVARS_FILE" ] && azd env set AZURE_LOCATION "$(jq -r '.location // "eastus2"' "$TFVARS_FILE")"
 
-      - name: 🔧 Configure Backend
+      - name: 🪝 Run Preprovision Hook
         run: |
-          cat > infra/terraform/backend.tf << EOF
-          terraform {
-            backend "azurerm" {
-              resource_group_name  = "$RS_RESOURCE_GROUP"
-              storage_account_name = "$RS_STORAGE_ACCOUNT"
-              container_name       = "$RS_CONTAINER_NAME"
-              key                  = "${AZURE_ENV_NAME}.tfstate"
-              use_azuread_auth     = true
-            }
-          }
-          EOF
-        env:
-          ARM_USE_OIDC: ${{ env.USE_OIDC }}
+          echo "🔧 Running azd hooks run preprovision..."
+          azd hooks run preprovision
 
       - name: 📋 Run Preview
         id: preview
