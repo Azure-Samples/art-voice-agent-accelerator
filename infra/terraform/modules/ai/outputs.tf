@@ -1,6 +1,6 @@
 output "account_name" {
   description = "Name of the AI Foundry Account"
-  value = azapi_resource.ai_foundry_account.name
+  value       = azapi_resource.ai_foundry_account.name
 }
 
 output "account_id" {
@@ -11,6 +11,11 @@ output "account_id" {
 output "endpoint" {
   description = "Endpoint for the AI Foundry account. Use this endpoint for Speech services, Voice Live, Doc Intel, etc."
   value       = try(azapi_resource.ai_foundry_account.output.properties.endpoint, null)
+}
+
+output "project_endpoint" {
+  description = "Endpoint for the AI Foundry project."
+  value       = try(azapi_resource.ai_foundry_project.output.properties.endpoint, null)
 }
 
 output "openai_endpoint" {

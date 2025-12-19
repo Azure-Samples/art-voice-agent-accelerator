@@ -12,11 +12,15 @@ from pathlib import Path
 import certifi
 import websocket
 from gevent import sleep
-from locust import User, between, events, task
+from locust import User, between, task
 from websocket import WebSocketConnectionClosedException, WebSocketTimeoutException
 
 # Treat benign WebSocket closes as non-errors (1000/1001/1006 often benign in load)
-WS_IGNORE_CLOSE_EXCEPTIONS = os.getenv("WS_IGNORE_CLOSE_EXCEPTIONS", "true").lower() in {"1", "true", "yes"}
+WS_IGNORE_CLOSE_EXCEPTIONS = os.getenv("WS_IGNORE_CLOSE_EXCEPTIONS", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+}
 
 ## For debugging websocket connections
 # websocket.enableTrace(True)
@@ -50,8 +54,11 @@ WS_OPERATION_TIMEOUT_SEC = float(os.getenv("WS_OPERATION_TIMEOUT_SEC", "60.0"))
 def _safe_timeout_value(value: float, minimum: float = 0.01) -> float:
     return max(minimum, value)
 
+
 # If your endpoint requires explicit empty AudioData frames, use this (preferred for semantic VAD)
-FIRST_BYTE_TIMEOUT_SEC = float(os.getenv("FIRST_BYTE_TIMEOUT_SEC", "10.0"))  # max wait for first server byte
+FIRST_BYTE_TIMEOUT_SEC = float(
+    os.getenv("FIRST_BYTE_TIMEOUT_SEC", "10.0")
+)  # max wait for first server byte
 BARGE_QUIET_MS = int(
     os.getenv("BARGE_QUIET_MS", "2000")
 )  # consider response ended after this quiet gap (defaults to 2s)
@@ -60,11 +67,14 @@ BARGE_REENTRY_MS = int(
 )  # wait this long after first audio before simulating a barge-in
 BARGE_CHUNKS = int(os.getenv("BARGE_CHUNKS", "20"))  # number of audio chunks to send for barge-in
 # Any server message containing these tokens completes a turn:
-RESPONSE_TOKENS = tuple((os.getenv("RESPONSE_TOKENS", "recognizer,greeting,response,transcript,result")
-                         .lower().split(",")))
+RESPONSE_TOKENS = tuple(
+    os.getenv("RESPONSE_TOKENS", "recognizer,greeting,response,transcript,result")
+    .lower()
+    .split(",")
+)
 
 # End-of-response detection tokens for barge-in
-END_TOKENS = tuple((os.getenv("END_TOKENS", "final,end,completed,stopped,barge").lower().split(",")))
+END_TOKENS = tuple(os.getenv("END_TOKENS", "final,end,completed,stopped,barge").lower().split(","))
 
 
 # Module-level zeroed chunk buffer for explicit silence
@@ -74,6 +84,7 @@ if BYTES_PER_SAMPLE == 1:
 else:
     # PCM16LE (and other signed PCM) silence is 0x00
     ZERO_CHUNK = b"\x00" * CHUNK_BYTES
+
 
 def generate_silence_chunk(duration_ms: float = 100.0, sample_rate: int = 16000) -> bytes:
     """Generate PCM16LE silence with low-level noise to keep STT engaged."""
@@ -85,6 +96,7 @@ def generate_silence_chunk(duration_ms: float = 100.0, sample_rate: int = 16000)
         noise = random.randint(-18, 18)
         audio_data.extend(struct.pack("<h", noise))
     return bytes(audio_data)
+
 
 class ACSUser(User):
     def _resolve_ws_url(self) -> str:
@@ -132,7 +144,9 @@ class ACSUser(User):
                 except Exception:
                     pass
 
-    def _measure_ttfb(self, max_wait_sec: float, turn_start_ts: float | None = None) -> tuple[bool, float]:
+    def _measure_ttfb(
+        self, max_wait_sec: float, turn_start_ts: float | None = None
+    ) -> tuple[bool, float]:
         """Time-To-First-Byte measured from the beginning of the turn."""
         start = time.time()
         deadline = start + max_wait_sec
@@ -173,6 +187,7 @@ class ACSUser(User):
                 if last_msg_at and (time.time() - last_msg_at) >= quiet_sec:
                     return True, (time.time() - turn_anchor) * 1000.0
         return False, (time.time() - turn_anchor) * 1000.0
+
     wait_time = between(0.3, 1.1)
 
     def _record(self, name: str, response_time_ms: float, exc: Exception | None = None):
@@ -183,7 +198,7 @@ class ACSUser(User):
             response_time=response_time_ms,
             response_length=0,
             exception=exc,
-            context={"call_connection_id": getattr(self, "call_connection_id", None)}
+            context={"call_connection_id": getattr(self, "call_connection_id", None)},
         )
 
     def _connect_ws(self):
@@ -208,7 +223,7 @@ class ACSUser(User):
                 "cert_reqs": ssl.CERT_REQUIRED,
                 "ca_certs": certifi.where(),
                 "check_hostname": True,
-                "server_hostname": host,   # ensure SNI
+                "server_hostname": host,  # ensure SNI
             }
         origin_scheme = "https" if url.startswith("wss://") else "http"
         # Explicitly disable proxies even if env vars are set
@@ -238,8 +253,8 @@ class ACSUser(User):
                 "encoding": "PCM",
                 "sampleRate": SAMPLE_RATE,
                 "channels": CHANNELS,
-                "length": CHUNK_BYTES
-            }
+                "length": CHUNK_BYTES,
+            },
         }
         self.ws.send(json.dumps(meta))
 
@@ -286,10 +301,10 @@ class ACSUser(User):
     def _next_chunk(self) -> bytes:
         end = self.offset + CHUNK_BYTES
         if end <= len(self.audio):
-            chunk = self.audio[self.offset:end]
+            chunk = self.audio[self.offset : end]
         else:
             # wrap
-            chunk = self.audio[self.offset:] + self.audio[:end % len(self.audio)]
+            chunk = self.audio[self.offset :] + self.audio[: end % len(self.audio)]
         self.offset = end % len(self.audio)
         return chunk
 
@@ -300,9 +315,7 @@ class ACSUser(User):
         self.audio = Path(file_path).read_bytes()
         self.offset = 0
         return file_path
-    
 
-    
     def _send_audio_chunk(self):
         chunk = self._next_chunk()
         self._send_binary(chunk)
@@ -375,7 +388,7 @@ class ACSUser(User):
                         silence_chunk = generate_silence_chunk(100)
                         self._send_binary(silence_chunk)
                         sleep(0.1)
-                except WebSocketConnectionClosedException as e:
+                except WebSocketConnectionClosedException:
                     # Benign: server may close after completing turn; avoid counting as error
                     if WS_IGNORE_CLOSE_EXCEPTIONS:
                         # Reconnect for next operations/turns and continue
@@ -429,21 +442,29 @@ class ACSUser(User):
                 # Treat normal/idle WS closes as non-errors to reduce false positives in load reports
                 if WS_IGNORE_CLOSE_EXCEPTIONS:
                     # Optionally record a benign close event as success for observability
-                    self._record(name="websocket_closed", response_time_ms=(time.time() - t0) * 1000.0, exc=None)
+                    self._record(
+                        name="websocket_closed",
+                        response_time_ms=(time.time() - t0) * 1000.0,
+                        exc=None,
+                    )
                 else:
-                    self._record(name=f"turn_error[{Path(file_used).name if 'file_used' in locals() else 'unknown'}]",
-                                 response_time_ms=(time.time() - t0) * 1000.0, exc=e)
+                    self._record(
+                        name=f"turn_error[{Path(file_used).name if 'file_used' in locals() else 'unknown'}]",
+                        response_time_ms=(time.time() - t0) * 1000.0,
+                        exc=e,
+                    )
             except Exception as e:
-                turn_name = f"{Path(file_used).name}" if 'file_used' in locals() else "unknown"
-                self._record(name=f"turn_error[{turn_name}]", response_time_ms=(time.time() - t0) * 1000.0, exc=e)
+                turn_name = f"{Path(file_used).name}" if "file_used" in locals() else "unknown"
+                self._record(
+                    name=f"turn_error[{turn_name}]",
+                    response_time_ms=(time.time() - t0) * 1000.0,
+                    exc=e,
+                )
             sleep(PAUSE_BETWEEN_TURNS_SEC)
 
             turns_completed += 1
             elapsed = time.time() - conversation_start
-            if (
-                turns_completed >= TURNS_PER_USER
-                and elapsed >= MIN_CONVERSATION_DURATION_SEC
-            ):
+            if turns_completed >= TURNS_PER_USER and elapsed >= MIN_CONVERSATION_DURATION_SEC:
                 break
 
         # Close connection after completing the configured turns so the next task run starts fresh

@@ -7,13 +7,14 @@ to understand what the agent actually said during conversations.
 """
 
 import json
-import wave
-import tempfile
-from pathlib import Path
-from typing import List, Dict, Any
-import azure.cognitiveservices.speech as speechsdk
 import os
+import tempfile
+import wave
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import azure.cognitiveservices.speech as speechsdk
 
 
 @dataclass
@@ -89,9 +90,7 @@ class AudioToTextConverter:
         try:
             # Convert PCM to WAV if needed
             if audio_file_path.suffix.lower() == ".pcm":
-                with tempfile.NamedTemporaryFile(
-                    suffix=".wav", delete=False
-                ) as temp_wav:
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_wav:
                     wav_file_path = temp_wav.name
 
                 if not self.pcm_to_wav(str(audio_file_path), wav_file_path):
@@ -163,10 +162,10 @@ class AudioToTextConverter:
                 error_message=str(e),
             )
 
-    def process_conversation_recordings(self, conversation_file: str) -> Dict[str, Any]:
+    def process_conversation_recordings(self, conversation_file: str) -> dict[str, Any]:
         """Process all audio files in a conversation recording and add transcriptions."""
 
-        with open(conversation_file, "r") as f:
+        with open(conversation_file) as f:
             conversations = json.load(f)
 
         results = {
@@ -182,9 +181,7 @@ class AudioToTextConverter:
         print(f"🎤 Processing audio transcriptions from: {conversation_file}")
 
         for conv_idx, conversation in enumerate(conversations):
-            print(
-                f"\n📞 Conversation {conv_idx + 1}: {conversation['session_id'][:8]}..."
-            )
+            print(f"\n📞 Conversation {conv_idx + 1}: {conversation['session_id'][:8]}...")
 
             conv_result = {
                 "session_id": conversation["session_id"],
@@ -233,16 +230,12 @@ class AudioToTextConverter:
                                 print(
                                     f"    ❌ {audio_file_info.get('filename', 'audio')}: {transcription.error_message}"
                                 )
-                                results["transcription_summary"][
-                                    "failed_transcriptions"
-                                ] += 1
+                                results["transcription_summary"]["failed_transcriptions"] += 1
 
                             # Add transcription to results
                             turn_result["transcribed_agent_responses"].append(
                                 {
-                                    "audio_file": audio_file_info.get(
-                                        "filename", "unknown"
-                                    ),
+                                    "audio_file": audio_file_info.get("filename", "unknown"),
                                     "transcribed_text": transcription.transcribed_text,
                                     "confidence": transcription.confidence,
                                     "duration_s": transcription.duration_s,
@@ -253,9 +246,7 @@ class AudioToTextConverter:
 
                             results["transcription_summary"]["total_audio_files"] += 1
                 else:
-                    print(
-                        f"  📭 Turn {turn['turn_number']}: No audio files to transcribe"
-                    )
+                    print(f"  📭 Turn {turn['turn_number']}: No audio files to transcribe")
 
                 conv_result["turns"].append(turn_result)
 
@@ -263,9 +254,7 @@ class AudioToTextConverter:
 
         return results
 
-    def save_transcription_results(
-        self, results: Dict[str, Any], output_file: str = None
-    ):
+    def save_transcription_results(self, results: dict[str, Any], output_file: str = None):
         """Save transcription results to JSON file."""
 
         if output_file is None:
@@ -283,7 +272,7 @@ class AudioToTextConverter:
 
         # Print summary
         summary = results["transcription_summary"]
-        print(f"\n📊 TRANSCRIPTION SUMMARY:")
+        print("\n📊 TRANSCRIPTION SUMMARY:")
         print(f"   Total audio files: {summary['total_audio_files']}")
         print(f"   Successfully transcribed: {summary['successfully_transcribed']}")
         print(f"   Empty/no speech: {summary['empty_audio']}")
@@ -302,9 +291,7 @@ def main():
     """Main function for command-line usage."""
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description="Convert recorded conversation audio to text"
-    )
+    parser = argparse.ArgumentParser(description="Convert recorded conversation audio to text")
     parser.add_argument(
         "--conversation-file",
         "-f",
@@ -335,7 +322,7 @@ def main():
         # Save results
         converter.save_transcription_results(results, args.output)
 
-        print(f"\n✅ Audio transcription complete!")
+        print("\n✅ Audio transcription complete!")
 
     except Exception as e:
         print(f"❌ Error: {e}")

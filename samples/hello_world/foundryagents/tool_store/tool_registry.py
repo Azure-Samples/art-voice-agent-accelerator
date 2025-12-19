@@ -19,8 +19,10 @@ except ImportError:
 
 # Simple logger for standalone operation
 import logging
+
 logger = logging.getLogger("tool_registry")
-logging.basicConfig(level=logging.INFO)
+# NOTE: Avoid calling logging.basicConfig() in library modules.
+# It adds handlers to the root logger which can cause duplicate logs.
 
 
 # Tool Registry - maps tool names to actual functions (ARTAgent style)
@@ -35,13 +37,13 @@ TOOL_REGISTRY: Dict[str, Callable[..., Any]] = {
 def get_tool_function(tool_name: str) -> Callable[..., Any]:
     """
     Get a tool function by name from the registry.
-    
+
     Args:
         tool_name: Name of the tool to retrieve
-        
+
     Returns:
         The tool function
-        
+
     Raises:
         ValueError: If tool name is not found in registry
     """
@@ -64,7 +66,7 @@ def validate_tool_registry() -> bool:
             # Verify the function has proper type hints and docstring
             assert tool_func.__doc__, f"Tool {tool_name} missing docstring"
             assert tool_func.__annotations__, f"Tool {tool_name} missing type hints"
-        
+
         logger.info(f"✅ Tool registry validation passed for {len(TOOL_REGISTRY)} tools")
         return True
     except Exception as e:
@@ -76,17 +78,19 @@ if __name__ == "__main__":
     # Demo the registry
     print("🛠️  Customer Support Tool Registry")
     print("=" * 40)
-    
+
     if validate_tool_registry():
         print(f"📋 Registered {len(TOOL_REGISTRY)} tools:")
         for tool_name, tool_func in TOOL_REGISTRY.items():
             # Get first line of docstring for summary
-            doc_summary = tool_func.__doc__.split('\n')[1].strip() if tool_func.__doc__ else "No description"
+            doc_summary = (
+                tool_func.__doc__.split("\n")[1].strip() if tool_func.__doc__ else "No description"
+            )
             print(f"   • {tool_name}: {doc_summary}")
-            
+
         print("\n🧪 Testing a tool:")
-        test_tool = get_tool_function('check_order_status')
-        result = test_tool('TEST-12345')
+        test_tool = get_tool_function("check_order_status")
+        result = test_tool("TEST-12345")
         print(f"   check_order_status('TEST-12345') -> {type(result).__name__}")
     else:
         print("❌ Tool registry validation failed")

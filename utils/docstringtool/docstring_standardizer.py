@@ -26,13 +26,12 @@ Usage:
     python docstring_standardizer.py --validate      # Validate compliance
 """
 
+import argparse
 import ast
-import os
+import json
 import re
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
-import argparse
-import json
+from typing import Any
 
 
 class DocstringAnalyzer:
@@ -49,7 +48,7 @@ class DocstringAnalyzer:
     :raises ValueError: If root_path does not exist or is not accessible.
     """
 
-    def __init__(self, root_path: str, exclude_patterns: List[str] = None):
+    def __init__(self, root_path: str, exclude_patterns: list[str] = None):
         self.root_path = Path(root_path)
         self.exclude_patterns = exclude_patterns or [
             "__pycache__",
@@ -65,7 +64,7 @@ class DocstringAnalyzer:
         self.issues = []
         self.fixes = []
 
-    def find_python_files(self) -> List[Path]:
+    def find_python_files(self) -> list[Path]:
         """
         Discover all Python files in the project excluding specified patterns.
 
@@ -87,7 +86,7 @@ class DocstringAnalyzer:
 
         return python_files
 
-    def analyze_file(self, file_path: Path) -> Dict[str, Any]:
+    def analyze_file(self, file_path: Path) -> dict[str, Any]:
         """
         Analyze a single Python file for docstring quality and standards compliance.
 
@@ -101,7 +100,7 @@ class DocstringAnalyzer:
         :raises FileNotFoundError: If the specified file does not exist.
         """
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 content = f.read()
 
             tree = ast.parse(content)
@@ -132,7 +131,7 @@ class DocstringAnalyzer:
                 "issues": [f"Failed to parse file: {e}"],
             }
 
-    def _analyze_function(self, node: ast.FunctionDef, content: str) -> Dict[str, Any]:
+    def _analyze_function(self, node: ast.FunctionDef, content: str) -> dict[str, Any]:
         """
         Analyze a single function definition for docstring compliance.
 
@@ -160,9 +159,7 @@ class DocstringAnalyzer:
         return_annotation = ast.unparse(node.returns) if node.returns else None
 
         # Determine docstring quality
-        quality_score = self._score_docstring_quality(
-            docstring, params, return_annotation
-        )
+        quality_score = self._score_docstring_quality(docstring, params, return_annotation)
 
         return {
             "name": node.name,
@@ -172,15 +169,13 @@ class DocstringAnalyzer:
             "return_annotation": return_annotation,
             "docstring": docstring,
             "quality_score": quality_score,
-            "issues": self._identify_docstring_issues(
-                docstring, params, return_annotation
-            ),
+            "issues": self._identify_docstring_issues(docstring, params, return_annotation),
             "suggested_docstring": self._generate_standard_docstring(
                 node.name, params, return_annotation, docstring
             ),
         }
 
-    def _analyze_class(self, node: ast.ClassDef, content: str) -> Dict[str, Any]:
+    def _analyze_class(self, node: ast.ClassDef, content: str) -> dict[str, Any]:
         """
         Analyze a class definition for docstring compliance and method documentation.
 
@@ -215,9 +210,9 @@ class DocstringAnalyzer:
 
     def _score_docstring_quality(
         self,
-        docstring: Optional[str],
-        params: List[Dict],
-        return_annotation: Optional[str],
+        docstring: str | None,
+        params: list[dict],
+        return_annotation: str | None,
     ) -> float:
         """
         Calculate a quality score for the given docstring based on enterprise standards.
@@ -264,10 +259,10 @@ class DocstringAnalyzer:
 
     def _identify_docstring_issues(
         self,
-        docstring: Optional[str],
-        params: List[Dict],
-        return_annotation: Optional[str],
-    ) -> List[str]:
+        docstring: str | None,
+        params: list[dict],
+        return_annotation: str | None,
+    ) -> list[str]:
         """
         Identify specific issues with the current docstring format and content.
 
@@ -291,10 +286,10 @@ class DocstringAnalyzer:
         if not re.search(r":param\s+\w+:", docstring) and params:
             issues.append("Missing parameter documentation")
 
-        if not ":return:" in docstring and return_annotation:
+        if ":return:" not in docstring and return_annotation:
             issues.append("Missing return value documentation")
 
-        if not ":raises" in docstring:
+        if ":raises" not in docstring:
             issues.append("Missing exception documentation")
 
         # Check format compliance
@@ -309,9 +304,9 @@ class DocstringAnalyzer:
     def _generate_standard_docstring(
         self,
         func_name: str,
-        params: List[Dict],
-        return_annotation: Optional[str],
-        existing_docstring: Optional[str],
+        params: list[dict],
+        return_annotation: str | None,
+        existing_docstring: str | None,
     ) -> str:
         """
         Generate a standardized docstring following enterprise documentation format.
@@ -336,9 +331,7 @@ class DocstringAnalyzer:
         # Generate parameter documentation
         param_docs = []
         for param in params:
-            param_doc = (
-                f":param {param['name']}: {self._generate_param_description(param)}"
-            )
+            param_doc = f":param {param['name']}: {self._generate_param_description(param)}"
             param_docs.append(param_doc)
 
         # Generate return documentation
@@ -356,9 +349,7 @@ class DocstringAnalyzer:
 
         return "\\n".join(parts)
 
-    def _generate_class_docstring(
-        self, class_name: str, existing_docstring: Optional[str]
-    ) -> str:
+    def _generate_class_docstring(self, class_name: str, existing_docstring: str | None) -> str:
         """
         Generate a standardized class docstring following enterprise documentation format.
 
@@ -377,11 +368,11 @@ class DocstringAnalyzer:
         error handling, logging, and performance optimization. It integrates with
         the real-time voice application architecture to deliver reliable functionality."""
 
-        params_doc = f":param: Construction parameters depend on specific implementation requirements."
-        return_doc = f":return: Initialized {class_name} instance ready for operation."
-        raises_doc = (
-            f":raises ValueError: If initialization parameters are invalid or missing."
+        params_doc = (
+            ":param: Construction parameters depend on specific implementation requirements."
         )
+        return_doc = f":return: Initialized {class_name} instance ready for operation."
+        raises_doc = ":raises ValueError: If initialization parameters are invalid or missing."
 
         return f"""{brief}
 
@@ -391,7 +382,7 @@ class DocstringAnalyzer:
 {return_doc}
 {raises_doc}"""
 
-    def generate_report(self) -> Dict[str, Any]:
+    def generate_report(self) -> dict[str, Any]:
         """
         Generate a comprehensive report of docstring analysis across the codebase.
 
@@ -444,17 +435,13 @@ class DocstringAnalyzer:
                     quality_count += 1
 
         if quality_count > 0:
-            report["summary"]["average_quality_score"] = (
-                total_quality_score / quality_count
-            )
+            report["summary"]["average_quality_score"] = total_quality_score / quality_count
 
         report["recommendations"] = self._generate_recommendations(report)
 
         return report
 
-    def _generate_brief_description(
-        self, func_name: str, existing: Optional[str]
-    ) -> str:
+    def _generate_brief_description(self, func_name: str, existing: str | None) -> str:
         """Generate a brief description for the function."""
         if existing and len(existing.split(".")[0]) > 10:
             return existing.split(".")[0].strip() + "."
@@ -478,9 +465,7 @@ class DocstringAnalyzer:
         else:
             return f"Execute {func_name.replace('_', ' ')} operation."
 
-    def _generate_detailed_description(
-        self, func_name: str, existing: Optional[str]
-    ) -> str:
+    def _generate_detailed_description(self, func_name: str, existing: str | None) -> str:
         """Generate detailed description for the function."""
         base = f"This function implements {func_name.replace('_', ' ')} functionality with comprehensive error handling, logging, and performance optimization. It integrates with the real-time voice application architecture to provide reliable operation."
 
@@ -492,7 +477,7 @@ class DocstringAnalyzer:
 
         return base
 
-    def _generate_param_description(self, param: Dict[str, Any]) -> str:
+    def _generate_param_description(self, param: dict[str, Any]) -> str:
         """Generate parameter description based on name and type."""
         name = param["name"]
         annotation = param.get("annotation", "")
@@ -525,7 +510,7 @@ class DocstringAnalyzer:
         else:
             return f"Parameter for {name.replace('_', ' ')} specification."
 
-    def _generate_return_description(self, return_annotation: Optional[str]) -> str:
+    def _generate_return_description(self, return_annotation: str | None) -> str:
         """Generate return value description."""
         if not return_annotation:
             return "None upon successful completion of the operation."
@@ -566,7 +551,7 @@ class DocstringAnalyzer:
         """Generate exception description based on function purpose."""
         return f"If {func_name.replace('_', ' ')} operation fails due to invalid parameters or system state."
 
-    def _generate_recommendations(self, report: Dict[str, Any]) -> List[str]:
+    def _generate_recommendations(self, report: dict[str, Any]) -> list[str]:
         """Generate improvement recommendations based on analysis."""
         recommendations = []
 
@@ -577,10 +562,7 @@ class DocstringAnalyzer:
                 "Overall documentation quality is below enterprise standards. Consider systematic docstring improvement."
             )
 
-        if (
-            summary["functions_with_docstrings"] / max(summary["total_functions"], 1)
-            < 0.8
-        ):
+        if summary["functions_with_docstrings"] / max(summary["total_functions"], 1) < 0.8:
             recommendations.append(
                 "Many functions lack docstrings. Add comprehensive documentation to all public functions."
             )
@@ -590,9 +572,7 @@ class DocstringAnalyzer:
                 "Class documentation is incomplete. Add detailed class docstrings describing purpose and usage."
             )
 
-        recommendations.append(
-            "Implement automated docstring validation in CI/CD pipeline."
-        )
+        recommendations.append("Implement automated docstring validation in CI/CD pipeline.")
         recommendations.append(
             "Use the generated standardized docstrings to improve documentation coverage."
         )
@@ -615,19 +595,11 @@ def main():
     parser = argparse.ArgumentParser(
         description="Analyze and standardize Python docstrings for enterprise documentation"
     )
-    parser.add_argument(
-        "--scan", action="store_true", help="Analyze current docstring state"
-    )
-    parser.add_argument(
-        "--fix", action="store_true", help="Apply standardized docstrings"
-    )
-    parser.add_argument(
-        "--validate", action="store_true", help="Validate docstring compliance"
-    )
+    parser.add_argument("--scan", action="store_true", help="Analyze current docstring state")
+    parser.add_argument("--fix", action="store_true", help="Apply standardized docstrings")
+    parser.add_argument("--validate", action="store_true", help="Validate docstring compliance")
     parser.add_argument("--root", default=".", help="Root directory to analyze")
-    parser.add_argument(
-        "--output", default="docstring_report.json", help="Output report file"
-    )
+    parser.add_argument("--output", default="docstring_report.json", help="Output report file")
 
     args = parser.parse_args()
 
@@ -643,8 +615,8 @@ def main():
 
         # Print summary
         summary = report["summary"]
-        print(f"\\n📊 DOCSTRING ANALYSIS SUMMARY")
-        print(f"==============================")
+        print("\\n📊 DOCSTRING ANALYSIS SUMMARY")
+        print("==============================")
         print(f"Total Files Analyzed: {summary['analyzed_files']}")
         print(f"Total Functions: {summary['total_functions']}")
         print(f"Total Classes: {summary['total_classes']}")
@@ -652,8 +624,8 @@ def main():
         print(f"Classes with Docstrings: {summary['classes_with_docstrings']}")
         print(f"Average Quality Score: {summary['average_quality_score']:.2f}")
 
-        print(f"\\n🎯 RECOMMENDATIONS")
-        print(f"==================")
+        print("\\n🎯 RECOMMENDATIONS")
+        print("==================")
         for rec in report["recommendations"]:
             print(f"• {rec}")
 

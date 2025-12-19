@@ -3,9 +3,10 @@ Thread-safe session metrics for concurrent ACS calls.
 
 Provides atomic counters to prevent race conditions in session tracking.
 """
+
 import asyncio
 from datetime import datetime
-from typing import Dict, Any
+from typing import Any
 
 from utils.ml_logging import get_logger
 
@@ -26,7 +27,7 @@ class ThreadSafeSessionMetrics:
     """
 
     def __init__(self):
-        self._metrics: Dict[str, Any] = {
+        self._metrics: dict[str, Any] = {
             "active_connections": 0,  # Current active WebSocket connections (real-time)
             "total_connected": 0,  # Historical total connections made
             "total_disconnected": 0,  # Historical total disconnections
@@ -57,9 +58,7 @@ class ThreadSafeSessionMetrics:
         """
         async with self._lock:
             # Decrement active connections (but not below 0)
-            self._metrics["active_connections"] = max(
-                0, self._metrics["active_connections"] - 1
-            )
+            self._metrics["active_connections"] = max(0, self._metrics["active_connections"] - 1)
             # Increment total disconnected counter
             self._metrics["total_disconnected"] += 1
             self._metrics["last_updated"] = datetime.utcnow().isoformat()
@@ -70,7 +69,7 @@ class ThreadSafeSessionMetrics:
             )
             return active_count
 
-    async def get_snapshot(self) -> Dict[str, Any]:
+    async def get_snapshot(self) -> dict[str, Any]:
         """Get a thread-safe snapshot of current metrics."""
         async with self._lock:
             return self._metrics.copy()

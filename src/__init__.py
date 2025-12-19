@@ -10,8 +10,8 @@ __email__ = "pablosalvador10@gmail.com"
 
 # Import main classes for convenience
 try:
-    from .speech.text_to_speech import SpeechSynthesizer
     from .speech.speech_recognizer import StreamingSpeechRecognizerFromBytes
+    from .speech.text_to_speech import SpeechSynthesizer
 
     __all__ = [
         "SpeechSynthesizer",

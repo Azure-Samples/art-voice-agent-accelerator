@@ -55,12 +55,8 @@ def bandit_to_sarif(bandit_json_path: str, sarif_output_path: str) -> None:
             rule = {
                 "id": test_id,
                 "name": test_name,
-                "shortDescription": {
-                    "text": result.get("issue_text", "Security issue detected")
-                },
-                "fullDescription": {
-                    "text": result.get("issue_text", "Security issue detected")
-                },
+                "shortDescription": {"text": result.get("issue_text", "Security issue detected")},
+                "fullDescription": {"text": result.get("issue_text", "Security issue detected")},
                 "help": {
                     "text": f"More info: {result.get('more_info', 'https://bandit.readthedocs.io/')}"
                 },
@@ -89,8 +85,7 @@ def bandit_to_sarif(bandit_json_path: str, sarif_output_path: str) -> None:
                         },
                         "region": {
                             "startLine": result.get("line_number", 1),
-                            "startColumn": result.get("col_offset", 1)
-                            + 1,  # SARIF is 1-based
+                            "startColumn": result.get("col_offset", 1) + 1,  # SARIF is 1-based
                             "snippet": {"text": result.get("code", "")},
                         },
                     }
@@ -104,9 +99,7 @@ def bandit_to_sarif(bandit_json_path: str, sarif_output_path: str) -> None:
     with open(sarif_output_path, "w") as f:
         json.dump(sarif_report, f, indent=2)
 
-    print(
-        f"Converted {len(bandit_data.get('results', []))} Bandit issues to SARIF format"
-    )
+    print(f"Converted {len(bandit_data.get('results', []))} Bandit issues to SARIF format")
     print(f"SARIF report written to: {sarif_output_path}")
 
 

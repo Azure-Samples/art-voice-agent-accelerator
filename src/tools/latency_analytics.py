@@ -1,17 +1,18 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Iterable, Tuple, Optional
-from collections import defaultdict
 import math
+from collections import defaultdict
+from collections.abc import Iterable
+from typing import Any
 
 Number = float
 
 
 def compute_latency_statistics(
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     *,
-    stage_thresholds: Optional[Dict[str, Number]] = None,
-) -> Dict[str, Any]:
+    stage_thresholds: dict[str, Number] | None = None,
+) -> dict[str, Any]:
     """
     Ingest a latency payload shaped like the example you posted and produce:
       - per-stage stats (count, sum, avg, min, max, p50, p90, p95)
@@ -31,12 +32,12 @@ def compute_latency_statistics(
     """
 
     # ---------------- helpers ----------------
-    def _percentiles(values: List[Number], ps: Iterable[Number]) -> Dict[str, Number]:
+    def _percentiles(values: list[Number], ps: Iterable[Number]) -> dict[str, Number]:
         if not values:
             return {f"p{int(p)}": 0.0 for p in ps}
         xs = sorted(values)
         n = len(xs)
-        out: Dict[str, Number] = {}
+        out: dict[str, Number] = {}
         for p in ps:
             if n == 1:
                 out[f"p{int(p)}"] = xs[0]
@@ -51,11 +52,9 @@ def compute_latency_statistics(
             out[f"p{int(p)}"] = float(val)
         return out
 
-    def _agg(values: List[Number]) -> Dict[str, Number]:
+    def _agg(values: list[Number]) -> dict[str, Number]:
         if not values:
-            return dict(
-                count=0, total=0.0, avg=0.0, min=0.0, max=0.0, p50=0.0, p90=0.0, p95=0.0
-            )
+            return dict(count=0, total=0.0, avg=0.0, min=0.0, max=0.0, p50=0.0, p90=0.0, p95=0.0)
         total = float(sum(values))
         return {
             "count": len(values),
@@ -70,27 +69,27 @@ def compute_latency_statistics(
         return 0.0 if den <= 0 else (100.0 * num / den)
 
     # --------------- ingest -------------------
-    runs: Dict[str, Any] = payload.get("runs", {}) or {}
-    order: List[str] = payload.get("order") or list(runs.keys())
+    runs: dict[str, Any] = payload.get("runs", {}) or {}
+    order: list[str] = payload.get("order") or list(runs.keys())
     stage_thresholds = stage_thresholds or {"tts": 1.5, "greeting_ttfb": 2.0}
 
-    per_stage: Dict[str, List[Number]] = defaultdict(list)
-    per_agent_stage: Dict[str, List[Number]] = defaultdict(list)
-    per_voice_synth: Dict[str, List[Number]] = defaultdict(list)
+    per_stage: dict[str, list[Number]] = defaultdict(list)
+    per_agent_stage: dict[str, list[Number]] = defaultdict(list)
+    per_voice_synth: dict[str, list[Number]] = defaultdict(list)
 
-    per_run_summary: List[Dict[str, Any]] = []
-    threshold_breaches: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    per_run_summary: list[dict[str, Any]] = []
+    threshold_breaches: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
     for run_id in order:
         r = runs.get(run_id) or {}
         samples = r.get("samples", []) or []
 
-        tts_segments: List[Number] = []
-        synth_segments: List[Number] = []
-        send_segments: List[Number] = []
+        tts_segments: list[Number] = []
+        synth_segments: list[Number] = []
+        send_segments: list[Number] = []
 
-        greet_ttfb: Optional[Number] = None
-        agent_times: Dict[str, Number] = {}  # auth_agent/general_agent/claim_agent
+        greet_ttfb: Number | None = None
+        agent_times: dict[str, Number] = {}  # auth_agent/general_agent/claim_agent
 
         for s in samples:
             stage = s.get("stage")
@@ -146,9 +145,7 @@ def compute_latency_statistics(
 
     # SLA rollups (examples)
     n_runs = len(per_run_summary)
-    runs_with_tts_le_1_5 = sum(
-        1 for r in per_run_summary if r["tts"]["max_single"] <= 1.5
-    )
+    runs_with_tts_le_1_5 = sum(1 for r in per_run_summary if r["tts"]["max_single"] <= 1.5)
     runs_with_ttfb_le_2_0 = sum(
         1
         for r in per_run_summary

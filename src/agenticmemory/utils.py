@@ -1,5 +1,4 @@
 from statistics import mean
-from typing import Dict, List
 
 
 class LatencyTracker:
@@ -8,14 +7,14 @@ class LatencyTracker:
     """
 
     def __init__(self) -> None:
-        self._bucket: Dict[str, List[Dict[str, float]]] = {}
+        self._bucket: dict[str, list[dict[str, float]]] = {}
 
     def note(self, stage: str, start_t: float, end_t: float) -> None:
         self._bucket.setdefault(stage, []).append(
             {"start": start_t, "end": end_t, "dur": end_t - start_t}
         )
 
-    def summary(self) -> Dict[str, Dict[str, float]]:
+    def summary(self) -> dict[str, dict[str, float]]:
         """
         Calculate a summary of all latencies collected so far.
 
@@ -29,7 +28,7 @@ class LatencyTracker:
 
         If no samples have been collected for a stage, all values are 0.0.
         """
-        out: Dict[str, Dict[str, float]] = {}
+        out: dict[str, dict[str, float]] = {}
         for stage, samples in self._bucket.items():
             durations = [s["dur"] for s in samples]
             out[stage] = {

@@ -9,7 +9,7 @@ infra:
 
 services:
   rtaudio-client:
-    project: apps/rtagent/frontend
+    project: apps/artagent/frontend
     host: containerapp
     language: js
     docker:
@@ -18,7 +18,7 @@ services:
       platform: linux/amd64
       
   rtaudio-server:
-    project: apps/rtagent/backend
+    project: apps/artagent/backend
     host: containerapp
     language: python
     docker:

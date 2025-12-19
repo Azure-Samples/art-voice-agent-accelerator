@@ -9,7 +9,7 @@
             "type": "msedge", // or "chrome"
             "request": "launch",
             "url": "http://localhost:5173", // Ensure this matches your Vite dev server port
-            "webRoot": "${workspaceFolder}/rtagents/RTAgent/frontend",
+            "webRoot": "${workspaceFolder}/apps/artagent/frontend",
             "sourceMaps": true,
             "sourceMapPathOverrides": {
             "webpack:///src/*": "${webRoot}/src/*",
@@ -22,12 +22,13 @@
             "type": "debugpy",
             "request": "launch",
             "module": "uvicorn",
+            "python": "${command:python.interpreterPath}",
             "args": [
-            "apps.rtagent.backend.main:app",
+            "apps.artagent.backend.main:app",
             // Watch only the app backend directory for reloads so changes under tests/ won't trigger reloads
             "--reload",
             "--reload-dir",
-            "${workspaceFolder}/apps/rtagent/backend",
+            "${workspaceFolder}/apps/artagent/backend",
             "--port",
             "8010"
             // "--log-level",
@@ -37,7 +38,7 @@
             "env": {
             "PYTHONPATH": "${workspaceFolder}"
             },
-            "envFile": "${workspaceFolder}/.env"
+            "envFile": "${workspaceFolder}/.env.local"
         },
     ]
 }

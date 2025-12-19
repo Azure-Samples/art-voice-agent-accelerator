@@ -1,224 +1,151 @@
-# **ARTVoice Infrastructure**
+# 🚀 Infrastructure Guide
 
-Infrastructure as Code for deploying ARTVoice Accelerator on Azure. Choose between Terraform (recommended) and Bicep deployments.
+> **For deployment instructions, see the [Quickstart Guide](../docs/getting-started/quickstart.md).**
 
-## **Deployment Options**
-
-### **🟢 Terraform** (`/terraform/`) - **Recommended**
-- **Status**: ✅ Production ready
-- **Target**: Development, PoCs, and production workloads
-- **Architecture**: Public endpoints with managed identity authentication
-- **Security**: RBAC-based with comprehensive monitoring
-
-### **🔵 Bicep** (`/bicep/`) - **Work in Progress**
-- **Status**: 🚧 Development
-- **Target**: Enterprise environments with maximum security
-- **Architecture**: Hub-spoke networking with private endpoints
-- **Security**: Network isolation and enterprise-grade configuration
-
-## **Quick Start**
-
-**Option 1: Azure Developer CLI (Recommended)**
-```bash
-azd up  # Complete deployment in ~15 minutes
-```
-
-**Option 2: Direct Terraform**
-```bash
-cd terraform/
-terraform init
-terraform plan
-terraform apply
-```
-
-See `/terraform/README.md` for detailed instructions.
-- **Enterprise Security**: Comprehensive RBAC, managed identities, and Key Vault
-
-#### ⚠️ Known Limitations
-
-- **ACS Integration**: Communication issues between backend and Azure Communication Services
-- **Network Complexity**: Requires deep Azure networking knowledge for customization
-- **APIM Configuration**: API Management internal deployment still in development
-- **Manual Steps**: Some configuration requires post-deployment manual setup
-- **Testing**: End-to-end call flow validation pending ACS resolution
-
-#### 🚀 Getting Started (Bicep)
-
-```bash
-# Prerequisites: Azure CLI, Bicep CLI, Azure Developer CLI
-azd auth login
-azd up  # Uses Bicep templates for private deployment
-
-# Manual steps required:
-# 1. Purchase ACS phone number via Azure Portal
-# 2. Configure custom domain for Speech Services
-# 3. Validate private endpoint connectivity
-# 4. Configure SBC for PSTN calling
-```
-
-#### 📖 Documentation
-- [Bicep Architecture Details](bicep/README.md)
-- [Private Networking Configuration](bicep/network.bicep)
-- [Security Implementation Guide](bicep/modules/identity/)
+This document covers Terraform infrastructure details for advanced users who need to customize or understand the underlying resources.
 
 ---
 
-## 🟢 Terraform Deployment - Simplified Public Configuration
+## 📋 Quick Commands
 
-
-The Terraform deployment provides a **simplified, public-facing approach** that's perfect for development, PoCs, and organizations that don't require network isolation. This is the **current recommended approach** for most use cases.
-
-
-#### ✨ Key Advantages
-
-| Feature | Benefit | Implementation |
-|---------|---------|----------------|
-| **Simplified Networking** | No complex VNET configuration | Public endpoints with HTTPS/TLS |
-| **Rapid Deployment** | 15-minute full stack deployment | Single `terraform apply` command |
-| **RBAC-First Security** | Managed identities for all services | Zero stored credentials |
-| **Developer Friendly** | Easy local development setup | Direct access to services |
-| **Cost Effective** | No private endpoint/VNET costs | Optimized for development and testing |
-
-#### 🔧 Included Services
-
-```bash
-# AI & Communication
-✅ Azure OpenAI (GPT-4o)           # Conversational AI
-✅ Speech Services                 # STT/TTS processing  
-✅ Communication Services          # Voice/messaging platform
-
-# Data & Storage
-✅ Cosmos DB (MongoDB API)         # Session data
-✅ Redis Enterprise                # High-performance caching
-✅ Blob Storage                    # Audio/media files
-✅ Key Vault                       # Secrets management
-
-# Compute & Monitoring  
-✅ Container Apps                  # Serverless hosting
-✅ Container Registry              # Image storage
-✅ App Service (optional)          # Traditional web app hosting (no container required)
-✅ Application Insights            # Monitoring/telemetry
-✅ Log Analytics                   # Centralized logging
-```
-
-#### 🚀 Quick Start (Terraform)
-
-```bash
-# Method 1: Direct Terraform (Recommended)
-export AZURE_SUBSCRIPTION_ID="your-subscription-id"
-export AZURE_ENV_NAME="dev"
-
-cd infra/terraform
-terraform init
-terraform apply -var="environment_name=${AZURE_ENV_NAME}"
-
-# Generate environment file and deploy apps
-cd ../..
-make generate_env_from_terraform
-make update_env_with_secrets
-make deploy_backend && make deploy_frontend
-
-# Method 2: Using azd (Alternative)
-azd auth login && azd up
-```
-
-#### 📊 Terraform vs Bicep Comparison
-
-| Aspect | Terraform (Current) | Bicep (WIP) |
-|--------|-------------------|-------------|
-| **Complexity** | Simple, public endpoints | Complex, private networking |
-| **Security Model** | RBAC + Managed Identity | Private endpoints + RBAC |
-| **Deployment Time** | ~15 minutes | ~30+ minutes |
-| **Network Isolation** | ❌ Public endpoints | ✅ Private VNets |
-| **Cost** | Lower (no VNET costs) | Higher (private endpoints) |
-| **Use Case** | Dev, PoC, simple prod | Enterprise production |
-| **Maintenance** | Low complexity | High complexity |
-| **Status** | ✅ Ready | 🚧 WIP |
-
-#### 📖 Documentation
-- [Terraform Deployment Guide](../docs/TerraformDeployment.md)
-- [Terraform Configuration Details](terraform/README.md)
-- [Makefile Automation](../Makefile)
+| Action | Command |
+|--------|---------|
+| Deploy everything | `azd up` |
+| Infrastructure only | `azd provision` |
+| Apps only | `azd deploy` |
+| Tear down | `azd down --force --purge` |
+| Switch environments | `azd env select <name>` |
 
 ---
 
-## 🎯 Choosing Your Deployment Approach
+## 🏗️ What Gets Created
 
-### Choose **Terraform** if:
-- ✅ You need rapid deployment and iteration
-- ✅ You're building a PoC or demo application
-- ✅ You don't require network isolation
-- ✅ You prefer infrastructure simplicity
-- ✅ You want to minimize Azure costs
-- ✅ You need reliable, tested infrastructure
-
-### Choose **Bicep** if:
-- 🔄 You require enterprise-grade network security
-- 🔄 You have strict compliance requirements
-- 🔄 You need all services behind private endpoints
-- 🔄 You can invest time in complex networking setup
-- 🔄 You're willing to work with WIP components
-- ❗ You can wait for ACS integration issues to be resolved
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                   AZURE RESOURCES                                │
+├──────────────────────┬──────────────────────────────────────────┤
+│   AI & Voice         │   Azure OpenAI (GPT-4o)                  │
+│                      │   Azure AI Speech (STT/TTS)              │
+│                      │   Azure VoiceLive (real-time)            │
+│                      │   Azure Communication Services           │
+├──────────────────────┼──────────────────────────────────────────┤
+│   Data & Storage     │   Cosmos DB (MongoDB API)                │
+│                      │   Redis Enterprise (caching)             │
+│                      │   Blob Storage (audio/media)             │
+│                      │   Key Vault (secrets)                    │
+├──────────────────────┼──────────────────────────────────────────┤
+│   Compute            │   Container Apps (frontend + backend)    │
+│                      │   Container Registry                     │
+├──────────────────────┼──────────────────────────────────────────┤
+│   Configuration      │   App Configuration (central config)     │
+├──────────────────────┼──────────────────────────────────────────┤
+│   Monitoring         │   Application Insights                   │
+│                      │   Log Analytics Workspace                │
+└──────────────────────┴──────────────────────────────────────────┘
+```
 
 ---
 
-## 🛠️ Common Deployment Tasks
+## ⚙️ Terraform Configuration
 
-### Environment Setup
-```bash
-# Set required variables for both approaches
-export AZURE_SUBSCRIPTION_ID="12345678-1234-1234-1234-123456789012"
-export AZURE_ENV_NAME="dev"
+### Directory Structure
 
-# Authenticate with Azure
-az login
-az account set --subscription "${AZURE_SUBSCRIPTION_ID}"
+```
+infra/terraform/
+├── main.tf              # Main infrastructure, providers
+├── backend.tf           # State backend (auto-generated)
+├── variables.tf         # Variable definitions
+├── outputs.tf           # Output values for azd
+├── provider.conf.json   # Backend config (auto-generated)
+├── params/              # Per-environment tfvars
+│   └── main.tfvars.json
+└── modules/             # Reusable modules
 ```
 
-### Post-Deployment Steps
+### Variable Sources
+
+| Source | Purpose | Example |
+|--------|---------|---------|
+| `azd env set TF_VAR_*` | Dynamic values | `TF_VAR_location`, `TF_VAR_environment_name` |
+| `params/main.tfvars.json` | Static per-env config | SKUs, feature flags |
+| `variables.tf` defaults | Fallback values | Default regions |
+
+### Terraform State
+
+State is stored in Azure Storage (remote) by default. During `azd provision`, you'll be prompted:
+
+- **(Y)es** — Auto-create storage account for remote state ✅ Recommended
+- **(N)o** — Use local state (development only)
+- **(C)ustom** — Bring your own storage account
+
+To use local state:
 ```bash
-# Generate local environment files (Terraform only)
-make generate_env_from_terraform
-make update_env_with_secrets
-
-# Purchase ACS phone number (both approaches)
-make purchase_acs_phone_number
-
-# Deploy applications (Terraform only)  
-make deploy_backend
-make deploy_frontend
+azd env set LOCAL_STATE "true"
+azd provision
 ```
 
-### Monitoring & Troubleshooting
-```bash
-# Check deployment status
-terraform output  # Terraform approach
-azd env get-values  # azd approach
+### azd Lifecycle Hooks
 
-# View application logs
-az containerapp logs show --name <app-name> --resource-group <rg-name>
-
-# Monitor metrics
-az monitor metrics list --resource <resource-id>
-```
-
-> 🔍 **Need detailed troubleshooting help?** See the comprehensive [Troubleshooting Guide](../docs/Troubleshooting.md) for common issues, diagnostic commands, and step-by-step solutions.
+| Script | When | What It Does |
+|--------|------|--------------|
+| `preprovision.sh` | Before Terraform | Sets up state storage, TF_VAR_* |
+| `postprovision.sh` | After Terraform | Generates `.env.local` |
 
 ---
 
-## 📚 Additional Resources
+## 🔧 Customization
 
-### Documentation
-- [Architecture Overview](../docs/Architecture.md)
-- [Deployment Guide](../docs/DeploymentGuide.md)  
-- [Security Best Practices](../docs/Security.md)
-- [Load Testing Guide](../docs/LoadTesting.md)
+### Change Resource SKUs
 
-### Getting Help
-- **Terraform Issues**: Check [Terraform README](terraform/README.md)
-- **Bicep Issues**: Review [Bicep README](bicep/README.md)  
-- **General Questions**: See main [project README](../README.md)
+Edit `infra/terraform/params/main.tfvars.json`:
+
+```json
+{
+  "redis_sku": "Enterprise_E10",
+  "cosmosdb_throughput": 1000
+}
+```
+
+### Add New Resources
+
+1. Add Terraform code in `infra/terraform/`
+2. Add outputs to `outputs.tf`
+3. Reference outputs in `azure.yaml` if needed
+
+### Multi-Environment
+
+```bash
+# Create production environment
+azd env new prod
+azd env set AZURE_LOCATION "westus2"
+azd provision
+
+# Switch between environments
+azd env select dev
+```
 
 ---
 
-**🚀 Ready to get started? We recommend beginning with the [Terraform deployment](../docs/TerraformDeployment.md) for the fastest path to a working RTVoice Accelerator.**
+## 🔍 Debugging
+
+```bash
+# View azd environment
+azd env get-values
+
+# View Terraform state
+cd infra/terraform && terraform show
+
+# Check App Configuration
+az appconfig kv list --endpoint $AZURE_APPCONFIG_ENDPOINT --auth-mode login
+```
+
+---
+
+## 📚 Related Docs
+
+| Topic | Link |
+|-------|------|
+| **Getting Started** | [Quickstart](../docs/getting-started/quickstart.md) |
+| **Local Development** | [Local Dev Guide](../docs/getting-started/local-development.md) |
+| **Production Deployment** | [Production Guide](../docs/deployment/production.md) |
+| **Troubleshooting** | [Troubleshooting](../docs/operations/troubleshooting.md) |

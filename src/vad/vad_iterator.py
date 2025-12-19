@@ -1,7 +1,7 @@
 import copy
+
 import numpy as np
 import torch
-
 from pipecat.audio.filters.noisereduce_filter import NoisereduceFilter
 from pipecat.frames.frames import FilterEnableFrame
 
@@ -51,9 +51,7 @@ class VADIteratorWithDenoiseAndToggle:
             audio_bytes = await self.denoiser.filter(audio_bytes)
 
         # Convert PCM16 bytes to float32
-        audio_np = (
-            np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-        )
+        audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
         audio_tensor = torch.from_numpy(audio_np).unsqueeze(0)
 
         window_size_samples = len(audio_tensor[0])

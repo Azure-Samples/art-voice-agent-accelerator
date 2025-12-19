@@ -226,3 +226,37 @@ output "ai_foundry_project_identity_principal_id" {
   description = "Managed identity principal ID assigned to the AI Foundry project"
   value       = module.ai_foundry.project_identity_principal_id
 }
+
+output "AZURE_VOICELIVE_ENDPOINT" {
+  description = "Azure Voice Live endpoint"
+  value       = var.enable_voice_live ? (length(module.ai_foundry_voice_live) > 0 ? module.ai_foundry_voice_live[0].endpoint : module.ai_foundry.endpoint) : ""
+}
+
+output "AZURE_VOICELIVE_RESOURCE_ID" {
+  description = "Azure Voice Live resource ID"
+  value       = var.enable_voice_live ? (length(module.ai_foundry_voice_live) > 0 ? module.ai_foundry_voice_live[0].account_id : module.ai_foundry.account_id) : ""
+}
+
+output "AZURE_VOICELIVE_MODEL" {
+  description = "Azure Voice Live model deployment name"
+  value       = var.enable_voice_live && length(local.voice_live_model_names) > 0 ? local.voice_live_model_names[0] : ""
+}
+
+# ============================================================================
+# APP CONFIGURATION
+# ============================================================================
+
+output "AZURE_APPCONFIG_ENDPOINT" {
+  description = "Azure App Configuration endpoint for centralized config management"
+  value       = module.appconfig.endpoint
+}
+
+output "AZURE_APPCONFIG_NAME" {
+  description = "Azure App Configuration resource name"
+  value       = module.appconfig.name
+}
+
+output "AZURE_APPCONFIG_LABEL" {
+  description = "Environment label used in App Configuration"
+  value       = module.appconfig.label
+}

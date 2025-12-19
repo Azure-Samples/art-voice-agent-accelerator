@@ -41,9 +41,7 @@ available_tools: List[Dict[str, Any]] = [
 ]
 
 # Tool registry - provides easy lookup by tool name
-TOOL_REGISTRY: Dict[str, Dict] = {
-    tool["function"]["name"]: tool for tool in available_tools
-}
+TOOL_REGISTRY: Dict[str, Dict] = {tool["function"]["name"]: tool for tool in available_tools}
 
 
 def get_tool_function(tool_name: str) -> Callable[..., Any]:

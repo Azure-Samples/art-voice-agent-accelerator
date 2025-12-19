@@ -4,7 +4,7 @@ locals {
     var.storage_account_id != null &&
     var.cosmosdb_account_id != null
   )
-  
+
   resource_group_name = split("/", var.resource_group_id)[4]
 }
 

@@ -80,9 +80,7 @@ async def search_product_catalog(params: Dict[str, Any]) -> str:
             }
         )
 
-    return json.dumps(
-        {"success": False, "message": "No products found matching your search"}
-    )
+    return json.dumps({"success": False, "message": "No products found matching your search"})
 
 
 async def check_order_status(params: Dict[str, Any]) -> str:

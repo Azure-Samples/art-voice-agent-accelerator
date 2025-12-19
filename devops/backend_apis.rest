@@ -1,0 +1,508 @@
+###############################################################################
+# Backend APIs REST Client
+# ========================
+# Use this file with VS Code REST Client extension or similar tools
+# to test and debug the backend API endpoints.
+#
+# Prerequisites:
+#   - Install "REST Client" VS Code extension (humao.rest-client)
+#   - Ensure the backend server is running (default: http://localhost:8000)
+#
+# Usage:
+#   - Click "Send Request" above each request block
+#   - Variables are defined at the top and can be overridden
+###############################################################################
+
+# =============================================================================
+# VARIABLES - Customize these for your environment
+# =============================================================================
+# @baseUrl = https://rc72bmrx-8010.use.devtunnels.ms
+@baseUrl = http://localhost:8010
+@apiVersion = v1
+@apiBase = {{baseUrl}}/api/{{apiVersion}}
+
+# Session/Call IDs for testing (update these with real values)
+@testSessionId = test-session-123
+@testCallId = call-abc-456
+@testPhoneNumber = +14155551234
+
+# =============================================================================
+# HEALTH ENDPOINTS
+# =============================================================================
+
+### Basic Health Check (Liveness)
+# GET /api/v1/health
+# Returns 200 if server is running - used by load balancers
+GET {{apiBase}}/health
+Content-Type: application/json
+
+###
+
+### Comprehensive Readiness Check
+# GET /api/v1/readiness
+# Checks all critical dependencies (Redis, Azure OpenAI, Speech, ACS, etc.)
+# Returns 503 if any critical services are unhealthy
+GET {{apiBase}}/readiness
+Content-Type: application/json
+
+###
+
+### Resource Pool Health (TTS/STT Pools)
+# GET /api/v1/pools
+# Returns warm pool levels, allocation statistics, and session cache status
+GET {{apiBase}}/pools
+Content-Type: application/json
+
+###
+
+### App Configuration Status
+# GET /api/v1/appconfig
+# Returns Azure App Configuration provider status and cache metrics
+GET {{apiBase}}/appconfig
+Content-Type: application/json
+
+###
+
+### App Configuration Status with Refresh
+# GET /api/v1/appconfig?refresh=true
+# Forces a cache refresh before returning status
+GET {{apiBase}}/appconfig?refresh=true
+Content-Type: application/json
+
+###
+
+### Force Refresh App Configuration Cache
+# POST /api/v1/appconfig/refresh
+# Triggers a cache refresh to pull latest configuration values
+POST {{apiBase}}/appconfig/refresh
+Content-Type: application/json
+
+
+# =============================================================================
+# CALL MANAGEMENT ENDPOINTS
+# =============================================================================
+
+### Initiate Outbound Call
+# POST /api/v1/calls/initiate
+# Initiates a new outbound call to the specified phone number
+POST {{apiBase}}/calls/initiate
+Content-Type: application/json
+
+{
+    "target_number": "{{testPhoneNumber}}",
+    "context": {
+        "browser_session_id": "{{testSessionId}}",
+        "streaming_mode": "voicelive"
+    }
+}
+
+###
+
+### Initiate Call with Recording Override
+# POST /api/v1/calls/initiate
+# Initiates call with explicit recording setting
+POST {{apiBase}}/calls/initiate
+Content-Type: application/json
+
+{
+    "target_number": "{{testPhoneNumber}}",
+    "record_call": true,
+    "streaming_mode": "voicelive",
+    "context": {
+        "browser_session_id": "{{testSessionId}}"
+    }
+}
+
+###
+
+### List Calls (Paginated)
+# GET /api/v1/calls
+# Retrieves a paginated list of calls with optional filtering
+GET {{apiBase}}/calls?page=1&limit=10
+Content-Type: application/json
+
+###
+
+### List Calls with Status Filter
+# GET /api/v1/calls?status_filter=connected
+# Filter calls by status: initiating, ringing, connected, on_hold, disconnected, failed
+GET {{apiBase}}/calls?page=1&limit=10&status_filter=connected
+Content-Type: application/json
+
+###
+
+### Terminate Active Call
+# POST /api/v1/calls/terminate
+# Request hangup for an active ACS call
+POST {{apiBase}}/calls/terminate
+Content-Type: application/json
+
+{
+    "call_id": "{{testCallId}}"
+}
+
+###
+
+### Answer Inbound Call (Event Grid Webhook)
+# POST /api/v1/calls/answer
+# Handles inbound call events from Azure Communication Services
+# This endpoint is typically called by Event Grid, not directly
+POST {{apiBase}}/calls/answer
+Content-Type: application/json
+
+[
+    {
+        "id": "event-id-123",
+        "topic": "/subscriptions/.../communicationservices/...",
+        "subject": "/phoneCall/caller/+1234567890/recipient/+0987654321",
+        "eventType": "Microsoft.Communication.IncomingCall",
+        "data": {
+            "to": {
+                "kind": "phoneNumber",
+                "rawId": "4:+0987654321",
+                "phoneNumber": {"value": "+0987654321"}
+            },
+            "from": {
+                "kind": "phoneNumber",
+                "rawId": "4:+1234567890",
+                "phoneNumber": {"value": "+1234567890"}
+            },
+            "serverCallId": "server-call-id-here",
+            "incomingCallContext": "context-token-here",
+            "correlationId": "correlation-id-123"
+        },
+        "dataVersion": "1.0",
+        "eventTime": "2025-12-10T00:00:00Z"
+    }
+]
+
+###
+
+### Handle ACS Callback Events
+# POST /api/v1/calls/callbacks
+# Receives webhooks from ACS when call events occur
+POST {{apiBase}}/calls/callbacks
+Content-Type: application/json
+
+[
+    {
+        "eventType": "Microsoft.Communication.CallConnected",
+        "data": {
+            "callConnectionId": "{{testCallId}}",
+            "serverCallId": "server-call-id-here",
+            "correlationId": "correlation-id-123"
+        }
+    }
+]
+
+
+# =============================================================================
+# MEDIA STREAMING ENDPOINTS
+# =============================================================================
+
+### Get Media Streaming Status
+# GET /api/v1/media/status
+# Returns current media streaming configuration and status
+GET {{apiBase}}/media/status
+Content-Type: application/json
+
+###
+
+### WebSocket: ACS Media Stream
+# WS /api/v1/media/stream
+# WebSocket endpoint for Azure Communication Services media streaming
+# Note: Use a WebSocket client to connect
+# Example: wscat -c "ws://localhost:8000/api/v1/media/stream?call_connection_id={{testCallId}}&session_id={{testSessionId}}"
+# 
+# Query Parameters:
+#   - call_connection_id: ACS call connection ID
+#   - session_id: Optional session ID for coordination
+# Headers:
+#   - x-ms-call-connection-id: Alternative to query param
+
+
+# =============================================================================
+# BROWSER COMMUNICATION ENDPOINTS
+# =============================================================================
+
+### Get Browser Service Status
+# GET /api/v1/browser/status
+# Returns browser service status and active connection counts
+GET {{apiBase}}/browser/status
+Content-Type: application/json
+
+###
+
+### WebSocket: Dashboard Relay
+# WS /api/v1/browser/dashboard/relay
+# WebSocket endpoint for dashboard clients to receive real-time updates
+# Example: wscat -c "ws://localhost:8000/api/v1/browser/dashboard/relay?session_id={{testSessionId}}"
+#
+# Query Parameters:
+#   - session_id: Optional session ID to filter updates
+
+###
+
+### WebSocket: Browser Conversation
+# WS /api/v1/browser/conversation
+# WebSocket endpoint for browser-based voice conversations
+# Example: wscat -c "ws://localhost:8000/api/v1/browser/conversation?session_id={{testSessionId}}"
+#
+# Query Parameters:
+#   - session_id: Session identifier for the conversation
+
+
+# =============================================================================
+# SESSION METRICS ENDPOINTS
+# =============================================================================
+
+### List Active Sessions
+# GET /api/v1/metrics/sessions
+# Returns counts and basic info for all active sessions
+GET {{apiBase}}/metrics/sessions
+Content-Type: application/json
+
+###
+
+### Get Session Metrics
+# GET /api/v1/metrics/session/{session_id}
+# Returns detailed latency and telemetry metrics for a specific session
+GET {{apiBase}}/metrics/session/{{testSessionId}}
+Content-Type: application/json
+
+###
+
+### Get Session Metrics with Turn Breakdown
+# GET /api/v1/metrics/session/{session_id}?include_turns=true
+# Includes per-turn breakdown (can be large)
+GET {{apiBase}}/metrics/session/{{testSessionId}}?include_turns=true
+Content-Type: application/json
+
+###
+
+### Get Aggregated Metrics Summary
+# GET /api/v1/metrics/summary
+# Returns aggregated metrics across recent sessions
+GET {{apiBase}}/metrics/summary?window_minutes=60
+Content-Type: application/json
+
+
+# =============================================================================
+# AGENT BUILDER ENDPOINTS
+# =============================================================================
+
+### List Available Tools
+# GET /api/v1/agent-builder/tools
+# Returns all registered tools that can be assigned to dynamic agents
+GET {{apiBase}}/agent-builder/tools
+Content-Type: application/json
+
+###
+
+### List Tools by Category
+# GET /api/v1/agent-builder/tools?category=banking
+# Filter tools by category
+GET {{apiBase}}/agent-builder/tools?category=banking&include_handoffs=true
+Content-Type: application/json
+
+###
+
+### List Available Voices
+# GET /api/v1/agent-builder/voices
+# Returns all available TTS voices for agent configuration
+GET {{apiBase}}/agent-builder/voices
+Content-Type: application/json
+
+###
+
+### List Voices by Category
+# GET /api/v1/agent-builder/voices?category=turbo
+# Filter by category: turbo, standard, hd
+GET {{apiBase}}/agent-builder/voices?category=turbo
+Content-Type: application/json
+
+###
+
+### Get Default Agent Configuration
+# GET /api/v1/agent-builder/defaults
+# Returns the default configuration template for creating new agents
+GET {{apiBase}}/agent-builder/defaults
+Content-Type: application/json
+
+###
+
+### List Agent Templates
+# GET /api/v1/agent-builder/templates
+# Returns all existing agent configurations that can be used as templates
+GET {{apiBase}}/agent-builder/templates
+Content-Type: application/json
+
+###
+
+### Get Specific Agent Template
+# GET /api/v1/agent-builder/templates/{template_id}
+# Returns full details of a specific agent template
+GET {{apiBase}}/agent-builder/templates/concierge
+Content-Type: application/json
+
+###
+
+### Create Dynamic Agent for Session
+# POST /api/v1/agent-builder/create?session_id={{testSessionId}}
+# Creates a new dynamic agent configuration for a session
+POST {{apiBase}}/agent-builder/create?session_id={{testSessionId}}
+Content-Type: application/json
+
+{
+    "name": "Test Agent",
+    "description": "A test agent for debugging",
+    "greeting": "Hello! I'm a test agent. How can I help you today?",
+    "return_greeting": "Welcome back! How can I assist you?",
+    "prompt": "You are a helpful test agent for debugging purposes.\n\n## Your Role\nAssist with testing and debugging the voice agent system.\n\n## Guidelines\n- Be concise and helpful\n- Report any issues clearly",
+    "tools": [],
+    "model": {
+        "deployment_id": "gpt-4o",
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "max_tokens": 4096
+    },
+    "voice": {
+        "name": "en-US-AvaMultilingualNeural",
+        "type": "azure-standard",
+        "style": "chat",
+        "rate": "+0%"
+    },
+    "speech": {
+        "vad_silence_timeout_ms": 800,
+        "use_semantic_segmentation": false,
+        "candidate_languages": ["en-US"],
+        "enable_diarization": false,
+        "speaker_count_hint": 2
+    }
+}
+
+###
+
+### Get Session Agent Configuration
+# GET /api/v1/agent-builder/session/{session_id}
+# Returns the current dynamic agent configuration for a session
+GET {{apiBase}}/agent-builder/session/{{testSessionId}}
+Content-Type: application/json
+
+###
+
+### Update Session Agent
+# PUT /api/v1/agent-builder/session/{session_id}
+# Updates the dynamic agent configuration for a session
+PUT {{apiBase}}/agent-builder/session/{{testSessionId}}
+Content-Type: application/json
+
+{
+    "name": "Updated Test Agent",
+    "description": "An updated test agent",
+    "greeting": "Hello! I'm the updated test agent.",
+    "return_greeting": "Welcome back to the updated agent!",
+    "prompt": "You are an updated helpful test agent.\n\n## Your Role\nAssist with testing.\n\n## Guidelines\n- Be concise",
+    "tools": [],
+    "model": {
+        "deployment_id": "gpt-4o",
+        "temperature": 0.8,
+        "top_p": 0.9,
+        "max_tokens": 4096
+    },
+    "voice": {
+        "name": "en-US-AvaMultilingualNeural",
+        "type": "azure-standard",
+        "style": "chat",
+        "rate": "+0%"
+    }
+}
+
+###
+
+### Reset Session Agent (Delete)
+# DELETE /api/v1/agent-builder/session/{session_id}
+# Removes the dynamic agent, reverting to default behavior
+DELETE {{apiBase}}/agent-builder/session/{{testSessionId}}
+Content-Type: application/json
+
+###
+
+### List All Session Agents
+# GET /api/v1/agent-builder/sessions
+# Returns all sessions with dynamic agents configured
+GET {{apiBase}}/agent-builder/sessions
+Content-Type: application/json
+
+###
+
+### Reload Agent Templates
+# POST /api/v1/agent-builder/reload-agents
+# Re-discovers and reloads all agent templates from disk
+POST {{apiBase}}/agent-builder/reload-agents
+Content-Type: application/json
+
+
+# =============================================================================
+# SCENARIOS ENDPOINTS
+# =============================================================================
+
+### List All Scenarios
+# GET /api/v1/scenarios
+# Returns all available scenario configurations
+GET {{apiBase}}/scenarios
+Content-Type: application/json
+
+###
+
+### Get Specific Scenario
+# GET /api/v1/scenarios/{scenario_name}
+# Returns details for a specific scenario
+GET {{apiBase}}/scenarios/default
+Content-Type: application/json
+
+
+# =============================================================================
+# SWAGGER / OPENAPI DOCUMENTATION
+# =============================================================================
+
+### OpenAPI JSON Schema
+# GET /openapi.json
+# Returns the OpenAPI specification for the API
+GET {{baseUrl}}/openapi.json
+Content-Type: application/json
+
+###
+
+### Swagger UI
+# GET /docs
+# Interactive API documentation (open in browser)
+# URL: {{baseUrl}}/docs
+
+###
+
+### ReDoc UI
+# GET /redoc
+# Alternative API documentation (open in browser)
+# URL: {{baseUrl}}/redoc
+
+
+# =============================================================================
+# WEBSOCKET CONNECTION EXAMPLES
+# =============================================================================
+# 
+# The following WebSocket endpoints require a WebSocket client.
+# You can use tools like wscat, websocat, or browser DevTools.
+#
+# Install wscat: npm install -g wscat
+#
+# === ACS Media Stream ===
+# wscat -c "ws://localhost:8000/api/v1/media/stream?call_connection_id=YOUR_CALL_ID"
+#
+# === Dashboard Relay ===
+# wscat -c "ws://localhost:8000/api/v1/browser/dashboard/relay?session_id=YOUR_SESSION_ID"
+#
+# === Browser Conversation ===
+# wscat -c "ws://localhost:8000/api/v1/browser/conversation?session_id=YOUR_SESSION_ID"
+#
+# =============================================================================

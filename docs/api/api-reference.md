@@ -25,7 +25,7 @@ Real-time bidirectional audio streaming for Azure Communication Services calls f
 
 **Message Types**:
 ```json
-// Incoming audio data
+// Incoming audio data from ACS
 {
   "kind": "AudioData",
   "audioData": {
@@ -45,22 +45,35 @@ Real-time bidirectional audio streaming for Azure Communication Services calls f
 }
 ```
 
-### Realtime Conversation WebSocket  
-**URL**: `wss://api.domain.com/api/v1/realtime/conversation`
+### Browser Conversation WebSocket  
+**URL**: `wss://api.domain.com/api/v1/browser/conversation`
 
 Browser-based voice conversations with session persistence and real-time transcription.
 
 **Query Parameters**:
-- `session_id` (optional): Conversation session identifier for session restoration
+- `session_id` (optional): Session identifier for restoration
+- `streaming_mode` (optional): `VOICE_LIVE` or `REALTIME` (defaults to `REALTIME`)
+- `user_email` (optional): User email for session context
 
 **Features**:
 - Real-time speech-to-text transcription
 - TTS audio streaming for responses
+- Barge-in detection and handling
 - Conversation context persistence
 - Multi-language support
 
+**Message Types**:
+```json
+// Binary: Raw PCM audio frames (16kHz or 24kHz depending on mode)
+
+// Text: Control messages
+{
+  "kind": "StopAudio"  // Signal audio buffer commit
+}
+```
+
 ### Dashboard Relay WebSocket
-**URL**: `wss://api.domain.com/api/v1/realtime/dashboard/relay`  
+**URL**: `wss://api.domain.com/api/v1/browser/dashboard/relay`  
 
 Real-time updates for dashboard clients monitoring ongoing conversations.
 
@@ -71,6 +84,7 @@ Real-time updates for dashboard clients monitoring ongoing conversations.
 - Live call monitoring and analytics
 - Real-time transcript viewing
 - Agent performance dashboards
+- Connection status monitoring
 
 ## Authentication & Security
 
@@ -154,7 +168,7 @@ Controls the audio processing pipeline and determines handler selection:
 | `VOICE_LIVE` | Azure OpenAI Realtime API | PCM 24kHz mono | Advanced conversational AI |
 | `TRANSCRIPTION` | Real-time transcription only | PCM 16kHz mono | Call recording and analysis |
 
-**📖 Reference**: [Complete streaming modes documentation](../reference/streaming-modes.md)
+**📖 Reference**: [Streaming modes documentation](../architecture/speech/README.md)
 
 ### Performance Tuning
 
@@ -287,8 +301,8 @@ REDIS_OPERATION_TIMEOUT=5
 ### Development Resources
 
 - **[Interactive API Explorer](#interactive-documentation)** - Test all endpoints directly in browser
-- **[WebSocket Testing](../reference/streaming-modes.md)** - WebSocket connection examples
-- **[Authentication Setup](../getting-started/configuration.md)** - Detailed auth configuration
+- **[Streaming Modes](../architecture/speech/README.md)** - WebSocket connection examples
+- **[Local Development](../getting-started/local-development.md)** - Development setup and configuration
 - **[Architecture Overview](../architecture/README.md)** - System design and deployment patterns
 
 ### Production Considerations

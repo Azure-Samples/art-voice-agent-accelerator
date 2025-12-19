@@ -16,7 +16,7 @@ variable "tags" {
 
 variable "public_network_access" {
   description = "Public network access for the AI Foundry account."
-  default = "Enabled"
+  default     = "Enabled"
 
   # validation {
   #   condition     = contains(["Enabled", "Disabled"], var.publicNetworkAccess)

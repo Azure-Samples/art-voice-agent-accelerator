@@ -6,6 +6,38 @@ This file documents all noteworthy changes made to the ARTVoice Accelerator proj
 
 > **Versioning Protocol**: The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (SemVer) for meaningful version numbering.
 
+## [1.5.0] - 2025-12-07
+
+Major release featuring Azure VoiceLive SDK integration, unified agent framework, and comprehensive deployment tooling improvements.
+
+### Added
+- **Azure VoiceLive SDK Integration**: Real-time voice AI orchestration with WebSocket-based audio streaming and VAD support
+- **Unified Agent Framework**: YAML-driven agent definitions with Jinja2 prompt templating and hot-reload capabilities
+- **Multi-Agent Orchestration**: Speech Cascade and Live Orchestrator modes with seamless agent handoffs and context preservation
+- **Comprehensive Tool System**: 15+ business tools including authentication, banking, fraud detection, and knowledge base search
+- **Banking Scenario Agents**: Concierge, AuthAgent, FraudAgent, PayPalAgent, InvestmentAdvisor, and more
+- **Frontend Components**: StreamingModeSelector, ProfileDetailsPanel, DemoScenariosWidget, and BackendIndicator
+
+### Enhanced
+- **Package Management**: Migrated from pip to uv for faster, reproducible builds with `uv.lock` (221 packages)
+- **Devcontainer**: Multi-architecture support (ARM64/x86) with streamlined startup
+- **Terraform Deployment**: Fixed deprecated properties, count dependencies, and dynamic tfvars generation
+- **azd Remote State**: Simplified interactive prompts with auto-generated storage configuration
+- **OpenTelemetry**: Comprehensive tracing for LLM, speech, and ACS calls with latency metrics
+- **Speech Processing**: Dynamic phrase biasing and configurable transcription settings per agent
+
+### Fixed
+- **Agent Handoffs**: Resolved greeting bugs and "already has active response" conflicts in VoiceLive
+- **LLM Streaming**: Added 90s overall timeout and 5s per-chunk timeout with graceful cancellation
+- **Tool Calls**: Fixed index validation to filter malformed responses
+- **Docker Builds**: Optimized Dockerfile for faster builds by removing unnecessary apt upgrades
+
+### Infrastructure
+- Azure VoiceLive model deployment configurations with capacity and SKU settings
+- Communication services email domain resources
+- Redis session persistence and CosmosDB TTL management improvements
+- Staging environment parameter updates with location resolution fallback chain
+
 ## [1.0.1] - 2025-09-03
 
 Major architectural enhancement with Live Voice API integration and comprehensive development framework improvements.

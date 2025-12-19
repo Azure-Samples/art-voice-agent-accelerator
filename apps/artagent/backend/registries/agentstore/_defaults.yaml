@@ -1,0 +1,74 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Agent Defaults
+# ═══════════════════════════════════════════════════════════════════════════════
+# Inherited by all agents unless overridden in their agent.yaml
+#
+# This file defines sensible defaults for:
+# - Model configuration (deployment, temperature, etc.)
+# - Voice settings (Azure TTS)
+# - Session settings (VoiceLive / Realtime API)
+# - Handoff configuration
+# - Template variables for prompts
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Model Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+# Define separate models for each orchestration mode:
+#   - cascade_model:   Used by Cascade orchestrator (Chat Completions API)
+#   - voicelive_model: Used by VoiceLive orchestrator (Realtime API)
+#   - model:           Fallback if mode-specific model not defined
+# ─────────────────────────────────────────────────────────────────────────────
+cascade_model:
+  deployment_id: gpt-4o
+  temperature: 0.7
+  top_p: 0.9
+  max_tokens: 4096
+
+voicelive_model:
+  deployment_id: gpt-realtime
+  temperature: 0.7
+  top_p: 0.9
+  max_tokens: 4096
+
+# Fallback model (used if mode-specific model not defined)
+model:
+  deployment_id: gpt-4o
+  temperature: 0.7
+  top_p: 0.9
+  max_tokens: 4096
+
+# Voice settings (Azure TTS)
+voice:
+  name: en-US-ShimmerTurboMultilingualNeural
+  type: azure-standard
+  style: chat
+  rate: "+0%"
+
+# Handoff configuration
+handoff:
+  # No default trigger - each agent defines its own
+  # trigger: handoff_<agent_name>
+
+# Session settings (VoiceLive / Realtime API)
+session:
+  modalities: [TEXT, AUDIO]
+  input_audio_format: PCM16
+  output_audio_format: PCM16
+  
+  input_audio_transcription_settings:
+    model: azure-speech
+    language: en-US
+  
+  turn_detection:
+    type: azure_semantic_vad
+    threshold: 0.5
+    prefix_padding_ms: 240
+    silence_duration_ms: 700
+  
+  tool_choice: auto
+
+# Template variables (available in prompts)
+template_vars:
+  institution_name: "Contoso Financial"
+  agent_name: "Assistant"

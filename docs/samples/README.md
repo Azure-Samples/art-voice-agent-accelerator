@@ -48,7 +48,7 @@ state management, and experimentation.
 
 ## Environment Checklist
 
-1. Python 3.11+ with project dependencies installed (`pip install -r requirements.txt`).
+1. Python 3.11+ with project dependencies installed (`uv sync` or `pip install -e .`).
 2. Jupyter or VS Code notebooks. Activate the project virtual environment first.
 3. Azure resources (Speech, OpenAI, ACS, Redis) provisioned and referenced in `.env`.
 

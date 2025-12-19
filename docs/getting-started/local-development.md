@@ -1,374 +1,288 @@
-# ⚡ Local Development
+### UI Orientation (Screenshots)
 
-Run the ARTVoice Accelerator locally with raw commands. No Makefile usage. Keep secrets out of git and rotate any previously exposed keys.
+For a fast orientation to the UI and agent setup:
 
----
+- Agent Builder initial view: ![Agent Builder - Initial](../assets/01-agent-builder-initial.png)
+- Template selection flow: ![Template Selected](../assets/02-template-selected.png)
 
-## 1. Scope
+Prefer a full walkthrough? See [Quickstart: Step-by-Step](quickstart.md#step-by-step-build-your-first-agent) for numbered instructions with images.
 
-What this covers:
+# :material-laptop: Local Development
 
-- Local backend (FastAPI + Uvicorn) and frontend (Vite/React)
-- Dev tunnel for inbound [Azure Communication Services](https://learn.microsoft.com/en-us/azure/communication-services/) callbacks
-- Environment setup via venv OR Conda
-- Minimal `.env` files (root + frontend)
-
-What this does NOT cover:
-- Full infra provisioning
-- CI/CD
-- Persistence hardening
-
----
-
-## 2. Prerequisites
-
-| Tool | Notes |
-|------|-------|
-| Python 3.11 | Required runtime |
-| Node.js ≥ 22 | Frontend |
-| Azure CLI | `az login` first |
-| Dev Tunnels | [Getting Started Guide](https://learn.microsoft.com/en-us/azure/developer/dev-tunnels/get-started) |
-| (Optional) Conda | If using `environment.yaml` |
-| Provisioned Azure resources | For real STT/TTS/LLM/ACS |
-
-If you only want a browser demo (no phone), ACS variables are optional.
-
----
-
-## 3. Clone Repository
-
-```bash
-git clone https://github.com/Azure-Samples/art-voice-agent-accelerator.git
-cd art-voice-agent-accelerator
-```
-
----
-
-## 4. Python Environment (Choose One)
-
-### Option A: venv
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-### Option B: Conda
-```bash
-conda env create -f environment.yaml
-conda activate audioagent
-pip install -r requirements.txt   # sync with lock
-```
-
----
-
-## 5. Root `.env` (Create in repo root)
-
-!!! tip "Sample Configuration"
-    Use [`.env.sample`](https://github.com/Azure-Samples/art-voice-agent-accelerator/blob/main/.env.sample) as a starting template and customize with your Azure resource values.
-
-!!! info "Using Azure Developer CLI (azd)"
-    If you provisioned infrastructure using `azd provision`, an environment file will be automatically generated for you in the format `.env.<azd-env-name>`. 
+!!! info "Prerequisite: Azure Resources"
+    This guide assumes you've already deployed infrastructure via [Quickstart](quickstart.md).
     
-    **To use the azd-generated configuration:**
+    If you haven't deployed yet, run `azd up` first—it only takes 15 minutes.
+
+---
+
+## :material-target: What You'll Set Up
+
+```mermaid
+flowchart LR
+    subgraph LOCAL["Your Machine"]
+        BE[Backend<br/>FastAPI :8010]
+        FE[Frontend<br/>Vite :5173]
+    end
+    
+    subgraph AZURE["Azure (already deployed)"]
+        AC[App Config]
+        AI[OpenAI + Speech]
+        ACS[Communication Services]
+    end
+    
+    FE --> BE
+    BE --> AC
+    AC --> AI
+    AC --> ACS
+    
+    style LOCAL fill:#e3f2fd
+    style AZURE fill:#fff3e0
+```
+
+| Component | Port | Purpose |
+|-----------|------|---------|
+| **Backend** | `8010` | FastAPI + WebSocket voice pipeline |
+| **Frontend** | `5173` | Vite + React demo UI |
+| **Dev Tunnel** | External | ACS callbacks for phone calls |
+
+---
+
+## :material-numeric-1-circle: Python Environment
+
+Choose **one** of these options:
+
+=== ":material-star: uv (Recommended)"
+
+    [uv](https://docs.astral.sh/uv/) is 10-100x faster than pip.
+    
     ```bash
-    # Copy the azd-generated environment file
-    cp .env.<your-azd-env-name> .env
+    # Install uv (if not installed)
+    curl -LsSf https://astral.sh/uv/install.sh | sh
     
-    # Example: if your azd environment is named "dev"
-    cp .env.dev .env
+    # Sync dependencies (creates .venv automatically)
+    uv sync
     ```
-    
-    The azd-generated file contains all the Azure resource endpoints and configuration needed for local development.
 
-**Manual Configuration Template** (edit placeholders; DO NOT commit real values):
+=== "venv + pip"
 
-```
-# ===== Azure OpenAI =====
-AZURE_OPENAI_ENDPOINT=https://<your-aoai>.openai.azure.com
-AZURE_OPENAI_KEY=<aoai-key>
-AZURE_OPENAI_DEPLOYMENT=gpt-4-1-mini
-AZURE_OPENAI_API_VERSION=2024-12-01-preview
-AZURE_OPENAI_CHAT_DEPLOYMENT_ID=gpt-4-1-mini
-AZURE_OPENAI_CHAT_DEPLOYMENT_VERSION=2024-11-20
+    ```bash
+    python -m venv .venv
+    source .venv/bin/activate  # Windows: .venv\Scripts\activate
+    pip install -e .[dev]
+    ```
 
-# ===== Speech =====
-AZURE_SPEECH_REGION=<speech-region>
-AZURE_SPEECH_KEY=<speech-key>
+=== "Conda"
 
-# ===== ACS (optional unless using phone/PSTN) =====
-ACS_CONNECTION_STRING=endpoint=https://<your-acs>.communication.azure.com/;accesskey=<acs-key>
-ACS_SOURCE_PHONE_NUMBER=+1XXXXXXXXXX
-ACS_ENDPOINT=https://<your-acs>.communication.azure.com
-
-# ===== Optional Data Stores =====
-REDIS_HOST=<redis-host>
-REDIS_PORT=6380
-REDIS_PASSWORD=<redis-password>
-AZURE_COSMOS_CONNECTION_STRING=<cosmos-conn-string>
-AZURE_COSMOS_DATABASE_NAME=audioagentdb
-AZURE_COSMOS_COLLECTION_NAME=audioagentcollection
-
-# ===== Runtime =====
-ENVIRONMENT=dev
-ACS_STREAMING_MODE=media
-
-# ===== Filled after dev tunnel starts =====
-BASE_URL=https://<tunnel-url>
-```
-
-Ensure `.env` is in `.gitignore`.
+    ```bash
+    conda env create -f environment.yaml
+    conda activate audioagent
+    uv sync  # or: pip install -e .[dev]
+    ```
 
 ---
 
-## 6. Start Dev Tunnel
+## :material-numeric-2-circle: Environment Configuration
 
-Required if you want ACS callbacks (phone flow) or remote test:
+### Option A: Use App Configuration (Recommended)
+
+After `azd up`, a `.env.local` file was auto-generated:
+
+```bash
+# Verify it exists
+cat .env.local
+```
+
+**Expected contents:**
+```bash
+AZURE_APPCONFIG_ENDPOINT=https://<your-appconfig>.azconfig.io
+AZURE_APPCONFIG_LABEL=dev
+AZURE_TENANT_ID=<your-tenant-id>
+```
+
+!!! success "That's all you need!"
+    The backend automatically fetches all settings (OpenAI, Speech, ACS, Redis, etc.) from Azure App Configuration at startup.
+
+### Option B: Legacy — Full `.env` File (Manual Setup)
+
+If you **don't have infrastructure** or need to work offline:
+
+```bash
+cp .env.sample .env
+# Edit .env with your values
+```
+
+??? example "Required variables for `.env`"
+    ```bash
+    # Azure OpenAI
+    AZURE_OPENAI_ENDPOINT=https://<your-aoai>.openai.azure.com
+    AZURE_OPENAI_KEY=<aoai-key>
+    AZURE_OPENAI_CHAT_DEPLOYMENT_ID=gpt-4o
+    
+    # Speech Services
+    AZURE_SPEECH_REGION=<region>
+    AZURE_SPEECH_KEY=<speech-key>
+    
+    # ACS (optional - only for phone calls)
+    ACS_CONNECTION_STRING=endpoint=https://<acs>.communication.azure.com/;accesskey=<key>
+    ACS_SOURCE_PHONE_NUMBER=+1XXXXXXXXXX
+    
+    # Runtime
+    ENVIRONMENT=dev
+    BASE_URL=https://<tunnel-url>
+    ```
+
+---
+
+## :material-numeric-3-circle: Start Dev Tunnel
+
+Required for ACS callbacks (phone calls). Skip if only using browser.
 
 ```bash
 devtunnel host -p 8010 --allow-anonymous
 ```
 
-Copy the printed HTTPS URL and set `BASE_URL` in root `.env`. Update it again if the tunnel restarts (URL changes).
+Copy the HTTPS URL (e.g., `https://abc123-8010.usw3.devtunnels.ms`) and set it:
 
-The Dev Tunnel URL will look similar to:
 ```bash
-https://abc123xy-8010.usw3.devtunnels.ms
+# In .env or .env.local
+BASE_URL=https://abc123-8010.usw3.devtunnels.ms
 ```
 
-!!! warning "Security Considerations for Operations Teams"
-    **Dev Tunnels create public endpoints** that expose your local development environment to the internet. Review the following security guidelines:
-    
-    - **[Azure Dev Tunnels Security](https://learn.microsoft.com/en-us/azure/developer/dev-tunnels/security)** - Comprehensive security guidance
-    - **Access Control**: Use `--allow-anonymous` only for development; consider authentication for sensitive environments
-    - **Network Policies**: Ensure dev tunnels comply with organizational network security policies
-    - **Monitoring**: Dev tunnels should be monitored and logged like any public endpoint
-    - **Temporary Usage**: Tunnels are for development only; use proper Azure services for production
-    - **Credential Protection**: Never expose production credentials through dev tunnels
-    
-    **InfoSec Recommendation**: Review tunnel usage with your security team before use in corporate environments.
+!!! warning "URL Changes on Restart"
+    If the tunnel restarts, you get a new URL. Update `BASE_URL` and any ACS Event Grid subscriptions.
 
 ---
 
-## 7. Run Backend
+## :material-numeric-4-circle: Start Backend
 
 ```bash
-cd apps/rtagent/backend
-uvicorn apps.rtagent.backend.main:app --host 0.0.0.0 --port 8010 --reload
+uv run uvicorn apps.artagent.backend.main:app --host 0.0.0.0 --port 8010 --reload
 ```
+
+??? tip "Using venv?"
+    ```bash
+    source .venv/bin/activate
+    uvicorn apps.artagent.backend.main:app --host 0.0.0.0 --port 8010 --reload
+    ```
 
 ---
 
-## 8. Frontend Environment
+## :material-numeric-5-circle: Start Frontend
 
-Create or edit `apps/rtagent/frontend/.env`:
-
-!!! tip "Sample Configuration"
-    Use [`apps/rtagent/frontend/.env.sample`](https://github.com/Azure-Samples/art-voice-agent-accelerator/blob/main/apps/rtagent/frontend/.env.sample) as a starting template.
-
-Use the dev tunnel URL by default so the frontend (and any external device or ACS-related flows) reaches your backend consistently—even if you open the UI on another machine or need secure HTTPS.
-
-```
-# Recommended (works across devices / matches ACS callbacks)
-VITE_BACKEND_BASE_URL=https://<tunnel-url>
-```
-
-If the tunnel restarts (URL changes), update both `BASE_URL` in the root `.env` and this value.
-
----
-
-## 9. Run Frontend
+Open a **new terminal**:
 
 ```bash
-cd apps/rtagent/frontend
+cd apps/artagent/frontend
+
+# Create frontend .env
+echo "VITE_BACKEND_BASE_URL=http://localhost:8010" > .env
+
 npm install
 npm run dev
 ```
 
-Open: http://localhost:5173
-
-WebSocket URL is auto-derived by replacing `http/https` with `ws/wss`.
+**Open:** http://localhost:5173
 
 ---
 
-## 10. Alternative: VS Code Debugging
+## :material-check-circle: Verify It Works
 
-**Built-in debugger configurations** are available in [`.vscode/launch.json`](https://github.com/Azure-Samples/art-voice-agent-accelerator/blob/main/.vscode/launch.json):
+1. Open http://localhost:5173
+2. Allow microphone access
+3. Start talking
+4. You should see:
+    - Transcripts appearing
+    - AI responses
+    - Audio playback
 
-### Backend Debugging
-1. **Set breakpoints** in Python code
-2. **Press F5** or go to Run & Debug view
-3. **Select "[RT Agent] Python Debugger: FastAPI"**
-4. **Debug session starts** with hot reload enabled
+### API Documentation
 
-### Frontend Debugging  
-1. **Start the React dev server** (`npm run dev`)
-2. **Press F5** or go to Run & Debug view
-3. **Select "[RT Agent] React App: Browser Debug"**
-4. **Browser opens** with debugger attached
+The backend exposes interactive API documentation:
 
-**Benefits:**
-- Set breakpoints in both Python and TypeScript/React code
-- Step through code execution
-- Inspect variables and call stacks
-- Hot reload for both frontend and backend
+| URL | Format | Best For |
+|-----|--------|----------|
+| http://localhost:8010/redoc | ReDoc | Reading API reference |
+| http://localhost:8010/docs | Swagger UI | Interactive testing |
+
+!!! tip "Explore Available Endpoints"
+    Visit `/redoc` to see all available API endpoints, request/response schemas, and WebSocket contracts for the voice pipeline.
 
 ---
 
-## 11. Alternative: Docker Compose
+## :material-tools: Development Alternatives
 
-**For containerized local development**, use the provided [`docker-compose.yml`](https://github.com/Azure-Samples/art-voice-agent-accelerator/blob/main/docker-compose.yml):
+### VS Code Debugging
+
+Built-in debug configurations in `.vscode/launch.json`:
+
+| Configuration | What It Does |
+|---------------|--------------|
+| `[RT Agent] Python Debugger: FastAPI` | Debug backend with breakpoints |
+| `[RT Agent] React App: Browser Debug` | Debug frontend in browser |
+
+1. Set breakpoints in code
+2. Press **F5**
+3. Select configuration
+4. Debug!
+
+### Docker Compose
+
+For containerized local development:
 
 ```bash
-# Ensure .env files are configured (see sections 5 & 8 above)
-
-# Build and run both frontend and backend containers
 docker-compose up --build
-
-# Or run in detached mode
-docker-compose up --build -d
-
-# View logs
-docker-compose logs -f
-
-# Stop containers
-docker-compose down
 ```
 
-**Container Ports:**
-
-- **Frontend**: http://localhost:8080 (containerized)
-- **Backend**: http://localhost:8010 (same as manual setup)
-
-**When to use Docker Compose:**
-
-- Consistent environment across team members
-- Testing containerized deployment locally
-- Isolating dependencies from host system
-- Matching production container behavior
-
-!!! note "Dev Tunnel with Docker"
-    You still need to run `devtunnel host -p 8010 --allow-anonymous` for ACS callbacks, as the containers need external access for webhook endpoints.
+| Service | URL |
+|---------|-----|
+| Frontend | http://localhost:8080 |
+| Backend | http://localhost:8010 |
 
 ---
 
-## 12. Optional: Phone (PSTN) Flow
+## :material-phone: Phone (PSTN) Setup
 
-1. Purchase ACS phone number (Portal or CLI).
+!!! note "Optional"
+    Only needed if you want to make/receive actual phone calls.
 
-2. Ensure these vars are set in your root `.env` (with real values):
-
-   ```
-   ACS_CONNECTION_STRING=endpoint=...
-   ACS_SOURCE_PHONE_NUMBER=+1XXXXXXXXXX
-   ACS_ENDPOINT=https://<your-acs>.communication.azure.com
-   BASE_URL=https://<tunnel-hash>-8010.usw3.devtunnels.ms
+1. **Purchase a phone number** via Azure Portal or:
+   ```bash
+   make purchase_acs_phone_number
    ```
 
-3. Create a single Event Grid subscription for the Incoming Call event pointing to your answer handler:
-   - Inbound endpoint:  
-     `https://<tunnel-hash>-8010.usw3.devtunnels.ms/api/v1/calls/answer`
-   - Event type: `Microsoft.Communication.IncomingCall`
-   - (Callbacks endpoint `/api/v1/calls/callbacks` is optional unless you need detailed lifecycle events.)
+2. **Configure Event Grid** subscription:
+   - Event: `Microsoft.Communication.IncomingCall`
+   - Endpoint: `https://<tunnel-url>/api/v1/calls/answer`
 
-   If tunnel URL changes, update the subscription (delete & recreate or update endpoint).
+3. **Dial the number** and talk to your AI agent!
 
-   Reference: [Subscribing to events](https://learn.microsoft.com/en-us/azure/communication-services/quickstarts/events/subscribe-to-event)
-
-4. Dial the number; observe:
-   - Call connection established
-   - Media session events
-   - STT transcripts
-   - TTS audio frames
+📚 **Full guide:** [Phone Number Setup](../deployment/phone-number-setup.md)
 
 ---
 
-## 13. Quick Browser Test
+## :material-bug: Troubleshooting
 
-1. Backend + frontend running.
-2. Open app, allow microphone.
-3. Speak → expect:
-   - Interim/final transcripts
-   - Model response
-   - Audio playback
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| 404 on callbacks | Stale `BASE_URL` | Update `.env` with new tunnel URL |
+| No audio | Invalid Speech key | Check Azure Speech resource |
+| WebSocket closes | Wrong backend URL | Verify `VITE_BACKEND_BASE_URL` |
+| Import errors | Missing deps | Re-run `uv sync` |
+| Phone call no events | Event Grid not configured | Update subscription endpoint |
 
----
-
-## 14. Troubleshooting
-
-| Symptom | Likely Cause | Fix |
-|---------|--------------|-----|
-| 404 on callbacks | Stale `BASE_URL` | Restart tunnel, update `.env` |
-| No audio | Speech key/region invalid | Verify Azure Speech resource |
-| WS closes fast | Wrong `VITE_BACKEND_BASE_URL` | Use exact backend/tunnel URL |
-| Slow first reply | Cold pool warm-up | Keep process running |
-| Phone call no events | ACS callback not updated to tunnel | Reconfigure Event Grid subscription |
-| Import errors | Missing dependencies | Re-run `pip install -r requirements.txt` |
+📚 **More help:** [Troubleshooting Guide](../operations/troubleshooting.md)
 
 ---
 
-## 15. Testing Your Setup
-
-### Quick Unit Tests
-Validate your local setup with the comprehensive test suite:
+## :material-test-tube: Testing
 
 ```bash
-# Run core component tests
-python -m pytest tests/test_acs_media_lifecycle.py -v
+# Quick unit tests
+uv run pytest tests/test_acs_media_lifecycle.py -v
 
-# Test event handling and WebSocket integration
-python -m pytest tests/test_acs_events_handlers.py -v
-
-# Validate DTMF processing (if using phone features)
-python -m pytest tests/test_dtmf_validation.py -v
+# All tests
+uv run pytest tests/ -v
 ```
 
-### Load Testing (Advanced)
-Validate ACS media relay and real-time conversation paths with the maintained Locust scripts and Make targets:
-
-```bash
-# Generate or refresh PCM fixtures shared by both load tests
-make generate_audio
-
-# ACS media relay flow (/api/v1/media/stream)
-make run_load_test_acs_media HOST=wss://<your-backend-host>
-
-# Real-time conversation flow (/api/v1/realtime/conversation)
-make run_load_test_realtime_conversation HOST=wss://<your-backend-host>
-```
-
-Adjust concurrency via `USERS`, `SPAWN_RATE`, `TIME`, and pass extra Locust flags with `EXTRA_ARGS='--headless --html report.html'`.
-
-Metrics reported in Locust:
-- `ttfb[...]` — time-to-first-byte after the client stops streaming audio.
-- `barge_latency[...]` — recovery time after simulated barge-in traffic.
-- `turn_complete[...]` — end-to-end latency covering audio send, response, and barge handling.
-
-The targets wrap `tests/load/locustfile.acs_media.py` and `tests/load/locustfile.realtime_conversation.py`. To run them manually:
-
-```bash
-locust -f tests/load/locustfile.acs_media.py --host wss://<backend-host> --users 10 --spawn-rate 2 --run-time 5m --headless
-locust -f tests/load/locustfile.realtime_conversation.py --host wss://<backend-host> --users 10 --spawn-rate 2 --run-time 5m --headless
-```
-
-**What the load tests validate:**
-
-- ✅ **Real-time audio streaming** - 20ms PCM chunks via WebSocket
-- ✅ **Multi-turn conversations** - Insurance inquiries and quick questions
-- ✅ **Response timing** - TTFB (Time-to-First-Byte) measurement
-- ✅ **Barge-in handling** - Response interruption simulation
-- ✅ **Connection stability** - Automatic WebSocket reconnection
-
-!!! info "Additional Resources"
-    For more comprehensive guidance on development and operations:
-    
-    - **[Troubleshooting Guide](../operations/troubleshooting.md)** - Detailed problem resolution for common issues
-    - **[Testing Guide](../operations/testing.md)** - Comprehensive unit and integration testing (85%+ coverage)
-    - **[Load Testing](../operations/load-testing.md)** - WebSocket performance testing and Azure Load Testing integration
-    - **[Repository Structure](../guides/repository-structure.md)** - Understand the codebase layout
-    - **[Utilities & Services](../guides/utilities.md)** - Core infrastructure components
-
----
-
-Keep secrets out of commits. Rotate anything that has leaked.
+📚 **Full guide:** [Testing Guide](../operations/testing.md)

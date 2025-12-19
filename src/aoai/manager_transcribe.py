@@ -3,10 +3,15 @@ import base64
 import json
 import os
 import wave
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Callable, Dict, Optional
+from typing import Any
 
-import pyaudio
+try:
+    import pyaudio  # type: ignore
+except ImportError:  # pragma: no cover
+    pyaudio = None  # type: ignore
+
 import websockets
 from dotenv import load_dotenv
 
@@ -27,15 +32,18 @@ class AudioRecorder:
         channels: int,
         format_: int,
         chunk: int,
-        device_index: Optional[int] = None,
+        device_index: int | None = None,
     ):
+        if pyaudio is None:
+            raise RuntimeError(
+                "pyaudio is required for microphone recording. Install dev extras (pip install '.[dev]') and "
+                "ensure PortAudio is installed on your system."
+            )
         self.rate = rate
         self.channels = channels
         self.format = format_
         self.chunk = chunk
-        self.device_index = (
-            device_index if device_index is not None else choose_audio_device()
-        )
+        self.device_index = device_index if device_index is not None else choose_audio_device()
         self.p = pyaudio.PyAudio()
         self.stream = None
         self.frames = []
@@ -106,14 +114,14 @@ class TranscriptionClient:
         self,
         url: str,
         headers: dict,
-        session_config: Dict[str, Any],
-        on_delta: Optional[Callable[[str], None]] = None,
-        on_transcript: Optional[Callable[[str], None]] = None,
+        session_config: dict[str, Any],
+        on_delta: Callable[[str], None] | None = None,
+        on_transcript: Callable[[str], None] | None = None,
     ):
         self.url = url
         self.headers = headers
         self.session_config = session_config
-        self.ws: Optional[websockets.WebSocketClientProtocol] = None
+        self.ws: websockets.WebSocketClientProtocol | None = None
         self._on_delta = on_delta
         self._on_transcript = on_transcript
         self._running = False
@@ -122,9 +130,7 @@ class TranscriptionClient:
 
     async def __aenter__(self):
         try:
-            self.ws = await websockets.connect(
-                self.url, additional_headers=self.headers
-            )
+            self.ws = await websockets.connect(self.url, additional_headers=self.headers)
         except TypeError:
             self.ws = await websockets.connect(self.url, extra_headers=self.headers)
         self._running = True
@@ -145,9 +151,7 @@ class TranscriptionClient:
 
     async def send_audio_chunk(self, audio_data: bytes) -> None:
         audio_base64 = base64.b64encode(audio_data).decode("utf-8")
-        await self.send_json(
-            {"type": "input_audio_buffer.append", "audio": audio_base64}
-        )
+        await self.send_json({"type": "input_audio_buffer.append", "audio": audio_base64})
 
     async def start_session(self, rate: int, channels: int) -> None:
         session_config = {
@@ -171,10 +175,7 @@ class TranscriptionClient:
                     delta = data.get("delta", "")
                     if delta and self._on_delta:
                         self._on_delta(delta)
-                elif (
-                    event_type
-                    == "conversation.item.input_audio_transcription.completed"
-                ):
+                elif event_type == "conversation.item.input_audio_transcription.completed":
                     transcript = data.get("transcript", "")
                     if transcript and self._on_transcript:
                         self._on_transcript(transcript)
@@ -231,7 +232,7 @@ class AudioTranscriber:
         channels: int,
         format_: int,
         chunk: int,
-        device_index: Optional[int] = None,
+        device_index: int | None = None,
     ):
         self.url = url
         self.headers = headers
@@ -242,7 +243,7 @@ class AudioTranscriber:
         self.device_index = device_index
 
     async def record(
-        self, duration: Optional[float] = None, output_file: Optional[str] = None
+        self, duration: float | None = None, output_file: str | None = None
     ) -> AudioRecorder:
         """
         Record audio from mic. Returns AudioRecorder.
@@ -275,16 +276,16 @@ class AudioTranscriber:
 
     async def transcribe(
         self,
-        audio_queue: Optional[asyncio.Queue] = None,
+        audio_queue: asyncio.Queue | None = None,
         model: str = "gpt-4o-transcribe",
-        prompt: Optional[str] = "Respond in English.",
-        language: Optional[str] = None,
+        prompt: str | None = "Respond in English.",
+        language: str | None = None,
         noise_reduction: str = "near_field",
         vad_type: str = "server_vad",
-        vad_config: Optional[dict] = None,
-        on_delta: Optional[Callable[[str], None]] = None,
-        on_transcript: Optional[Callable[[str], None]] = None,
-        output_wav_file: Optional[str] = None,
+        vad_config: dict | None = None,
+        on_delta: Callable[[str], None] | None = None,
+        on_transcript: Callable[[str], None] | None = None,
+        output_wav_file: str | None = None,
     ):
         """
         Run a transcription session with full model/config control.
@@ -341,7 +342,5 @@ class AudioTranscriber:
                     recorder.stop()
                     if output_wav_file is None:
                         # Default to timestamped file if not provided
-                        output_wav_file = (
-                            f"microphone_capture_{datetime.now():%Y%m%d_%H%M%S}.wav"
-                        )
+                        output_wav_file = f"microphone_capture_{datetime.now():%Y%m%d_%H%M%S}.wav"
                     recorder.save_wav(output_wav_file)

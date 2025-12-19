@@ -1,6 +1,6 @@
 import asyncio
 from collections import deque
-from typing import Any, Deque, Dict, Optional
+from typing import Any
 
 from utils.ml_logging import get_logger
 
@@ -18,12 +18,12 @@ class MessageQueue:
         for tracking if the queue is currently being processed and if media playback has
         been cancelled.
         """
-        self.queue: Deque[Dict[str, Any]] = deque()
+        self.queue: deque[dict[str, Any]] = deque()
         self.lock = asyncio.Lock()
         self.is_processing: bool = False
         self.media_cancelled: bool = False
 
-    async def enqueue(self, message: Dict[str, Any]) -> None:
+    async def enqueue(self, message: dict[str, Any]) -> None:
         """
         Enqueue a message for sequential playback.
 
@@ -37,7 +37,7 @@ class MessageQueue:
             self.queue.append(message)
             logger.info(f"📝 Enqueued message. Queue size: {len(self.queue)}")
 
-    async def dequeue(self) -> Optional[Dict[str, Any]]:
+    async def dequeue(self) -> dict[str, Any] | None:
         """
         Dequeue the next message for playback.
 
@@ -129,6 +129,4 @@ class MessageQueue:
             self.queue.clear()
             self.is_processing = False
             self.media_cancelled = False
-            logger.info(
-                f"🔄 Reset queue on interrupt. Cleared {queue_size_before} messages."
-            )
+            logger.info(f"🔄 Reset queue on interrupt. Cleared {queue_size_before} messages.")

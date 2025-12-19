@@ -1,4 +1,4 @@
-# Testing Framework
+# Testing Framework (WIP)
 
 Comprehensive unit and integration testing suite for ARTVoice Accelerator covering core components along the call automation path.
 
@@ -171,7 +171,7 @@ python -m pytest tests/ -v
 python -m pytest tests/test_acs_media_lifecycle.py -v
 
 # Run with coverage reporting
-python -m pytest --cov=apps.rtagent.backend --cov-report=term-missing tests/
+python -m pytest --cov=apps.artagent.backend --cov-report=term-missing tests/
 
 # Run specific test method
 python -m pytest tests/test_acs_events_handlers.py::TestCallEventHandlers::test_handle_call_connected_with_broadcast -v
@@ -379,8 +379,11 @@ make create_conda_env
 # Activate environment
 make activate_conda_env
 
-# Install test dependencies
-pip install -r requirements-test.txt
+# Install test dependencies (using uv - recommended)
+uv sync --extra dev
+
+# Or with pip:
+# pip install -e .[dev]
 ```
 
 ## Best Practices
@@ -426,7 +429,7 @@ The test suite provides comprehensive coverage of:
 
 ```bash
 # Generate HTML coverage report
-python -m pytest --cov=apps.rtagent.backend --cov-report=html tests/
+python -m pytest --cov=apps.artagent.backend --cov-report=html tests/
 
 # View coverage report
 open htmlcov/index.html

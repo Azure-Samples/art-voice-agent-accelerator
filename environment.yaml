@@ -1,16 +1,19 @@
+# Conda environment for ARTVoice Accelerator
+# NOTE: We recommend using `uv` instead of conda for faster dependency management.
+#       See docs/getting-started/local-development.md for uv-based setup.
+#
+# For conda users:
+#   conda env create -f environment.yaml
+#   conda activate audioagent
+#   uv sync  # or: pip install -e .[dev]
+
 name: audioagent
 channels:
   - conda-forge
   - defaults
-  - jupyter
 dependencies:
   - python=3.11
   - pip
   - ipykernel
   - pip:
-    - -r requirements.txt
-    - -r requirements-codequality.txt
-
-  # - pip:
-  #   # Install the local project in editable mode with dev extras
-  #   - -e .[dev]
+      - uv  # Install uv for package management

@@ -1,0 +1,85 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Fraud Agent - Unified Schema
+# ═══════════════════════════════════════════════════════════════════════════════
+# Post-authentication fraud detection specialist
+# Works with both SpeechCascade and VoiceLive orchestrators
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: FraudAgent
+description: |
+  Post-authentication fraud detection specialist handling credit card fraud,
+  identity theft, account takeover, and suspicious activity investigation.
+
+greeting: "You are now speaking with the Fraud Prevention desk. I can help secure your account, investigate suspicious activity, or open a fraud case. What happened?"
+return_greeting: "Welcome back to the Fraud Prevention desk. Tell me what's changed and we'll continue."
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Handoff Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+handoff:
+  trigger: handoff_fraud_agent      # Other agents call this to reach FraudAgent
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Model Configuration (overrides _defaults.yaml)
+# ─────────────────────────────────────────────────────────────────────────────
+model:
+  temperature: 0.6                   # Lower for consistent fraud investigation
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Voice Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+voice:
+  name: en-US-OnyxTurboMultilingualNeural
+  type: azure-standard
+  rate: "0%"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Session Configuration (VoiceLive-specific)
+# ─────────────────────────────────────────────────────────────────────────────
+session:
+  modalities: [TEXT, AUDIO]
+  input_audio_format: PCM16
+  output_audio_format: PCM16
+
+  input_audio_transcription_settings:
+    model: azure-speech
+    language: en-US
+
+  turn_detection:
+    type: azure_semantic_vad
+    threshold: 0.48
+    prefix_padding_ms: 220
+    silence_duration_ms: 650
+
+  tool_choice: auto
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tools (referenced by name from shared registry)
+# ─────────────────────────────────────────────────────────────────────────────
+tools:
+  # Core Fraud Detection
+  - analyze_recent_transactions
+  - check_suspicious_activity
+  - block_card_emergency
+  - create_fraud_case
+  - create_transaction_dispute
+  - ship_replacement_card
+  - send_fraud_case_email
+  - provide_fraud_education
+  
+  # Knowledge Base
+  - search_knowledge_base
+  
+  # Handoffs (for tool-based strategy)
+  - handoff_to_auth          # Return to AuthAgent (insurance) or Concierge (banking)
+  - handoff_concierge        # Return to concierge (banking scenario)
+  
+  # Escalation
+  - transfer_call_to_call_center
+  - escalate_emergency
+  - escalate_human
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Prompt (external Jinja file)
+# ─────────────────────────────────────────────────────────────────────────────
+prompt: prompt.jinja

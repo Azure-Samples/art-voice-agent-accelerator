@@ -3,16 +3,15 @@
 Minimal test script to debug the speech queue timeout issue.
 This will help us isolate whether the problem is with:
 1. The queue mechanism itself
-2. The speech recognition callbacks  
+2. The speech recognition callbacks
 3. The cross-thread communication
 """
 
 import asyncio
 import logging
 import time
-from enum import Enum
 from dataclasses import dataclass, field
-from typing import Optional
+from enum import Enum
 
 # Simple logging setup without OpenTelemetry complications
 logging.basicConfig(
@@ -36,10 +35,10 @@ class SpeechEvent:
 
     event_type: SpeechEventType
     text: str
-    language: Optional[str] = None
-    speaker_id: Optional[str] = None
-    confidence: Optional[float] = None
-    timestamp: Optional[float] = field(
+    language: str | None = None
+    speaker_id: str | None = None
+    confidence: float | None = None
+    timestamp: float | None = field(
         default_factory=time.time
     )  # Use time.time() instead of asyncio loop time
 
@@ -66,7 +65,7 @@ async def test_basic_queue():
             f"✅ Event retrieved successfully: {retrieved_event.event_type.value} - '{retrieved_event.text}'"
         )
         return True
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.error("❌ Queue get timed out - this should not happen!")
         return False
 
@@ -94,7 +93,7 @@ async def test_processing_loop():
                 if events_processed >= 3:  # Stop after processing 3 events
                     break
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.debug("⏰ Processing loop timeout (normal)")
                 continue
             except Exception as e:
@@ -152,9 +151,7 @@ async def test_cross_thread_queue():
                 logger.info("🧵 Event queued via put_nowait")
                 continue
             except Exception as e:
-                logger.debug(
-                    f"🧵 put_nowait failed: {e}, trying run_coroutine_threadsafe..."
-                )
+                logger.debug(f"🧵 put_nowait failed: {e}, trying run_coroutine_threadsafe...")
 
             # Method 2: Fall back to run_coroutine_threadsafe
             try:
@@ -174,28 +171,22 @@ async def test_cross_thread_queue():
 
     while timeout_count < max_timeouts:
         try:
-            logger.debug(
-                f"🔄 Main thread waiting for events (queue size: {queue.qsize()})"
-            )
+            logger.debug(f"🔄 Main thread waiting for events (queue size: {queue.qsize()})")
             event = await asyncio.wait_for(queue.get(), timeout=1.0)
-            logger.info(
-                f"📢 Main thread received: {event.event_type.value} - '{event.text}'"
-            )
+            logger.info(f"📢 Main thread received: {event.event_type.value} - '{event.text}'")
             events_received.append(event)
 
             if len(events_received) >= 2:  # Got both events
                 break
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             timeout_count += 1
             logger.debug(f"⏰ Main thread timeout {timeout_count}/{max_timeouts}")
             continue
 
     thread.join(timeout=1.0)
 
-    logger.info(
-        f"✅ Cross-thread test completed. Events received: {len(events_received)}"
-    )
+    logger.info(f"✅ Cross-thread test completed. Events received: {len(events_received)}")
     return len(events_received) == 2
 
 

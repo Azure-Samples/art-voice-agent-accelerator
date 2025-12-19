@@ -7,12 +7,12 @@ to understand what text and audio the agent is actually producing.
 """
 
 import asyncio
-import websockets
-import json
 import base64
+import json
 import time
-from typing import Dict, List, Any
 import uuid
+
+import websockets
 
 
 class WebSocketResponseAnalyzer:
@@ -35,7 +35,7 @@ class WebSocketResponseAnalyzer:
 
         try:
             async with websockets.connect(self.ws_url) as websocket:
-                print(f"✅ Connected to WebSocket")
+                print("✅ Connected to WebSocket")
 
                 # Send initial metadata
                 await self.send_initial_metadata(websocket)
@@ -47,7 +47,7 @@ class WebSocketResponseAnalyzer:
                 start_time = time.time()
                 timeout_time = start_time + test_duration
 
-                print(f"👂 Listening for responses...")
+                print("👂 Listening for responses...")
 
                 while time.time() < timeout_time:
                     try:
@@ -62,14 +62,14 @@ class WebSocketResponseAnalyzer:
 
                         await self.analyze_message(message)
 
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         # No message received in timeout period
                         continue
                     except websockets.exceptions.ConnectionClosed:
                         print("❌ WebSocket connection closed")
                         break
 
-                print(f"⏹️  Analysis complete")
+                print("⏹️  Analysis complete")
                 await self.print_analysis_results()
 
         except Exception as e:
@@ -92,7 +92,7 @@ class WebSocketResponseAnalyzer:
         }
 
         await websocket.send(json.dumps(metadata))
-        print(f"📤 Sent session metadata")
+        print("📤 Sent session metadata")
 
     async def send_test_audio(self, websocket):
         """Send some test audio to trigger agent responses."""
@@ -124,7 +124,7 @@ class WebSocketResponseAnalyzer:
         stop_message = {"kind": "StopAudio"}
 
         await websocket.send(json.dumps(stop_message))
-        print(f"📤 Sent stop audio signal")
+        print("📤 Sent stop audio signal")
 
     async def analyze_message(self, message: str):
         """Analyze a received WebSocket message."""
@@ -146,9 +146,7 @@ class WebSocketResponseAnalyzer:
 
             # Look for text responses
             elif "text" in response_data or "message" in response_data:
-                text_content = response_data.get(
-                    "text", response_data.get("message", "")
-                )
+                text_content = response_data.get("text", response_data.get("message", ""))
                 if text_content and text_content not in self.text_responses:
                     self.text_responses.append(text_content)
                     print(f"  💬 Text response: '{text_content}'")
@@ -186,9 +184,9 @@ class WebSocketResponseAnalyzer:
     async def print_analysis_results(self):
         """Print summary of analysis results."""
 
-        print(f"\n" + "=" * 60)
-        print(f"WEBSOCKET RESPONSE ANALYSIS RESULTS")
-        print(f"=" * 60)
+        print("\n" + "=" * 60)
+        print("WEBSOCKET RESPONSE ANALYSIS RESULTS")
+        print("=" * 60)
 
         print(f"Session ID: {self.session_id}")
         print(f"Total responses captured: {len(self.responses_captured)}")
@@ -197,18 +195,18 @@ class WebSocketResponseAnalyzer:
         print(f"Speech recognitions found: {len(self.speech_recognitions)}")
 
         if self.text_responses:
-            print(f"\n📝 AGENT TEXT RESPONSES:")
+            print("\n📝 AGENT TEXT RESPONSES:")
             for i, text in enumerate(self.text_responses, 1):
                 print(f"  {i}. {text}")
         else:
-            print(f"\n📝 No agent text responses captured")
+            print("\n📝 No agent text responses captured")
 
         if self.speech_recognitions:
-            print(f"\n🎤 SPEECH RECOGNITIONS:")
+            print("\n🎤 SPEECH RECOGNITIONS:")
             for i, speech in enumerate(self.speech_recognitions, 1):
                 print(f"  {i}. {speech}")
         else:
-            print(f"\n🎤 No speech recognitions captured")
+            print("\n🎤 No speech recognitions captured")
 
         # Show unique response types
         response_types = {}
@@ -216,7 +214,7 @@ class WebSocketResponseAnalyzer:
             kind = response.get("kind", "Unknown")
             response_types[kind] = response_types.get(kind, 0) + 1
 
-        print(f"\n📊 RESPONSE TYPES:")
+        print("\n📊 RESPONSE TYPES:")
         for kind, count in sorted(response_types.items()):
             print(f"  {kind}: {count}")
 
@@ -229,9 +227,7 @@ class WebSocketResponseAnalyzer:
             "text_responses": self.text_responses,
             "speech_recognitions": self.speech_recognitions,
             "response_types": response_types,
-            "sample_responses": self.responses_captured[
-                :10
-            ],  # First 10 responses as samples
+            "sample_responses": self.responses_captured[:10],  # First 10 responses as samples
         }
 
         output_file = f"tests/load/results/websocket_analysis_{int(time.time())}.json"
@@ -245,9 +241,7 @@ async def main():
     """Main function for command-line usage."""
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description="Analyze WebSocket responses from voice agent"
-    )
+    parser = argparse.ArgumentParser(description="Analyze WebSocket responses from voice agent")
     parser.add_argument(
         "--url",
         "-u",

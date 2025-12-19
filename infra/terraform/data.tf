@@ -5,7 +5,7 @@
 resource "azurerm_storage_account" "main" {
   name                = local.resource_names.storage
   resource_group_name = azurerm_resource_group.main.name
-  location            = var.cosmosdb_location != null ? var.cosmosdb_location : var.location
+  location            = coalesce(var.cosmosdb_location, var.location)
   account_tier        = "Standard"
   # Snyk ignore: poc, geo-replication not required
   account_replication_type        = "LRS"
@@ -62,11 +62,11 @@ resource "azurerm_role_assignment" "storage_principal_contributor" {
 # COSMOS DB (MONGODB API)
 # ============================================================================
 resource "azapi_resource" "mongoCluster" {
-  type      = "Microsoft.DocumentDB/mongoClusters@2025-08-01-preview"
-  parent_id = azurerm_resource_group.main.id
+  type                      = "Microsoft.DocumentDB/mongoClusters@2025-08-01-preview"
+  parent_id                 = azurerm_resource_group.main.id
   schema_validation_enabled = false
-  name      = local.resource_names.cosmos
-  location  = var.location
+  name                      = local.resource_names.cosmos
+  location                  = var.location
   body = {
     properties = {
       administrator = {
@@ -123,7 +123,7 @@ resource "azapi_resource" "mongoCluster" {
 
 # MongoDB firewall rule to allow all IP addresses
 resource "azapi_resource" "mongo_firewall_all" {
-  count = var.cosmosdb_public_network_access_enabled ? 1 : 0
+  count     = var.cosmosdb_public_network_access_enabled ? 1 : 0
   type      = "Microsoft.DocumentDB/mongoClusters/firewallRules@2025-04-01-preview"
   parent_id = azapi_resource.mongoCluster.id
   name      = "allowAll"

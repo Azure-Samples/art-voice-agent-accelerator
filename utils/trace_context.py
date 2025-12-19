@@ -1,11 +1,10 @@
 import os
+import random
 import time
-from typing import Optional
 
 from opentelemetry import trace
 from opentelemetry.trace import Span, SpanKind
 from opentelemetry.trace.status import Status, StatusCode
-
 from src.enums.monitoring import SpanAttr
 
 # Performance optimization: Cache tracing configuration
@@ -28,13 +27,13 @@ class TraceContext:
     def __init__(
         self,
         name: str,
-        component: Optional[str] = None,
-        call_connection_id: Optional[str] = None,
-        session_id: Optional[str] = None,
-        test_case: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        component: str | None = None,
+        call_connection_id: str | None = None,
+        session_id: str | None = None,
+        test_case: str | None = None,
+        metadata: dict | None = None,
         high_frequency: bool = False,
-        sampling_rate: Optional[float] = None,
+        sampling_rate: float | None = None,
         span_kind: SpanKind = SpanKind.INTERNAL,
     ):
         self.name = name
@@ -45,11 +44,9 @@ class TraceContext:
         self.metadata = metadata or {}
         self.high_frequency = high_frequency
         self.span_kind = span_kind
-        self.sampling_rate = sampling_rate or (
-            _HIGH_FREQ_SAMPLING if high_frequency else 1.0
-        )
+        self.sampling_rate = sampling_rate or (_HIGH_FREQ_SAMPLING if high_frequency else 1.0)
         self._start_time = None
-        self._span: Optional[Span] = None
+        self._span: Span | None = None
         self._should_trace = self._should_create_span()
 
         # Create component-specific tracer for Application Insights correlation
@@ -79,9 +76,7 @@ class TraceContext:
 
         # Set essential correlation attributes using the correct format for Application Insights
         if self.call_connection_id:
-            self._span.set_attribute(
-                SpanAttr.CALL_CONNECTION_ID.value, self.call_connection_id
-            )
+            self._span.set_attribute(SpanAttr.CALL_CONNECTION_ID.value, self.call_connection_id)
         if self.session_id:
             self._span.set_attribute(SpanAttr.SESSION_ID.value, self.session_id)
         if self.test_case:
@@ -96,9 +91,7 @@ class TraceContext:
         for k, v in self.metadata.items():
             if isinstance(v, (str, int, float, bool)):
                 # Use consistent attribute naming for Application Insights
-                attr_name = (
-                    f"{component_name}.{k}" if not k.startswith(component_name) else k
-                )
+                attr_name = f"{component_name}.{k}" if not k.startswith(component_name) else k
                 self._span.set_attribute(attr_name, v)
 
         return self
@@ -112,16 +105,12 @@ class TraceContext:
             if self._start_time:
                 duration = (time.time() - self._start_time) * 1000  # in ms
                 self._span.set_attribute("duration_ms", duration)
-                self._span.set_attribute(
-                    "latency.bucket", self._bucket_latency(duration)
-                )
+                self._span.set_attribute("latency.bucket", self._bucket_latency(duration))
 
             # Set span status based on exception
             if exc_type:
                 self._span.set_status(
-                    Status(
-                        StatusCode.ERROR, str(exc_val) if exc_val else "Unknown error"
-                    )
+                    Status(StatusCode.ERROR, str(exc_val) if exc_val else "Unknown error")
                 )
                 self._span.set_attribute(SpanAttr.ERROR_TYPE.value, exc_type.__name__)
                 if exc_val:
@@ -129,9 +118,7 @@ class TraceContext:
 
                 # Record exception for Application Insights
                 self._span.record_exception(
-                    exc_val
-                    if exc_val
-                    else Exception(f"{exc_type.__name__}: Unknown error")
+                    exc_val if exc_val else Exception(f"{exc_type.__name__}: Unknown error")
                 )
             else:
                 self._span.set_status(Status(StatusCode.OK))
@@ -218,9 +205,9 @@ class NoOpTraceContext:
 
 def create_trace_context(
     name: str,
-    call_connection_id: Optional[str] = None,
-    session_id: Optional[str] = None,
-    metadata: Optional[dict] = None,
+    call_connection_id: str | None = None,
+    session_id: str | None = None,
+    metadata: dict | None = None,
     high_frequency: bool = False,
     span_kind: SpanKind = SpanKind.INTERNAL,
 ) -> TraceContext:

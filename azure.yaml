@@ -9,22 +9,24 @@ infra:
 
 services:
   rtaudio-client:
-    project: apps/rtagent/frontend
+    project: apps/artagent/frontend
     host: containerapp
     language: js
     docker:
       path: ./Dockerfile
       context: .
       platform: linux/amd64
+      remoteBuild: true
       
   rtaudio-server:
     project: .
     host: containerapp
     language: docker
     docker:
-      path: ./apps/rtagent/backend/Dockerfile
+      path: ./apps/artagent/backend/Dockerfile
       context: .
       platform: linux/amd64
+      remoteBuild: true
 
 
 hooks:

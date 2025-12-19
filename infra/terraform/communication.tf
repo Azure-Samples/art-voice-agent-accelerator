@@ -1,4 +1,34 @@
 # ============================================================================
+# AZURE COMMUNICATION SERVICES EMAIL
+# ============================================================================
+resource "azurerm_email_communication_service" "main" {
+  name                = local.resource_names.email_service
+  resource_group_name = azurerm_resource_group.main.name
+  data_location       = var.acs_data_location
+  tags                = local.tags
+}
+
+resource "azurerm_email_communication_service_domain" "managed" {
+  name                             = local.resource_names.email_domain
+  email_service_id                 = azurerm_email_communication_service.main.id
+  domain_management                = "AzureManaged"
+  user_engagement_tracking_enabled = false
+}
+
+
+resource "azurerm_email_communication_service_domain_sender_username" "default" {
+  email_service_domain_id = azurerm_email_communication_service_domain.managed.id
+  name                    = local.email_sender_username
+  display_name            = local.email_sender_display_name
+}
+
+
+resource "azurerm_communication_service_email_domain_association" "example" {
+  communication_service_id = azapi_resource.acs.id
+  email_service_domain_id  = azurerm_email_communication_service_domain.managed.id
+}
+
+# ============================================================================
 # AZURE COMMUNICATION SERVICES
 # ============================================================================
 resource "azapi_resource" "acs" {
@@ -9,10 +39,17 @@ resource "azapi_resource" "acs" {
   location = "global"
   tags     = local.tags
 
+  ignore_missing_property = true
+
   identity {
     type = "SystemAssigned"
   }
-
+  lifecycle {
+    ignore_changes = [
+      # Ignore changes to identity to prevent recreation
+      identity,
+    ]
+  }
   body = {
     properties = {
       dataLocation        = var.acs_data_location
@@ -57,6 +94,18 @@ resource "azurerm_key_vault_secret" "acs_connection_string" {
 # - Enables real-time STT/TTS operations
 # - Required for Call Automation with speech features
 #
+
+# Allow ACS managed identity to store call recordings in the primary storage account
+resource "azurerm_role_assignment" "acs_storage_blob_contributor" {
+  scope                = azurerm_storage_account.main.id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = azapi_resource.acs.output.identity.principalId
+
+  depends_on = [
+    azapi_resource.acs,
+    azurerm_storage_account.main
+  ]
+}
 
 # ============================================================================
 # DIAGNOSTIC SETTINGS FOR AZURE COMMUNICATION SERVICES
@@ -215,3 +264,4 @@ resource "azurerm_eventgrid_system_topic" "acs" {
 
 #   depends_on = [azurerm_eventgrid_system_topic.acs]
 # }
+

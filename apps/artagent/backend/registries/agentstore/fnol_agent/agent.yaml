@@ -1,0 +1,111 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# FNOL Agent - First Notice of Loss
+# ═══════════════════════════════════════════════════════════════════════════════
+# Insurance claim intake specialist for XYMZ Insurance
+# Collects claim information and records FNOL (First Notice of Loss)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: FNOLAgent
+description: |
+  Insurance First-Notice-of-Loss (FNOL) intake specialist. Collects claim
+  information from callers who have experienced auto accidents, property
+  damage, or other insured losses. Handles emergency escalation when needed.
+
+greeting: |
+  {% if caller_name %}Hi {{ caller_name }}, I'm here to help you file your claim. Take your time - what happened?
+  {% else %}Hi, I'm here to help you file your claim. Take your time - what happened?
+  {% endif %}
+return_greeting: |
+  {% if caller_name %}{{ caller_name }}, let's continue with your claim. Where were we?
+  {% else %}Welcome back. Let's continue with your claim. Where were we?
+  {% endif %}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Handoff Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+handoff:
+  trigger: handoff_fnol_agent      # Other agents call this to reach FNOLAgent
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Voice Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+voice:
+  name: en-US-AlloyTurboMultilingualNeural
+  type: azure-standard
+  rate: "-2%"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Model Configuration (LLM for agent reasoning)
+# ─────────────────────────────────────────────────────────────────────────────
+voicelive_model:
+  deployment_id: gpt-realtime
+  temperature: 0.6                   # Lower for consistent claim intake
+  max_tokens: 250
+
+cascade_model:
+  deployment_id: gpt-4o
+  temperature: 0.6
+  max_tokens: 150
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Session Configuration (VoiceLive Mode Only)
+# ─────────────────────────────────────────────────────────────────────────────
+session:
+  modalities: [TEXT, AUDIO]
+  input_audio_format: PCM16
+  output_audio_format: PCM16
+
+  input_audio_transcription_settings:
+    model: gpt-4o-transcribe
+    language: en-US
+
+  turn_detection:
+    type: azure_semantic_vad
+    threshold: 0.5
+    prefix_padding_ms: 240
+    silence_duration_ms: 720
+
+  tool_choice: auto
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Speech Configuration (Cascade Mode Only)
+# ─────────────────────────────────────────────────────────────────────────────
+speech:
+  recognition:
+    language: en-US
+
+  synthesis:
+    voice_name: en-US-AlloyTurboMultilingualNeural
+
+  vad:
+    threshold: 0.02
+    silence_duration_ms: 700
+    prefix_padding_ms: 200
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tools (referenced by name from shared registry)
+# ─────────────────────────────────────────────────────────────────────────────
+tools:
+  # Core FNOL Tools
+  - record_fnol                      # Record First Notice of Loss claim
+  
+  # Handoffs (Insurance scenario)
+  - handoff_policy_advisor           # Policy questions (billing, renewals)
+  
+  # Escalation
+  - escalate_human
+  - escalate_emergency               # Medical/fire/injury emergencies
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Template Variables
+# ─────────────────────────────────────────────────────────────────────────────
+template_vars:
+  institution_name: "XYMZ Insurance"
+  agent_name: "ClaimsIntake"
+  industry: "insurance"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Prompt (external Jinja file)
+# ─────────────────────────────────────────────────────────────────────────────
+prompts:
+  path: prompt.jinja

@@ -2,210 +2,178 @@
 
 This directory contains GitHub Actions workflows for automated deployment of your Real-Time Audio Agent application to Azure using Azure Developer CLI (AZD).
 
-## 🎯 Available Workflows
+## 🎯 Workflows
 
-### 🏗️ Azure Developer CLI Deployment
-**File:** [`deploy-azd.yml`](./deploy-azd.yml)
-
-The main deployment workflow that handles both infrastructure and application deployment using Azure Developer CLI with Terraform backend.
-
-**Features:**
-- ✅ **Unified Deployment**: Infrastructure and application in one workflow
-- ✅ **Flexible Actions**: Provision, deploy, up, or down operations
-- ✅ **Terraform Integration**: Uses Terraform for infrastructure with AZD orchestration
-- ✅ **Multiple Triggers**: Manual, push to main, and pull request support
-- ✅ **Environment Support**: dev, staging, and prod environments
-- ✅ **Configurable State Storage**: Customizable Terraform state location
-
-**Available Actions:**
-- `provision` - Infrastructure only
-- `deploy` - Application only (requires existing infrastructure)
-- `up` - Both infrastructure and application
-- `down` - Destroy all resources
-
-**Configurable Inputs:**
-- Environment selection (dev/staging/prod)
-- Action type selection
-- Terraform state storage configuration:
-  - Resource Group (default: "Default-ActivityLogAlerts")
-  - Storage Account (default: "rtagent")
-  - Container Name (default: "tfstate")
-
-**Triggers:**
-- ✅ Manual dispatch with full configuration options
-- ✅ Push to `main` branch (auto-deploy to dev)
-- ✅ Pull requests (Terraform plan preview)
-- ✅ Workflow call from other workflows
-
-### 🎯 Complete Deployment Orchestrator
-**File:** [`deploy-azd-complete.yml`](./deploy-azd-complete.yml)
-
-A simplified orchestrator workflow that calls the main deployment workflow with predefined configurations.
-
-**Features:**
-- ✅ **Simplified Interface**: Basic environment and action selection
-- ✅ **Workflow Orchestration**: Calls the main deployment workflow
-- ✅ **Manual Trigger Only**: Designed for on-demand deployments
-
-**Triggers:**
-- ✅ Manual dispatch only
+| Workflow | File | Description |
+|----------|------|-------------|
+| **Deploy to Azure** | [`deploy-azd-complete.yml`](./deploy-azd-complete.yml) | Main deployment workflow - use this one |
+| **Deploy Documentation** | [`docs.yml`](./docs.yml) | Builds and deploys docs to GitHub Pages |
+| **Test AZD Hooks** | [`test-azd-hooks.yml`](./test-azd-hooks.yml) | Tests preprovision/postprovision hooks across platforms |
+| **_template-deploy-azd** | [`_template-deploy-azd.yml`](./_template-deploy-azd.yml) | ⚠️ Internal template - do not run directly |
 
 ## 🚀 Quick Start
 
-### 1. Configure Azure Authentication
-Set up the required GitHub repository secrets:
-```bash
-AZURE_CLIENT_ID          # Service Principal ID
-AZURE_TENANT_ID          # Azure Tenant ID
-AZURE_SUBSCRIPTION_ID    # Target Azure Subscription
-```
-
-### 2. Deploy Everything (Infrastructure + Application)
-1. Navigate to **Actions** → **Azure Developer CLI Deployment**
+### Deploy Everything
+1. Go to **Actions** → **Deploy to Azure**
 2. Click **Run workflow**
-3. Configure:
-   - **Environment**: `dev` (recommended for first deployment)
-   - **Action**: `up`
-   - **Terraform State**: Use defaults or specify custom location
-
-### 3. Infrastructure Only
-```yaml
-# Run deploy-azd.yml with:
-Environment: dev
-Action: provision
-```
-
-### 4. Application Only (requires existing infrastructure)
-```yaml
-# Run deploy-azd.yml with:
-Environment: dev  
-Action: deploy
-```
-
-## 🌍 Environment Management
-
-### Development (`dev`)
-- **Auto-deployment**: Push to `main` triggers deployment
-- **Manual deployment**: Available via workflow dispatch
-- **Resources**: Minimal sizing for cost efficiency
-- **Purpose**: Feature development and testing
-
-### Staging (`staging`)
-- **Manual deployment**: Workflow dispatch only
-- **Resources**: Production-like configuration
-- **Purpose**: Integration testing and UAT
-
-### Production (`prod`)
-- **Manual deployment**: Workflow dispatch only
-- **Resources**: Full production specification
-- **Purpose**: Live user traffic
-
-## 🔄 Deployment Actions
+3. Select environment (`dev`/`staging`/`prod`) and action (`up`)
 
 ### Available Actions
-- **`up`**: Deploy both infrastructure and application (recommended)
-- **`provision`**: Infrastructure only
-- **deploy**: Application only (requires existing infrastructure)
-- **`down`**: Destroy all resources (cleanup)
+| Action | Description |
+|--------|-------------|
+| `up` | Provision infrastructure + deploy application (default) |
+| `provision` | Infrastructure only (Terraform) |
+| `deploy` | Application only (requires existing infrastructure) |
+| `down` | Destroy all resources |
 
-### Terraform State Configuration
-Customize where Terraform state is stored:
-- **Resource Group**: Default "Default-ActivityLogAlerts"
-- **Storage Account**: Default "rtagent"
-- **Container**: Default "tfstate"
+## 🏗️ Workflow Architecture
 
-## 🔐 Security & Authentication
+The template workflow is organized into clean, separate jobs:
 
-### OIDC Authentication
-- **Federated Identity**: No client secrets required
-- **Workload Identity**: GitHub-specific Azure access
-- **Least Privilege**: Minimal required permissions
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    Deploy to Azure                           │
+│                 (deploy-azd-complete.yml)                    │
+└──────────────────────┬───────────────────────────────────────┘
+                       │ calls
+                       ▼
+┌──────────────────────────────────────────────────────────────┐
+│              _template-deploy-azd.yml                        │
+├──────────────────────────────────────────────────────────────┤
+│                                                              │
+│  ┌─────────┐    ┌─────────────┐    ┌──────────┐             │
+│  │  Setup  │───▶│   Execute   │───▶│ Finalize │             │
+│  │   🔐    │    │ 🏗️📦🚀💥   │    │    📋    │             │
+│  └─────────┘    └─────────────┘    └──────────┘             │
+│       │                                                      │
+│       │ (PRs only)                                          │
+│       ▼                                                      │
+│  ┌─────────┐                                                │
+│  │ Preview │                                                │
+│  │   📋    │                                                │
+│  └─────────┘                                                │
+└──────────────────────────────────────────────────────────────┘
+```
 
-### Environment Protection
-- **Branch Protection**: Only `main` branch can auto-deploy
-- **Manual Approval**: Staging/prod require manual triggers
-- **Secret Management**: Azure Key Vault for application secrets
+### Jobs
 
-##  Monitoring & Troubleshooting
+| Job | Description |
+|-----|-------------|
+| **Setup** | Azure authentication (OIDC or Service Principal) |
+| **Preview** | Runs `azd provision --preview` for PRs |
+| **Execute** | Runs the selected azd command (`provision`/`deploy`/`up`/`down`) |
+| **Finalize** | Updates GitHub environment variables, generates summary |
 
-### Workflow Monitoring
-- **GitHub Actions**: Check Actions tab for deployment status
-- **Detailed Logs**: Click workflow runs for step-by-step progress
-- **Error Tracking**: Review failed steps for troubleshooting
+## 🔐 Authentication
 
-### Azure Resource Monitoring
-- **Azure Portal**: Monitor deployed resources and health
-- **Application Insights**: Application performance and errors
-- **Container Apps**: Runtime logs and scaling metrics
+### OIDC (Recommended)
+Configure federated credentials in Azure AD:
+```
+AZURE_CLIENT_ID
+AZURE_TENANT_ID
+AZURE_SUBSCRIPTION_ID
+```
 
-### Common Issues & Solutions
+### Service Principal (Fallback)
+```
+AZURE_CLIENT_ID
+AZURE_CLIENT_SECRET
+AZURE_TENANT_ID
+AZURE_SUBSCRIPTION_ID
+```
 
-**Authentication Failures:**
+## ⚙️ Environment Variables
+
+After deployment, these variables are automatically set on the GitHub environment:
+
+| Variable | Description |
+|----------|-------------|
+| `AZURE_APPCONFIG_ENDPOINT` | Azure App Configuration endpoint |
+| `AZURE_APPCONFIG_LABEL` | Configuration label for the environment |
+
+These are used on subsequent deployments to maintain consistency.
+
+## 🌍 Environments
+
+| Environment | Trigger | Purpose |
+|-------------|---------|---------|
+| `dev` | Push to `main` | Development and testing |
+| `staging` | Manual | Pre-production validation |
+| `prod` | Manual | Production |
+
+## 📋 Triggers
+
+- **Push to `main`**: Auto-deploys to `dev`
+- **Pull Request**: Preview infrastructure changes
+- **Manual**: Run any action on any environment
+
+## 🧪 Test AZD Hooks Workflow
+
+The `test-azd-hooks.yml` workflow validates the AZD preprovision and postprovision hooks across multiple platforms.
+
+### What It Tests
+
+| Test | Description |
+|------|-------------|
+| **Lint** | ShellCheck analysis of all shell scripts |
+| **Syntax Validation** | Bash syntax checking (`bash -n`) |
+| **Logging Functions** | Verifies unified logging utilities work |
+| **Location Resolution** | Tests tfvars-based location resolution |
+| **Backend Configuration** | Tests Terraform backend.tf generation |
+| **Regional Availability** | Validates Azure service availability checks |
+
+### Platforms Tested
+
+| Platform | Runner | Shell |
+|----------|--------|-------|
+| 🐧 Linux | `ubuntu-latest` | Bash |
+| 🍎 macOS | `macos-latest` | Bash |
+| 🪟 Windows | `windows-latest` | Git Bash |
+
+### Triggers
+
+- Push to `main` or `staging` (when hook scripts change)
+- Pull requests (when hook scripts change)
+- Manual dispatch with optional debug mode
+
+### Running Locally
+
 ```bash
-# Verify service principal permissions
-az role assignment list --assignee $AZURE_CLIENT_ID
+# Validate script syntax
+bash -n devops/scripts/azd/preprovision.sh
+bash -n devops/scripts/azd/postprovision.sh
+
+# Run preflight checks
+cd devops/scripts/azd/helpers
+source preflight-checks.sh
+run_preflight_checks
+
+# Test with local state (no Azure required)
+export LOCAL_STATE=true
+export AZURE_ENV_NAME=local-test
+export AZURE_LOCATION=eastus2
+bash devops/scripts/azd/preprovision.sh terraform
 ```
 
-**Terraform State Lock:**
-```bash
-# Check for concurrent deployments in GitHub Actions
-# Wait for running deployments to complete
-```
+## 🔗 Related Documentation
 
-**Resource Quota Issues:**
-```bash
-# Check Azure subscription quotas
-az vm list-usage --location $AZURE_LOCATION
-```
-
-## 🎯 Usage Examples
-
-### Full Environment Setup
-```yaml
-# Complete dev environment deployment
-Workflow: deploy-azd.yml
-Environment: dev
-Action: up
-# Uses default state storage
-```
-
-### Production with Custom State
-```yaml
-# Production deployment with custom Terraform state
-Workflow: deploy-azd.yml
-Environment: prod  
-Action: up
-RS_Resource_Group: "prod-tfstate-rg"
-RS_Storage_Account: "prodtfstate123"
-RS_Container_Name: "terraform-state"
-```
-
-### Quick Cleanup
-```yaml
-# Remove dev environment resources
-Workflow: deploy-azd.yml
-Environment: dev
-Action: down
-```
+- [Azure Developer CLI Guide](../../docs/deployment/azd-guide.md)
+- [Infrastructure Overview](../../docs/architecture/)
+- [Troubleshooting](../../docs/operations/)
 
 ## 🛠️ Local Development
 
-### Azure Developer CLI
-For local development and testing:
 ```bash
-# Initialize project (first time)
-azd init
-
 # Deploy everything
 azd up --environment dev
 
-# Deploy only infrastructure
+# Infrastructure only
 azd provision --environment dev
 
-# Deploy only application  
+# Application only
 azd deploy --environment dev
 
-# Clean up resources
+# Destroy resources
 azd down --environment dev
 ```
 
@@ -215,47 +183,3 @@ azd down --environment dev
 - [Azure CLI](https://docs.microsoft.com/cli/azure/install-azure-cli)
 - Docker for container builds
 
-## 📋 Best Practices
-
-### Development Workflow
-1. **Feature Branches**: Create branches for new features
-2. **Pull Requests**: Use PRs to review infrastructure changes
-3. **Environment Progression**: dev → staging → prod
-4. **Testing**: Validate in dev before promoting
-
-### Infrastructure Management
-- **State Storage**: Use consistent Terraform state location
-- **Resource Naming**: Follow Azure naming conventions
-- **Tagging**: Apply consistent resource tags
-- **Cost Control**: Monitor and optimize resource costs
-
-### Security Practices
-- **Least Privilege**: Minimal Azure permissions
-- **Secret Management**: Use Azure Key Vault
-- **Network Security**: Configure appropriate access controls
-- **Regular Updates**: Keep dependencies current
-
----
-
-## 🔗 Related Documentation
-
-- [Azure Developer CLI Guide](../../docs/DeploymentGuide.md)
-- [Infrastructure Overview](../../docs/Architecture.md)
-- [Troubleshooting Guide](../../docs/Troubleshooting.md)
-- [Security Configuration](../../docs/AuthForHTTPandWSS.md)
-
-## 🆘 Support
-
-### Getting Help
-1. **Review Logs**: Check GitHub Actions workflow logs
-2. **Azure Portal**: Monitor resource status and logs
-3. **Documentation**: Consult project documentation
-4. **Team Support**: Reach out to the development team
-
-### Debugging Tips
-- Enable debug logging with repository variable `ACTIONS_STEP_DEBUG=true`
-- Check Azure Activity Logs for resource-level issues
-- Verify Terraform plan output before applying changes
-- Test configurations in dev environment first
-
-Happy deploying! 🚀

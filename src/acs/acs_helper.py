@@ -1,13 +1,12 @@
 import asyncio
-import logging
-import os
+from datetime import datetime, timedelta
 
-from aiohttp import web
 from azure.communication.callautomation import (
     AudioFormat,
     AzureBlobContainerRecordingStorage,
     CallAutomationClient,
     CallConnectionClient,
+    CallConnectionProperties,
     MediaStreamingAudioChannelType,
     MediaStreamingContentType,
     MediaStreamingOptions,
@@ -18,17 +17,13 @@ from azure.communication.callautomation import (
     StreamingTransportType,
     TranscriptionOptions,
 )
-from azure.communication.identity import CommunicationIdentityClient
 from azure.core.exceptions import HttpResponseError
-from utils.azure_auth import get_credential, ManagedIdentityCredential
-from azure.communication.callautomation import CallConnectionProperties
-from datetime import datetime, timedelta
-
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind
+from utils.azure_auth import get_credential
+from utils.ml_logging import get_logger
 
 from src.enums.stream_modes import StreamMode
-from utils.ml_logging import get_logger
 
 logger = get_logger("src.acs")
 tracer = trace.get_tracer(__name__)
@@ -74,9 +69,7 @@ async def wait_for_call_connected(
         except Exception as e:
             logger.warning(f"Error getting call properties: {e}")
             if datetime.utcnow() >= deadline:
-                raise TimeoutError(
-                    f"Call not connected after {timeout}s due to errors."
-                )
+                raise TimeoutError(f"Call not connected after {timeout}s due to errors.")
 
         time_end = datetime.utcnow() - time
         logger.info(f"🕐 Waited {time_end.total_seconds()}s for call to connect...")
@@ -151,38 +144,26 @@ class AcsCaller:
         try:
             if acs_connection_string:
                 logger.info("Using ACS connection string for authentication")
-                self.client = CallAutomationClient.from_connection_string(
-                    acs_connection_string
-                )
+                self.client = CallAutomationClient.from_connection_string(acs_connection_string)
             else:
                 if not acs_endpoint:
-                    raise ValueError(
-                        "acs_endpoint is required when not using connection string"
-                    )
+                    raise ValueError("acs_endpoint is required when not using connection string")
 
                 logger.info("Using managed identity for ACS authentication")
 
                 # Use system-assigned managed identity
                 credentials = get_credential()
 
-                self.client = CallAutomationClient(
-                    endpoint=acs_endpoint, credential=credentials
-                )
+                self.client = CallAutomationClient(endpoint=acs_endpoint, credential=credentials)
 
         except Exception as e:
             logger.error(f"Failed to initialize ACS client: {e}")
-            if "managed identity" in str(
-                e
-            ).lower() or "CredentialUnavailableError" in str(e):
+            if "managed identity" in str(e).lower() or "CredentialUnavailableError" in str(e):
                 logger.error("Managed identity is not available in this environment.")
                 logger.error("Either:")
                 logger.error("1. Use ACS_CONNECTION_STRING instead of managed identity")
-                logger.error(
-                    "2. Ensure managed identity is enabled for this App Service"
-                )
-                logger.error(
-                    "3. Set AZURE_CLIENT_ID if using user-assigned managed identity"
-                )
+                logger.error("2. Ensure managed identity is enabled for this App Service")
+                logger.error("3. Set AZURE_CLIENT_ID if using user-assigned managed identity")
             raise
 
         # Validate configuration
@@ -209,9 +190,7 @@ class AcsCaller:
             logger.warning("Neither ACS connection string nor endpoint is set")
 
         if not self.cognitive_services_endpoint:
-            logger.warning(
-                "No cognitive_services_endpoint provided (TTS/STT may not work)"
-            )
+            logger.warning("No cognitive_services_endpoint provided (TTS/STT may not work)")
 
         if not self.recording_storage_container_url:
             logger.warning(
@@ -231,9 +210,7 @@ class AcsCaller:
             logger.debug(f"Stream mode: {stream_mode}")
             logger.debug(f"Transcription options: {self.transcription_opts}")
             logger.debug(f"Media streaming options: {self.media_streaming_options}")
-            logger.debug(
-                f"Cognitive services endpoint: {self.cognitive_services_endpoint}"
-            )
+            logger.debug(f"Cognitive services endpoint: {self.cognitive_services_endpoint}")
             logger.debug(f"Callback URL: {self.callback_url}")
 
             # Determine which capabilities to enable based on stream_mode
@@ -254,14 +231,10 @@ class AcsCaller:
                 StreamMode.MEDIA,
                 StreamMode.VOICE_LIVE,
             ]:
-                logger.warning(
-                    f"Invalid stream_mode '{stream_mode}', defaulting to transcription"
-                )
+                logger.warning(f"Invalid stream_mode '{stream_mode}', defaulting to transcription")
                 transcription = self.transcription_opts
 
-            logger.debug(
-                "Creating call to %s via callback %s", target_number, self.callback_url
-            )
+            logger.debug("Creating call to %s via callback %s", target_number, self.callback_url)
 
             endpoint_host = _endpoint_host_from_client(call)
             with tracer.start_as_current_span(
@@ -319,9 +292,7 @@ class AcsCaller:
                 StreamMode.MEDIA,
                 StreamMode.VOICE_LIVE,
             ]:
-                logger.warning(
-                    f"Invalid stream_mode '{stream_mode}', defaulting to transcription"
-                )
+                logger.warning(f"Invalid stream_mode '{stream_mode}', defaulting to transcription")
                 transcription = self.transcription_opts
 
             endpoint_host = _endpoint_host_from_client(self.client)
@@ -345,9 +316,7 @@ class AcsCaller:
             return result
 
         except HttpResponseError as e:
-            logger.error(
-                f"Failed to answer call [status: {e.status_code}]: {e.message}"
-            )
+            logger.error(f"Failed to answer call [status: {e.status_code}]: {e.message}")
             raise
         except Exception as e:
             logger.error(f"Unexpected error answering call: {e}", exc_info=True)

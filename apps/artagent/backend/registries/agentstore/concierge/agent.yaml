@@ -1,0 +1,156 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Concierge Agent - Unified Schema
+# ═══════════════════════════════════════════════════════════════════════════════
+# Primary concierge that orchestrates customer interactions
+# Routes to specialist agents when appropriate
+# Works with both SpeechCascade and VoiceLive orchestrators
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: Concierge
+description: Primary  assistant - handles most customer needs and routes complex requests to specialists
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Handoff Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+handoff:
+  trigger: handoff_concierge  # Other agents call this to return to Concierge
+
+greeting: |
+  {% if caller_name and institution_name %}Hi {{ caller_name }}, welcome to {{ institution_name }}. I'm {{ agent_name | default('your assistant') }}. How can I help you today?
+  {% elif caller_name %}Hi {{ caller_name }}, I'm {{ agent_name | default('your assistant') }}. How can I help you today?
+  {% elif institution_name %}Hi, welcome to {{ institution_name }}. I'm {{ agent_name | default('your assistant') }}. How can I help you today?
+  {% else %}Hi, I'm {{ agent_name | default('your assistant') }}. How can I help you today?
+  {% endif %}
+
+return_greeting: |
+  {% if caller_name %}Welcome back, {{ caller_name }}. Is there anything else I can assist you with?
+  {% else %}Welcome back. Is there anything else I can assist you with?
+  {% endif %}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Voice Configuration (Used by BOTH VoiceLive and Cascade modes)
+# ─────────────────────────────────────────────────────────────────────────────
+voice:
+  name: en-US-AlloyTurboMultilingualNeural   # Fast, natural multilingual voice
+  # Alternative voices:
+  # name: en-US-AvaMultilingualNeural        # Warm, professional
+  # name: en-US-EmmaMultilingualNeural       # Clear, trustworthy
+  # name: en-US-BrianMultilingualNeural      # Professional male
+  type: azure-standard                        # Voice provider (azure-standard or azure-neural)
+  rate: "-4%"                                 # Speech rate: -50% (slower) to +100% (faster)
+  # pitch: "+0%"                              # Pitch: -50% (lower) to +50% (higher)
+  # style: cheerful                           # Voice style: cheerful, empathetic, calm, professional
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Model Configuration (LLM for agent reasoning)
+# ─────────────────────────────────────────────────────────────────────────────
+# OPTION 1: Same model for both modes
+#   - Use "model:" - applies to BOTH VoiceLive and Cascade
+#
+# OPTION 2: Different models per mode (recommended for flexibility)
+#   - voicelive_model: Configuration for VoiceLive mode (Realtime API)
+#   - cascade_model:   Configuration for Cascade mode (Chat Completions API)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Same model for both modes (default)
+# model:
+#   deployment_id: gpt-4o                   # Used by BOTH VoiceLive and Cascade
+#   temperature: 0.7                        # Creativity: 0.0 (deterministic) to 1.0 (creative)
+#   top_p: 0.9                             # Nucleus sampling: 0.0 to 1.0
+#   max_tokens: 150                        # Max response length
+#   # frequency_penalty: 0.0               # Reduce repetition: 0.0 to 2.0
+#   # presence_penalty: 0.0                # Encourage topic diversity: 0.0 to 2.0
+
+voicelive_model:
+  deployment_id: gpt-realtime  # VoiceLive mode uses this
+  temperature: 0.7
+  max_tokens: 2048
+
+cascade_model:
+  deployment_id: gpt-4o                   # Cascade mode uses this
+  temperature: 0.8                        # Can have different parameters!
+  max_tokens: 2048
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Session Configuration (VoiceLive Mode Only)
+# ─────────────────────────────────────────────────────────────────────────────
+# These settings only apply when ACS_STREAMING_MODE=voice_live
+# Ignored in cascade mode (which uses Speech SDK directly)
+# ─────────────────────────────────────────────────────────────────────────────
+session:
+  modalities: [TEXT, AUDIO]              # Supported modalities
+  input_audio_format: PCM16              # Audio format: PCM16 (16-bit PCM)
+  output_audio_format: PCM16             # Output audio format
+
+  # Speech-to-Text configuration (VoiceLive mode)
+  input_audio_transcription_settings:
+    model: gpt-4o-transcribe             # STT model: gpt-4o-transcribe or whisper-1
+    language: en-US                      # Primary language: en-US, es-ES, fr-FR, etc.
+
+  # Turn detection (when agent knows user finished speaking)
+  turn_detection:
+    type: azure_semantic_vad              # VAD type: azure_semantic_vad or server_vad
+    threshold: 0.5                        # Sensitivity: 0.0 (less sensitive) to 1.0 (more sensitive)
+    prefix_padding_ms: 240                # Start listening N ms before detected speech
+    silence_duration_ms: 720              # Wait N ms of silence before responding
+    # create_response: true                # Auto-create response after turn detection
+
+  # Tool configuration
+  tool_choice: auto                       # Tool selection: auto, required, none, or {type: "function", name: "tool_name"}
+  # parallel_tool_calls: true             # Allow calling multiple tools in parallel
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Speech Configuration (Cascade Mode Only)
+# ─────────────────────────────────────────────────────────────────────────────
+# These settings only apply when ACS_STREAMING_MODE=media (custom_cascade)
+# Ignored in voice_live mode
+# ─────────────────────────────────────────────────────────────────────────────
+speech:
+  # Speech-to-Text (Azure Speech SDK)
+  recognition:
+    language: en-US                       # Recognition language
+    # phrase_list:                        # Custom phrases for better recognition
+    #   - "Contoso Bank"
+    #   - "investment portfolio"
+    #   - "certificate of deposit"
+    # continuous_recognition: true        # Enable continuous recognition
+    
+  # Text-to-Speech (Azure Speech SDK)
+  synthesis:
+    voice_name: en-US-AvaMultilingualNeural  # Inherits from voice.name if not specified
+    # output_format: audio-16khz-32kbitrate-mono-mp3  # Audio format
+    # speaking_rate: 1.0                  # Speech rate multiplier
+    
+  # Voice Activity Detection (Custom VAD)
+  vad:
+    threshold: 0.02                       # RMS threshold for speech detection
+    silence_duration_ms: 700              # Silence duration to end turn
+    prefix_padding_ms: 200                # Audio buffer before speech starts
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tools (referenced by name from shared registry)
+# ─────────────────────────────────────────────────────────────────────────────
+tools:
+  # Identity & Profile
+  - verify_client_identity
+  - get_user_profile
+  
+  # Account Operations
+  - get_account_summary
+  - get_recent_transactions
+  - refund_fee
+  
+  # Handoffs to Specialists
+  - handoff_card_recommendation        # Credit card recommendations
+  - handoff_investment_advisor         # Investment & retirement
+
+  # Escalation
+  - escalate_human
+  - escalate_emergency
+  - transfer_call_to_call_center
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Prompt (file reference)
+# ─────────────────────────────────────────────────────────────────────────────
+prompts:
+  path: prompt.jinja

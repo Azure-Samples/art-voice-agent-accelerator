@@ -26,7 +26,7 @@ Notes:
 """
 
 
-from typing import List, Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -39,12 +39,12 @@ class TurnHistoryItem(BaseModel):
 
 class SessionState(BaseModel):
     session_id: str
-    user_id: Optional[str]
+    user_id: str | None
     active: bool = True
     turn_number: int = 0
-    last_input: Optional[str] = None
+    last_input: str | None = None
     is_muted: bool = False
-    language: Optional[str] = "en-US"
+    language: str | None = "en-US"
 
 
 class CallAutomationEvent(BaseModel):
@@ -57,4 +57,4 @@ class CallAutomationEvent(BaseModel):
         "call_disconnected",
     ]
     timestamp: str
-    metadata: Optional[dict]
+    metadata: dict | None

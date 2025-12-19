@@ -63,7 +63,9 @@ def opening_hours(tourist_destination: str) -> str:
         "Museum of Pop Culture": "10 AM - 5 PM",
         "Seattle Aquarium": "9:30 AM - 6 PM",
     }
-    opening_hours = mock_opening_hours_data.get(tourist_destination, "Opening hours not available for this location.")
+    opening_hours = mock_opening_hours_data.get(
+        tourist_destination, "Opening hours not available for this location."
+    )
     return json.dumps({"opening_hours": opening_hours})
 
 
@@ -217,6 +219,7 @@ def process_records(records: List[Dict[str, int]]) -> str:
         total = sum(record.values())
         sums.append(total)
     return json.dumps({"sums": sums})
+
 
 # Statically defined user functions for fast reference
 user_functions: Set[Callable[..., Any]] = {

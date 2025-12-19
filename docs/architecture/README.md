@@ -108,14 +108,14 @@
 
 ## :material-compass: Architecture Deep Dives
 
-| Document | Focus | What You'll Learn |
-|----------|-------|-------------------|
-| **[LLM Orchestration](llm-orchestration.md)** | AI routing and conversation management | Multi-agent coordination, dependency injection patterns, orchestrator design |
-| **[Speech Recognition](speech-recognition.md)** | Real-time STT processing | Azure Speech integration, WebSocket handling, and transcription accuracy |
-| **[Speech Synthesis](speech-synthesis.md)** | Dynamic TTS generation | Low-latency audio synthesis, voice font customization, and output streaming |
-| **[ACS Call Flows](acs-flows.md)** | Three-thread voice processing | Real-time audio handling, WebSocket patterns, media lifecycle |
-| **[Data Flows](data-flows.md)** | Storage and caching patterns | State management, Redis coordination, Cosmos DB persistence |
-| **[Integrations](integrations.md)** | Cross-cloud connectivity | External service patterns, authentication flows |
+| Section | Documents | What You'll Learn |
+|---------|-----------|-------------------|
+| **[Agents](agents/README.md)** | Framework, Handoffs | YAML-driven agent system, multi-agent coordination, handoff patterns |
+| **[Orchestration](orchestration/README.md)** | Cascade, VoiceLive | Dual orchestrator modes, event handling, turn processing |
+| **[Speech](speech/README.md)** | Modes, Recognition, Synthesis | Audio streaming, STT/TTS integration, handler selection |
+| **[Data](data/README.md)** | Session, Flows | MemoManager, Redis patterns, state persistence |
+| **[ACS](acs/README.md)** | Call Flows, Integrations | ACS media handling, telephony integration, IVR bridging |
+| **[Telemetry](telemetry.md)** | Observability | OpenTelemetry, App Insights, SLOs and alerting |
 
 ## :material-rocket: Quick Start Paths
 
@@ -125,9 +125,9 @@
     3. **[API Reference](../api/README.md)** - Endpoints and WebSocket protocols
     
 === "🏗️ Architects"
-    1. **[Data Flow Patterns](data-flows.md)** - Storage strategies and state management
+    1. **[Data Flow Patterns](data/flows.md)** - Storage strategies and state management
     2. **[Production Deployment](../deployment/production.md)** - Infrastructure and scaling
-    3. **[Integrations Overview](integrations.md)** - External service connectivity
+    3. **[ACS Integrations](acs/integrations.md)** - External service connectivity
 
 === "🔧 Operations"
     1. **[Monitoring Guide](../operations/monitoring.md)** - Application insights and observability

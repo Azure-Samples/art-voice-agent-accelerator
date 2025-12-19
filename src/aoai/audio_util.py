@@ -4,17 +4,26 @@ import asyncio
 import base64
 import io
 import threading
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 import numpy as np
-import pyaudio
-import sounddevice as sd
+
+try:
+    import pyaudio  # type: ignore
+except ImportError:  # pragma: no cover
+    pyaudio = None  # type: ignore
+
+try:
+    import sounddevice as sd  # type: ignore
+except ImportError:  # pragma: no cover
+    sd = None  # type: ignore
+
 from openai.resources.beta.realtime.realtime import AsyncRealtimeConnection
 from pydub import AudioSegment
 
 CHUNK_LENGTH_S = 0.05  # 100ms
 SAMPLE_RATE = 24000
-FORMAT = pyaudio.paInt16
+FORMAT = pyaudio.paInt16 if pyaudio is not None else None
 CHANNELS = 1
 
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
@@ -28,16 +37,18 @@ def audio_to_pcm16_base64(audio_bytes: bytes) -> bytes:
     )
     # resample to 24kHz mono pcm16
     pcm_audio = (
-        audio.set_frame_rate(SAMPLE_RATE)
-        .set_channels(CHANNELS)
-        .set_sample_width(2)
-        .raw_data
+        audio.set_frame_rate(SAMPLE_RATE).set_channels(CHANNELS).set_sample_width(2).raw_data
     )
     return pcm_audio
 
 
 class AudioPlayerAsync:
     def __init__(self):
+        if sd is None:
+            raise RuntimeError(
+                "sounddevice is required for audio playback. Install dev extras (pip install '.[dev]') "
+                "and ensure your OS audio dependencies are available."
+            )
         self.queue = []
         self.lock = threading.Lock()
         self.stream = sd.OutputStream(
@@ -66,9 +77,7 @@ class AudioPlayerAsync:
 
             # fill the rest of the frames with zeros if there is no more data
             if len(data) < frames:
-                data = np.concatenate(
-                    (data, np.zeros(frames - len(data), dtype=np.int16))
-                )
+                data = np.concatenate((data, np.zeros(frames - len(data), dtype=np.int16)))
 
         outdata[:] = data.reshape(-1, 1)
 
@@ -106,6 +115,12 @@ async def send_audio_worker_sounddevice(
     start_send: Callable[[], Awaitable[None]] | None = None,
 ):
     sent_audio = False
+
+    if sd is None:
+        raise RuntimeError(
+            "sounddevice is required for microphone capture. Install dev extras (pip install '.[dev]') "
+            "and ensure your OS audio dependencies are available."
+        )
 
     device_info = sd.query_devices()
     print(device_info)
@@ -157,6 +172,11 @@ def list_audio_input_devices() -> None:
     """
     Print all available input devices (microphones) for user selection.
     """
+    if pyaudio is None:
+        raise RuntimeError(
+            "pyaudio is required to list input devices. Install dev extras (pip install '.[dev]') and "
+            "ensure PortAudio is installed on your system."
+        )
     p = pyaudio.PyAudio()
     print("\nAvailable audio input devices:")
     for i in range(p.get_device_count()):
@@ -172,6 +192,11 @@ def choose_audio_device(predefined_index: int = None) -> int:
     If predefined_index is provided and valid, use it.
     Otherwise, prompt user if multiple devices are available.
     """
+    if pyaudio is None:
+        raise RuntimeError(
+            "pyaudio is required to select an input device. Install dev extras (pip install '.[dev]') and "
+            "ensure PortAudio is installed on your system."
+        )
     p = pyaudio.PyAudio()
     try:
         mic_indices = [
@@ -199,17 +224,13 @@ def choose_audio_device(predefined_index: int = None) -> int:
             print(f"  [{idx}]: {info['name']}")
         while True:
             try:
-                selection = input(
-                    f"Select audio input device index [{mic_indices[0]}]: "
-                ).strip()
+                selection = input(f"Select audio input device index [{mic_indices[0]}]: ").strip()
                 if selection == "":
                     return mic_indices[0]
                 selected_index = int(selection)
                 if selected_index in mic_indices:
                     return selected_index
-                print(
-                    f"Index {selected_index} is not valid. Please choose from {mic_indices}."
-                )
+                print(f"Index {selected_index} is not valid. Please choose from {mic_indices}.")
             except ValueError:
                 print("Invalid input. Please enter a valid integer index.")
 

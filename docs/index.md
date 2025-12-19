@@ -16,8 +16,8 @@
     Understand the system design:
     
     1. **[Architecture Overview](architecture/README.md)** - System architecture
-    2. **[Data Flows](architecture/data-flows.md)** - Redis & Cosmos DB architecture
-    3. **[ACS Integration](architecture/acs-flows.md)** - Three-thread voice processing
+    2. **[Data Flows](architecture/data/flows.md)** - Redis & Cosmos DB architecture
+    3. **[ACS Integration](architecture/acs/README.md)** - Three-thread voice processing
 
 === "🔧 Operators"
     Deploy and monitor in production:
@@ -32,7 +32,7 @@
 |-------|-------------|
 | [Quick Start Guide](getting-started/README.md) | Complete setup and basic usage examples |
 | [Local Development](getting-started/local-development.md) | Local development setup and testing |
-| [Configuration Guide](getting-started/configuration.md) | Advanced configuration options |
+| [Quick Start](getting-started/quickstart.md) | Advanced configuration options |
 | [Deployment Guide](deployment/README.md) | Complete Azure deployment with Terraform/azd |
 | [Architecture Overview](architecture/README.md) | System architecture and design decisions |
 | [Troubleshooting](operations/troubleshooting.md) | Common issues and solutions |
@@ -46,9 +46,9 @@
     **Core System Design**
     
     - **[Architecture Overview](architecture/README.md)** - Enterprise Azure infrastructure & logical design
-    - **[ACS Flows](architecture/acs-flows.md)** - Three-thread voice processing architecture  
-    - **[Data Flows](architecture/data-flows.md)** - Redis & Cosmos DB three-tier storage
-    - **[Cross-Cloud Integration](architecture/integrations.md)** - Azure/AWS integration patterns
+    - **[ACS Flows](architecture/acs/README.md)** - Three-thread voice processing architecture  
+    - **[Data Flows](architecture/data/flows.md)** - Redis & Cosmos DB three-tier storage
+    - **[Cross-Cloud Integration](architecture/acs/integrations.md)** - Azure/AWS integration patterns
     - **[LLM Orchestration](architecture/llm-orchestration.md)** - AI model routing & conversation flows
 
 === "🚀 Deployment & Operations"
@@ -67,18 +67,18 @@
     
     - **[Getting Started](getting-started/README.md)** - Quick setup & basic usage
     - **[Local Development](getting-started/local-development.md)** - Development environment
-    - **[Configuration Guide](getting-started/configuration.md)** - Environment & service setup
+    - **[Quick Start Guide](getting-started/quickstart.md)** - Environment & service setup
     - **[API Reference](api/README.md)** - Complete REST & WebSocket API documentation  
     - **[Interactive API Docs](api/api-reference.md)** - OpenAPI specification with testing
 
 === "📚 Reference & Utilities"
     **Supporting Documentation**
     
-    - **[Speech Synthesis](reference/speech-synthesis.md)** - Azure Speech TTS integration
-    - **[Speech Recognition](reference/speech-recognition.md)** - Azure Speech STT capabilities
-    - **[Streaming Modes](reference/streaming-modes.md)** - Audio processing pipelines
-    - **[Utilities & Tools](reference/utilities.md)** - Helper services & infrastructure
-    - **[Repository Structure](reference/repository-structure.md)** - Codebase organization
+    - **[Speech Synthesis](architecture/speech/synthesis.md)** - Azure Speech TTS integration
+    - **[Speech Recognition](architecture/speech/recognition.md)** - Azure Speech STT capabilities
+    - **[Resource Pools](architecture/speech/resource-pools.md)** - Audio processing pipelines
+    - **[Utilities & Tools](guides/utilities.md)** - Helper services & infrastructure
+    - **[Repository Structure](guides/repository-structure.md)** - Codebase organization
     - **[Authentication Guide](security/authentication.md)** - Security & session management
 
 === "🏥 Industry Solutions"
@@ -89,10 +89,10 @@
 
 ## Diagram Highlights
 
-- Production reference: [Architecture Overview – Production Deployment](architecture/README.md#production-deployment-architecture) (image: `assets/RTAudio.v0.png`)
-- Data lifecycle: [Data Flows – Call Lifecycle](architecture/data-flows.md#complete-call-lifecycle-flow) with interactive Mermaid sequence diagrams
-- Contact center routing: [ACS Flows](architecture/acs-flows.md) featuring step-by-step diagrams and Mermaid flows
-- Authentication flows: [Authentication Guide](security/authentication.md#authentication-flow-diagram) detailing OAuth and shared access tokens
+- Production reference: [Architecture Overview](architecture/README.md) (image: `assets/RTAudio.v0.png`)
+- Data lifecycle: [Data Flows](architecture/data/flows.md) with interactive Mermaid sequence diagrams
+- Contact center routing: [ACS Flows](architecture/acs/README.md) featuring step-by-step diagrams and Mermaid flows
+- Authentication flows: [Authentication Guide](security/authentication.md) detailing OAuth and shared access tokens
 
 ## :material-sitemap: Architecture Overview
 
@@ -172,9 +172,17 @@ graph TB
     **Integration and customization:**
     
     1. **[Local Development](getting-started/local-development.md)** - Dev environment setup
-    2. **[Cross-Cloud Integration](architecture/integrations.md)** - Azure/AWS patterns
+    2. **[Cross-Cloud Integration](architecture/acs/integrations.md)** - Azure/AWS patterns
     3. **[Healthcare Solutions](industry/healthcare.md)** - Domain-specific implementations
-    4. **[Speech Services](reference/speech-synthesis.md)** - Advanced voice capabilities
+    4. **[Speech Services](architecture/speech/synthesis.md)** - Advanced voice capabilities
+
+=== "🏆 Get Certified"
+    **Become an ARTis practitioner:**
+    
+    1. **[ARTis Certification Program](community/artist-certification.md)** - Levels, badges & Hall of Fame
+    2. Complete onboarding for **Level 1**
+    3. Build custom agents for **Level 2**
+    4. Lead production deployments for **Level 3**
 
 !!! info "Microsoft Learn Learning Paths"
     Complement this documentation with official Microsoft learning resources:

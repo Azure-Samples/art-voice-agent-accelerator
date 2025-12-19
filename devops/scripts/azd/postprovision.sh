@@ -1,537 +1,524 @@
 #!/bin/bash
-# ========================================================================
+# ============================================================================
 # 🎯 Azure Developer CLI Post-Provisioning Script
-# ========================================================================
-# This script runs after Azure resources are provisioned by azd.
-# It handles:
-# 1. ACS phone number setup (interactive or existing)
-# 2. Environment file generation
-# 3. Backend service configuration updates
-#
-# CI/CD Mode: Set AZD_SKIP_INTERACTIVE=true to bypass all prompts
-# ========================================================================
+# ============================================================================
+# Runs after Terraform provisioning. Handles tasks that CANNOT be in Terraform:
+#   1. Cosmos DB initialization (seeding data)
+#   2. ACS phone number provisioning
+#   3. App Config URL updates (known only after deploy)
+#   4. App Config settings sync
+#   5. Local development environment setup
+#   6. EasyAuth configuration (optional, interactive)
+# ============================================================================
 
-set -e  # Exit on error (we'll handle specific failures with || true)
+set -euo pipefail
 
-# ========================================================================
-# 🔧 Configuration & Setup
-# ========================================================================
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HELPERS_DIR="$SCRIPT_DIR/helpers"
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly HELPERS_DIR="$SCRIPT_DIR/helpers"
 
-# Check for CI/CD mode
-SKIP_INTERACTIVE="${AZD_SKIP_INTERACTIVE:-false}"
-CI_MODE="${CI:-false}"
-GITHUB_ACTIONS_MODE="${GITHUB_ACTIONS:-false}"
+# ============================================================================
+# Logging (unified style - matches preprovision.sh)
+# ============================================================================
 
-# Auto-detect CI/CD environments
-if [ "$CI_MODE" = "true" ] || [ "$GITHUB_ACTIONS_MODE" = "true" ] || [ "$SKIP_INTERACTIVE" = "true" ]; then
-    INTERACTIVE_MODE=false
-else
-    INTERACTIVE_MODE=true
-fi
-
-# Color codes for better readability (disabled in CI/CD)
-if [ "$INTERACTIVE_MODE" = "true" ] && [ -t 1 ]; then
-    RED='\033[0;31m'
-    GREEN='\033[0;32m'
-    YELLOW='\033[1;33m'
-    BLUE='\033[0;34m'
-    NC='\033[0m' # No Color
-else
-    RED=''
-    GREEN=''
-    YELLOW=''
-    BLUE=''
-    NC=''
-fi
-
-# ========================================================================
-# 🛠️ Helper Functions
-# ========================================================================
-
-log_info() {
-    echo -e "${BLUE}ℹ️  $1${NC}"
+is_ci() {
+    [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" || "${AZD_SKIP_INTERACTIVE:-}" == "true" ]]
 }
 
-log_success() {
-    echo -e "${GREEN}✅ $1${NC}"
-}
+log()     { echo "│ $*"; }
+info()    { echo "│ ℹ️  $*"; }
+success() { echo "│ ✅ $*"; }
+warn()    { echo "│ ⚠️  $*"; }
+fail()    { echo "│ ❌ $*" >&2; }
 
-log_warning() {
-    echo -e "${YELLOW}⚠️  $1${NC}"
-}
-
-log_error() {
-    echo -e "${RED}❌ $1${NC}"
-}
-
-log_section() {
+header() {
     echo ""
-    echo -e "${BLUE}$1${NC}"
-    echo "$(printf '=%.0s' {1..50})"
-    echo ""
+    echo "╭─────────────────────────────────────────────────────────────"
+    echo "│ $*"
+    echo "├─────────────────────────────────────────────────────────────"
 }
 
-# Log CI/CD mode status
-log_ci_mode() {
-    if [ "$INTERACTIVE_MODE" = "false" ]; then
-        log_info "Running in CI/CD mode (non-interactive)"
-        [ "$CI_MODE" = "true" ] && log_info "  - CI environment detected"
-        [ "$GITHUB_ACTIONS_MODE" = "true" ] && log_info "  - GitHub Actions detected"
-        [ "$SKIP_INTERACTIVE" = "true" ] && log_info "  - AZD_SKIP_INTERACTIVE is set"
-    else
-        log_info "Running in interactive mode"
-    fi
+footer() {
+    echo "╰─────────────────────────────────────────────────────────────"
 }
 
-# Safely get azd environment values
-get_azd_env_value() {
-    local var_name="$1"
-    local default_value="${2:-}"
-    local value
+# ============================================================================
+# AZD Environment Helpers
+# ============================================================================
+
+azd_get() {
+    local key="$1" fallback="${2:-}"
+    local val
+    val=$(azd env get-value "$key" 2>/dev/null || echo "")
+    [[ -z "$val" || "$val" == "null" || "$val" == ERROR* ]] && echo "$fallback" || echo "$val"
+}
+
+azd_set() {
+    azd env set "$1" "$2" 2>/dev/null || warn "Failed to set $1"
+}
+
+# ============================================================================
+# App Configuration Helpers
+# ============================================================================
+
+appconfig_set() {
+    local endpoint="$1" key="$2" value="$3" label="${4:-}"
+    [[ -z "$endpoint" ]] && return 1
     
-    value=$(azd env get-value "$var_name" 2>&1 || echo "")
+    local label_arg=""
+    [[ -n "$label" ]] && label_arg="--label $label"
     
-    if [[ "$value" == *ERROR* ]] || [ -z "$value" ]; then
-        echo "$default_value"
-    else
-        echo "$value"
-    fi
+    az appconfig kv set --endpoint "$endpoint" --key "$key" --value "$value" $label_arg --auth-mode login --yes --output none 2>/dev/null
 }
 
-# Check if running in interactive mode
-is_interactive() {
-    [ "$INTERACTIVE_MODE" = "true" ] && [ -t 0 ]
+trigger_config_refresh() {
+    local endpoint="$1" label="${2:-}"
+    appconfig_set "$endpoint" "app/sentinel" "v$(date +%s)" "$label"
 }
 
-# Validate E.164 phone number format
-is_valid_phone_number() {
-    [[ "$1" =~ ^\+[0-9]{10,15}$ ]]
-}
+# ============================================================================
+# Task 1: Cosmos DB Initialization
+# ============================================================================
 
-# ========================================================================
-# 🔍 Phone Number Management Functions
-# ========================================================================
-
-check_existing_phone_number() {
-    local existing_number
-    existing_number=$(get_azd_env_value "ACS_SOURCE_PHONE_NUMBER")
+# task_cosmos_init() {
+#     header "🗄️  Task 1: Cosmos DB Initialization"
     
-    if [ -n "$existing_number" ]; then
-        log_success "ACS_SOURCE_PHONE_NUMBER is already set: $existing_number"
-        return 0
-    else
-        return 1
-    fi
-}
-
-handle_phone_number_cicd() {
-    log_info "CI/CD mode: Checking for predefined phone number..."
+#     local db_init
+#     db_init=$(azd_get "DB_INITIALIZED" "false")
     
-    # Check environment variable first
-    if [ -n "${ACS_SOURCE_PHONE_NUMBER:-}" ]; then
-        log_info "Found ACS_SOURCE_PHONE_NUMBER in environment"
-        if is_valid_phone_number "$ACS_SOURCE_PHONE_NUMBER"; then
-            azd env set ACS_SOURCE_PHONE_NUMBER "$ACS_SOURCE_PHONE_NUMBER"
-            log_success "Set ACS_SOURCE_PHONE_NUMBER from environment variable"
+#     if [[ "$db_init" == "true" ]]; then
+#         info "Already initialized, skipping"
+#         footer
+#         return 0
+#     fi
+    
+#     local conn_string
+#     conn_string=$(azd_get "AZURE_COSMOS_CONNECTION_STRING")
+    
+#     if [[ -z "$conn_string" ]]; then
+#         warn "AZURE_COSMOS_CONNECTION_STRING not set"
+#         footer
+#         return 1
+#     fi
+    
+#     export AZURE_COSMOS_CONNECTION_STRING="$conn_string"
+#     export AZURE_COSMOS_DATABASE_NAME="$(azd_get "AZURE_COSMOS_DATABASE_NAME" "audioagentdb")"
+#     export AZURE_COSMOS_COLLECTION_NAME="$(azd_get "AZURE_COSMOS_COLLECTION_NAME" "audioagentcollection")"
+    
+#     if [[ -f "$HELPERS_DIR/requirements-cosmos.txt" ]]; then
+#         log "Installing Python dependencies..."
+#         pip3 install -q -r "$HELPERS_DIR/requirements-cosmos.txt" 2>/dev/null || true
+#     fi
+    
+#     log "Running initialization script..."
+#     if python3 "$HELPERS_DIR/cosmos_init.py" 2>/dev/null; then
+#         success "Cosmos DB initialized"
+#         azd_set "DB_INITIALIZED" "true"
+#     else
+#         fail "Initialization failed"
+#     fi
+    
+#     footer
+# }
+
+# ============================================================================
+# Task 2: ACS Phone Number Configuration
+# ============================================================================
+
+task_phone_number() {
+    header "📞 Task 2: Phone Number Configuration"
+    
+    local endpoint label
+    endpoint=$(azd_get "AZURE_APPCONFIG_ENDPOINT")
+    label=$(azd_get "AZURE_ENV_NAME")
+    
+    # Check if already configured
+    if [[ -n "$endpoint" ]]; then
+        local existing
+        existing=$(az appconfig kv show --endpoint "$endpoint" --key "azure/acs/source-phone-number" --label "$label" --query "value" -o tsv 2>/dev/null || echo "")
+        if [[ "$existing" =~ ^\+[0-9]{10,15}$ ]]; then
+            success "Already configured: $existing"
+            footer
             return 0
-        else
-            log_warning "Invalid phone number format in environment variable: $ACS_SOURCE_PHONE_NUMBER"
         fi
     fi
     
-    # Check if auto-provisioning is enabled
-    local auto_provision
-    auto_provision=$(get_azd_env_value "ACS_AUTO_PROVISION_PHONE" "false")
+    # Check azd env (legacy)
+    local phone
+    phone=$(azd_get "ACS_SOURCE_PHONE_NUMBER")
+    if [[ "$phone" =~ ^\+[0-9]{10,15}$ ]]; then
+        info "Migrating from azd env to App Config..."
+        appconfig_set "$endpoint" "azure/acs/source-phone-number" "$phone" "$label"
+        trigger_config_refresh "$endpoint" "$label"
+        success "Phone configured: $phone"
+        footer
+        return 0
+    fi
     
-    if [ "$auto_provision" = "true" ]; then
-        log_info "Auto-provisioning phone number (ACS_AUTO_PROVISION_PHONE=true)"
-        provision_new_phone_number
-        return $?
+    if is_ci; then
+        if [[ -n "${ACS_SOURCE_PHONE_NUMBER:-}" && "$ACS_SOURCE_PHONE_NUMBER" =~ ^\+[0-9]{10,15}$ ]]; then
+            appconfig_set "$endpoint" "azure/acs/source-phone-number" "$ACS_SOURCE_PHONE_NUMBER" "$label"
+            azd_set "ACS_SOURCE_PHONE_NUMBER" "$ACS_SOURCE_PHONE_NUMBER"
+            trigger_config_refresh "$endpoint" "$label"
+            success "Phone set from environment"
+        else
+            warn "No phone configured (set ACS_SOURCE_PHONE_NUMBER env var)"
+        fi
+        footer
+        return 0
+    fi
+    
+    # Interactive mode
+    log ""
+    log "A phone number is required for voice calls."
+    log "You must provision a phone number manually via Azure Portal first."
+    log ""
+    log "  1) Enter existing phone number (must be provisioned in Azure Portal)"
+    log "  2) Skip for now (configure later)"
+    log ""
+    log "(Auto-skipping in 10 seconds if no input...)"
+    
+    if read -t 10 -rp "│ Choice (1-2): " choice; then
+        : # Got input
     else
-        log_warning "No phone number configured in CI/CD mode"
-        log_info "To configure phone number in CI/CD:"
-        log_info "  - Set ACS_SOURCE_PHONE_NUMBER environment variable"
-        log_info "  - Or set ACS_AUTO_PROVISION_PHONE=true in azd environment"
-        return 1
+        log ""
+        info "No input received, skipping phone configuration"
+        choice="2"
     fi
-}
-
-prompt_for_phone_number() {
-    if ! is_interactive; then
-        # In CI/CD mode, try alternative methods
-        handle_phone_number_cicd
-        return $?
-    fi
-    
-    log_info "ACS_SOURCE_PHONE_NUMBER is not defined."
-    echo "Options:"
-    echo "  1) Enter an existing phone number"
-    echo "  2) Provision a new phone number from Azure"
-    echo "  3) Skip (configure later)"
-    echo ""
-    
-    read -p "Your choice (1-3): " choice
     
     case "$choice" in
         1)
-            read -p "Enter phone number in E.164 format (e.g., +1234567890): " user_phone
-            if is_valid_phone_number "$user_phone"; then
-                azd env set ACS_SOURCE_PHONE_NUMBER "$user_phone"
-                log_success "Set ACS_SOURCE_PHONE_NUMBER to $user_phone"
-                return 0
+            log ""
+            log "To get a phone number:"
+            log "  1. Azure Portal → Communication Services → Phone numbers → + Get"
+            log "  2. Select country/region and number type (toll-free or geographic)"
+            log "  3. Complete the purchase and copy the number"
+            log ""
+            read -rp "│ Phone (E.164 format, e.g. +18001234567): " phone
+            if [[ "$phone" =~ ^\+[0-9]{10,15}$ ]]; then
+                appconfig_set "$endpoint" "azure/acs/source-phone-number" "$phone" "$label"
+                azd_set "ACS_SOURCE_PHONE_NUMBER" "$phone"
+                trigger_config_refresh "$endpoint" "$label"
+                success "Phone saved: $phone"
             else
-                log_error "Invalid phone number format"
-                return 1
+                fail "Invalid format. Phone must be in E.164 format (e.g., +18001234567)"
             fi
-            ;;
-        2)
-            # User wants to provision new number
-            provision_new_phone_number || {
-                log_warning "Phone number provisioning failed, continuing with other tasks..."
-                return 1
-            }
-            ;;
-        3)
-            log_info "Skipping phone number configuration"
-            return 3  # Return 3 for user-initiated skip
             ;;
         *)
-            log_error "Invalid choice"
-            return 1
+            info "Skipped - configure later via Azure Portal"
+            log ""
+            log "To configure manually:"
+            log "  1. Azure Portal → Communication Services → Phone numbers → + Get"
+            log "  2. Purchase a phone number for your region"
+            log "  3. Set the phone number using one of these methods:"
+            log ""
+            log "  Option A - Using azd (will sync on next provision):"
+            log "    azd env set ACS_SOURCE_PHONE_NUMBER '+1XXXXXXXXXX'"
+            log "    azd provision"
+            log ""
+            log "  Option B - Direct App Config update (immediate):"
+            log "    az appconfig kv set \\"
+            log "      --endpoint \"$endpoint\" \\"
+            log "      --key \"azure/acs/source-phone-number\" \\"
+            log "      --value \"+1XXXXXXXXXX\" \\"
+            log "      --label \"$label\" \\"
+            log "      --auth-mode login --yes"
             ;;
     esac
+    
+    footer
 }
 
-provision_new_phone_number() {
-    log_section "📞 Provisioning New ACS Phone Number"
-    
-    local acs_endpoint
-    acs_endpoint=$(get_azd_env_value "ACS_ENDPOINT")
-    
-    if [ -z "$acs_endpoint" ]; then
-        log_error "ACS_ENDPOINT is not set. Cannot provision phone number."
-        return 1
-    fi
-    
-    # Ensure Azure CLI communication extension is installed
-    log_info "Checking Azure CLI communication extension..."
-    if ! az extension list --query "[?name=='communication']" -o tsv | grep -q communication; then
-        log_info "Installing Azure CLI communication extension..."
-        az extension add --name communication || {
-            log_error "Failed to install communication extension"
-            return 1
-        }
-    fi
-    
-    # Install required Python packages
-    log_info "Installing required Python packages..."
-    pip3 install -q azure-identity azure-communication-phonenumbers || {
-        log_error "Failed to install required Python packages"
-        return 1
-    }
-    
-    # Run the provisioning script
-    log_info "Creating new phone number..."
-    local phone_number
-    phone_number=$(python3 "$HELPERS_DIR/acs_phone_number_manager.py" \
-        --endpoint "$acs_endpoint" purchase 2>/dev/null) || {
-        log_error "Failed to provision phone number"
-        return 1
-    }
-    
-    # Extract clean phone number
-    local clean_number
-    clean_number=$(echo "$phone_number" | grep -o '+[0-9]\+' | head -1)
-    
-    if [ -z "$clean_number" ]; then
-        log_error "Failed to extract phone number from provisioning output"
-        return 1
-    fi
-    
-    # Save to azd environment
-    azd env set ACS_SOURCE_PHONE_NUMBER "$clean_number"
-    log_success "Successfully provisioned phone number: $clean_number"
-    
-    # Update backend service
-    update_backend_phone_number "$clean_number" || {
-        log_warning "Failed to update backend service, but phone number was provisioned"
-    }
-    
-    return 0
-}
+# ============================================================================
+# Task 3: App Configuration URL Updates
+# ============================================================================
 
-update_backend_phone_number() {
-    local phone_number="$1"
-    local resource_group
-    local backend_name
-    local backend_type=""
+task_update_urls() {
+    header "🌐 Task 3: App Configuration URL Updates"
     
-    resource_group=$(get_azd_env_value "AZURE_RESOURCE_GROUP")
+    local endpoint label backend_url
+    endpoint=$(azd_get "AZURE_APPCONFIG_ENDPOINT")
+    label=$(azd_get "AZURE_ENV_NAME")
     
-    if [ -z "$resource_group" ]; then
-        log_warning "AZURE_RESOURCE_GROUP not set. Cannot update backend."
+    if [[ -z "$endpoint" ]]; then
+        warn "App Config endpoint not available"
+        footer
         return 1
     fi
     
-    # Check for container app
-    backend_name=$(get_azd_env_value "BACKEND_CONTAINER_APP_NAME")
-    if [ -n "$backend_name" ]; then
-        backend_type="containerapp"
+    # Determine backend URL
+    backend_url=$(azd_get "BACKEND_API_URL")
+    [[ -z "$backend_url" ]] && backend_url=$(azd_get "BACKEND_CONTAINER_APP_URL")
+    if [[ -z "$backend_url" ]]; then
+        local fqdn
+        fqdn=$(azd_get "BACKEND_CONTAINER_APP_FQDN")
+        [[ -n "$fqdn" ]] && backend_url="https://${fqdn}"
+    fi
+    
+    if [[ -z "$backend_url" ]]; then
+        warn "Could not determine backend URL"
+        footer
+        return 1
+    fi
+    
+    local ws_url="${backend_url/https:\/\//wss://}"
+    ws_url="${ws_url/http:\/\//ws://}"
+    
+    info "Backend: $backend_url"
+    info "WebSocket: $ws_url"
+    
+    local count=0
+    appconfig_set "$endpoint" "app/backend/base-url" "$backend_url" "$label" && ((count++)) || true
+    appconfig_set "$endpoint" "app/frontend/backend-url" "$backend_url" "$label" && ((count++)) || true
+    appconfig_set "$endpoint" "app/frontend/ws-url" "$ws_url" "$label" && ((count++)) || true
+    
+    if [[ $count -eq 3 ]]; then
+        trigger_config_refresh "$endpoint" "$label"
+        success "All URLs updated ($count/3)"
     else
-        # Check for app service
-        backend_name=$(get_azd_env_value "BACKEND_APP_SERVICE_NAME")
-        if [ -n "$backend_name" ]; then
-            backend_type="appservice"
-        fi
+        warn "Some updates failed ($count/3)"
     fi
     
-    if [ -z "$backend_type" ]; then
-        log_warning "No backend service found to update"
+    footer
+}
+
+# ============================================================================
+# Summary
+# ============================================================================
+
+show_summary() {
+    header "📋 Summary"
+    
+    local db_init phone endpoint env_file easyauth_enabled
+    db_init=$(azd_get "DB_INITIALIZED" "false")
+    phone=$(azd_get "ACS_SOURCE_PHONE_NUMBER" "")
+    endpoint=$(azd_get "AZURE_APPCONFIG_ENDPOINT" "")
+    easyauth_enabled=$(azd_get "EASYAUTH_ENABLED" "false")
+    env_file=".env.local"
+    
+    [[ "$db_init" == "true" ]] && log "  ✅ Cosmos DB: initialized" || log "  ⏳ Cosmos DB: pending"
+    [[ -n "$phone" ]] && log "  ✅ Phone: $phone" || log "  ⏳ Phone: not configured"
+    [[ -n "$endpoint" ]] && log "  ✅ App Config: $endpoint" || log "  ⏳ App Config: pending"
+    [[ -f "$env_file" ]] && log "  ✅ Local env: $env_file" || log "  ⏳ Local env: not generated"
+    [[ "$easyauth_enabled" == "true" ]] && log "  ✅ EasyAuth: enabled" || log "  ⏳ EasyAuth: not enabled"
+    
+    if ! is_ci; then
+        log ""
+        log "Next steps:"
+        log "  • Verify: azd show"
+        log "  • Health check: curl \$(azd env get-value BACKEND_CONTAINER_APP_URL)/api/v1/health"
+        [[ -z "$phone" ]] && log "  • Configure phone: Azure Portal → ACS → Phone numbers"
+        [[ "$easyauth_enabled" != "true" ]] && log "  • Enable EasyAuth: ./devops/scripts/azd/helpers/enable-easyauth.sh"
+    fi
+    
+    footer
+    success "Post-provisioning complete!"
+}
+
+# ============================================================================
+# Task 4: Sync App Configuration Settings
+# ============================================================================
+
+task_sync_appconfig() {
+    header "📦 Task 4: App Configuration Settings"
+    
+    local sync_script="$HELPERS_DIR/sync-appconfig.sh"
+    local config_file="$SCRIPT_DIR/../../../config/appconfig.json"
+    
+    if [[ ! -f "$sync_script" ]]; then
+        warn "sync-appconfig.sh not found, skipping"
+        footer
+        return 0
+    fi
+    
+    if [[ ! -f "$config_file" ]]; then
+        warn "config/appconfig.json not found, skipping"
+        footer
+        return 0
+    fi
+    
+    local endpoint label
+    endpoint=$(azd_get "AZURE_APPCONFIG_ENDPOINT")
+    label=$(azd_get "AZURE_ENV_NAME")
+    
+    if [[ -z "$endpoint" ]]; then
+        warn "App Config endpoint not available yet"
+        footer
         return 1
     fi
     
-    log_info "Updating $backend_type: $backend_name"
-    
-    case "$backend_type" in
-        "containerapp")
-            az containerapp update \
-                --name "$backend_name" \
-                --resource-group "$resource_group" \
-                --set-env-vars "ACS_SOURCE_PHONE_NUMBER=$phone_number" \
-                --output none || return 1
-            ;;
-        "appservice")
-            az webapp config appsettings set \
-                --name "$backend_name" \
-                --resource-group "$resource_group" \
-                --settings "ACS_SOURCE_PHONE_NUMBER=$phone_number" \
-                --output none || return 1
-            ;;
-    esac
-    
-    log_success "Updated backend service with phone number"
-    return 0
-}
-
-# ========================================================================
-# 🌐 Frontend BACKEND_URL configuration
-# ========================================================================
-
-get_best_backend_url() {
-    # Preference order: BACKEND_API_URL (explicit) -> BACKEND_CONTAINER_APP_URL (derived) -> build from FQDN
-    local backend_api_url
-    local backend_container_url
-    local backend_fqdn
-
-    backend_api_url=$(get_azd_env_value "BACKEND_API_URL")
-    backend_container_url=$(get_azd_env_value "BACKEND_CONTAINER_APP_URL")
-    backend_fqdn=$(get_azd_env_value "BACKEND_CONTAINER_APP_FQDN")
-
-    if [ -n "$backend_api_url" ]; then
-        echo "$backend_api_url"
-        return 0
-    fi
-
-    if [ -n "$backend_container_url" ]; then
-        echo "$backend_container_url"
-        return 0
-    fi
-
-    if [ -n "$backend_fqdn" ]; then
-        echo "https://${backend_fqdn}"
-        return 0
-    fi
-
-    echo ""
-    return 1
-}
-
-update_frontend_backend_url() {
-    log_section "🌐 Configuring Frontend BACKEND_URL"
-
-    local resource_group
-    local frontend_name
-    local chosen_url
-
-    resource_group=$(get_azd_env_value "AZURE_RESOURCE_GROUP")
-    frontend_name=$(get_azd_env_value "FRONTEND_CONTAINER_APP_NAME")
-    chosen_url=$(get_best_backend_url)
-
-    if [ -z "$frontend_name" ] || [ -z "$resource_group" ]; then
-        log_warning "Frontend Container App name or resource group not found in azd environment. Skipping BACKEND_URL configuration."
-        return 1
-    fi
-
-    if [ -z "$chosen_url" ]; then
-        log_warning "Could not resolve backend URL from azd outputs. Skipping BACKEND_URL configuration."
-        return 1
-    fi
-
-    log_info "Setting BACKEND_URL on frontend: $chosen_url"
-    az containerapp update \
-        --name "$frontend_name" \
-        --resource-group "$resource_group" \
-        --set-env-vars "BACKEND_URL=$chosen_url" \
-        --output none || {
-            log_error "Failed to set BACKEND_URL on frontend container app"
-            return 1
-        }
-
-    log_success "Frontend BACKEND_URL updated"
-    return 0
-}
-
-update_backend_base_url() {
-    log_section "🧩 Configuring Backend BASE_URL"
-
-    local resource_group
-    local backend_name
-    local backend_type=""
-    local chosen_url
-
-    resource_group=$(get_azd_env_value "AZURE_RESOURCE_GROUP")
-    backend_name=$(get_azd_env_value "BACKEND_CONTAINER_APP_NAME")
-    if [ -n "$backend_name" ]; then
-        backend_type="containerapp"
+    log "Syncing app settings from config/appconfig.json..."
+    if bash "$sync_script" --endpoint "$endpoint" --label "$label" --config "$config_file"; then
+        success "App settings synced"
     else
-        backend_name=$(get_azd_env_value "BACKEND_APP_SERVICE_NAME")
-        if [ -n "$backend_name" ]; then
-            backend_type="appservice"
-        fi
+        warn "Some settings may have failed"
     fi
-
-    if [ -z "$backend_type" ] || [ -z "$backend_name" ] || [ -z "$resource_group" ]; then
-        log_warning "Backend service not found in azd environment. Skipping BASE_URL configuration."
-        return 1
-    fi
-
-    chosen_url=$(get_best_backend_url)
-    if [ -z "$chosen_url" ]; then
-        log_warning "Could not resolve backend URL from azd outputs. Skipping BASE_URL configuration."
-        return 1
-    fi
-
-    log_info "Setting BASE_URL on backend ($backend_type: $backend_name) to: $chosen_url"
-    case "$backend_type" in
-        "containerapp")
-            az containerapp update \
-                --name "$backend_name" \
-                --resource-group "$resource_group" \
-                --set-env-vars "BASE_URL=$chosen_url" \
-                --output none || {
-                    log_error "Failed to set BASE_URL on backend container app"
-                    return 1
-                }
-            ;;
-        "appservice")
-            az webapp config appsettings set \
-                --name "$backend_name" \
-                --resource-group "$resource_group" \
-                --settings "BASE_URL=$chosen_url" \
-                --output none || {
-                    log_error "Failed to set BASE_URL on backend app service"
-                    return 1
-                }
-            ;;
-    esac
-
-    log_success "Backend BASE_URL updated"
-    return 0
+    
+    footer
 }
 
-# ========================================================================
-# 🚀 Main Execution
-# ========================================================================
+# ============================================================================
+# Task 5: Generate Local Development Environment File
+# ============================================================================
+
+task_generate_env_local() {
+    header "🧑‍💻 Task 5: Local Development Environment"
+    
+    local setup_script="$HELPERS_DIR/local-dev-setup.sh"
+    
+    if [[ ! -f "$setup_script" ]]; then
+        warn "local-dev-setup.sh not found, skipping"
+        footer
+        return 0
+    fi
+    
+    # Source the helper to use its functions
+    source "$setup_script"
+    
+    local appconfig_endpoint
+    appconfig_endpoint=$(azd_get "AZURE_APPCONFIG_ENDPOINT")
+    
+    if [[ -z "$appconfig_endpoint" ]]; then
+        warn "App Config endpoint not available, cannot generate .env.local"
+        footer
+        return 1
+    fi
+    
+    log "Generating .env.local for local development..."
+    if generate_minimal_env ".env.local"; then
+        success ".env.local created"
+    else
+        warn "Failed to generate .env.local"
+    fi
+    
+    footer
+}
+
+# ============================================================================
+# Task 6: Enable EasyAuth (Optional)
+# ============================================================================
+
+task_enable_easyauth() {
+    header "🔐 Task 6: Frontend Authentication (EasyAuth)"
+    
+    local easyauth_script="$HELPERS_DIR/enable-easyauth.sh"
+    
+    if [[ ! -f "$easyauth_script" ]]; then
+        warn "enable-easyauth.sh not found, skipping"
+        footer
+        return 0
+    fi
+    
+    # Check if EasyAuth was already enabled (via azd env)
+    local easyauth_configured
+    easyauth_configured=$(azd_get "EASYAUTH_ENABLED" "false")
+    
+    if [[ "$easyauth_configured" == "true" ]]; then
+        success "EasyAuth already configured (EASYAUTH_ENABLED=true)"
+        footer
+        return 0
+    fi
+    
+    local resource_group container_app uami_client_id
+    resource_group=$(azd_get "AZURE_RESOURCE_GROUP")
+    container_app=$(azd_get "FRONTEND_CONTAINER_APP_NAME")
+    uami_client_id=$(azd_get "FRONTEND_UAI_CLIENT_ID")
+    
+    if [[ -z "$resource_group" || -z "$container_app" || -z "$uami_client_id" ]]; then
+        warn "Missing required values for EasyAuth configuration"
+        [[ -z "$resource_group" ]] && warn "  - AZURE_RESOURCE_GROUP not set"
+        [[ -z "$container_app" ]] && warn "  - FRONTEND_CONTAINER_APP_NAME not set"
+        [[ -z "$uami_client_id" ]] && warn "  - FRONTEND_UAI_CLIENT_ID not set"
+        footer
+        return 1
+    fi
+    
+    if is_ci; then
+        # In CI mode, automatically enable EasyAuth if not already enabled
+        log "Enabling EasyAuth (CI mode)…"
+        if bash "$easyauth_script" -g "$resource_group" -a "$container_app" -i "$uami_client_id"; then
+            success "EasyAuth enabled"
+            # Set azd env variable to prevent re-running
+            azd_set "EASYAUTH_ENABLED" "true"
+            # Output to GitHub Actions environment (if running in GitHub Actions)
+            if [[ -n "${GITHUB_ENV:-}" ]]; then
+                echo "EASYAUTH_ENABLED=true" >> "$GITHUB_ENV"
+                info "Set EASYAUTH_ENABLED=true in GitHub Actions environment"
+            fi
+        else
+            warn "Failed to enable EasyAuth"
+        fi
+        footer
+        return 0
+    fi
+    # Interactive mode
+    log ""
+    log "EasyAuth adds Microsoft Entra ID authentication to your frontend."
+    log "Users will need to sign in with their organizational account."
+    log ""
+    log "Benefits:"
+    log "  • Secure access with Microsoft Entra ID"
+    log "  • No secrets to manage (uses Federated Identity Credentials)"
+    log "  • Works with your organization's identity policies"
+    log ""
+    log "Note: The backend API remains unsecured (accessible within your network)."
+    log ""
+    log "  1) Enable EasyAuth now"
+    log "  2) Skip for now (can enable later)"
+    log ""
+    log "(Auto-skipping in 15 seconds if no input...)"
+    
+    if read -t 15 -rp "│ Choice (1-2): " choice; then
+        : # Got input
+    else
+        log ""
+        info "No input received, skipping EasyAuth configuration"
+        choice="2"
+    fi
+    
+    case "$choice" in
+        1)
+            log ""
+            log "Enabling EasyAuth..."
+            if bash "$easyauth_script" -g "$resource_group" -a "$container_app" -i "$uami_client_id"; then
+                success "EasyAuth enabled successfully"
+                # Set azd env variable to prevent re-running
+                azd_set "EASYAUTH_ENABLED" "true"
+                log ""
+                log "Your frontend now requires authentication."
+                log "Users will be redirected to Microsoft login."
+            else
+                fail "Failed to enable EasyAuth"
+            fi
+            ;;
+        *)
+            info "Skipped - you can enable EasyAuth later by running:"
+            log ""
+            log "  ./devops/scripts/azd/helpers/enable-easyauth.sh \\"
+            log "    -g \"$resource_group\" \\"
+            log "    -a \"$container_app\" \\"
+            log "    -i \"$uami_client_id\""
+            ;;
+    esac
+    
+    footer
+}
+
+# ============================================================================
+# Main
+# ============================================================================
 
 main() {
-    log_section "🚀 Starting Post-Provisioning Script"
-    log_ci_mode
+    header "🚀 Post-Provisioning"
+    is_ci && info "CI/CD mode" || info "Interactive mode"
+    footer
     
-    # Step 1: Handle phone number configuration
-    log_section "📱 Configuring ACS Phone Number"
-    
-    if ! check_existing_phone_number; then
-        # Store the result but don't fail the script
-        if prompt_for_phone_number; then
-            log_success "Phone number configured"
-        else
-            if [ "$INTERACTIVE_MODE" = "false" ]; then
-                log_info "Phone number configuration skipped in CI/CD mode"
-            else
-                log_warning "Phone number configuration failed, continuing..."
-            fi
-        fi
-    fi
-    
-    # Step 1b: Configure frontend BACKEND_URL for Vite runtime replacement
-    update_frontend_backend_url || {
-        log_warning "Frontend BACKEND_URL configuration did not complete; continue."
-    }
-
-    # Step 1c: Configure backend BASE_URL for FastAPI public URL
-    update_backend_base_url || {
-        log_warning "Backend BASE_URL configuration did not complete; continue."
-    }
-
-    # Step 2: Generate environment files (always runs)
-    log_section "📄 Generating Environment Configuration Files"
-    
-    local env_name
-    local env_file
-    env_name=$(get_azd_env_value "AZURE_ENV_NAME" "dev")
-    env_file=".env.${env_name}"
-    
-    if [ -f "$HELPERS_DIR/generate-env.sh" ]; then
-        log_info "Generating environment file: $env_file"
-        "$HELPERS_DIR/generate-env.sh" "$env_name" "$env_file" || {
-            log_error "Environment file generation failed"
-            # Don't exit - this is critical but we want to show summary
-        }
-        
-        if [ -f "$env_file" ]; then
-            local var_count
-            var_count=$(grep -c '^[A-Z]' "$env_file" 2>/dev/null || echo "0")
-            log_success "Generated environment file with $var_count variables"
-        fi
-    else
-        log_error "generate-env.sh not found at: $HELPERS_DIR/generate-env.sh"
-    fi
-    
-    # Step 3: Summary
-    log_section "🎯 Post-Provisioning Summary"
-    
-    echo "📋 Generated Files:"
-    [ -f "$env_file" ] && echo "  ✓ ${env_file} (Backend environment configuration)"
-    echo ""
-    
-    if [ "$INTERACTIVE_MODE" = "true" ]; then
-        echo "🔧 Next Steps:"
-        echo "  1. Review the environment file: cat ${env_file}"
-        echo "  2. Source the environment: source ${env_file}"
-        echo "  3. Test your application"
-    fi
-    
-    local phone_status
-    phone_status=$(get_azd_env_value "ACS_SOURCE_PHONE_NUMBER")
-    if [ -z "$phone_status" ]; then
-        echo ""
-        echo "⚠️  Note: No phone number configured. To add one later:"
-        if [ "$INTERACTIVE_MODE" = "true" ]; then
-            echo "     azd env set ACS_SOURCE_PHONE_NUMBER '+1234567890'"
-        else
-            echo "     Set ACS_SOURCE_PHONE_NUMBER environment variable"
-            echo "     Or set ACS_AUTO_PROVISION_PHONE=true in azd environment"
-        fi
-    fi
-    
-    echo ""
-    log_success "Post-provisioning complete!"
-    
-    # Always exit successfully - phone number is optional
-    exit 0
+    # task_cosmos_init || true
+    task_phone_number || true
+    task_update_urls || true
+    task_sync_appconfig || true
+    task_generate_env_local || true
+    task_enable_easyauth || true
+    show_summary
 }
 
-# Run main function
 main "$@"

@@ -1,0 +1,93 @@
+# Insurance Customer Service Scenario
+# Optimized for insurance claims, policy management, and customer support
+# Includes B2B Subrogation hotline for Claimant Carriers
+
+name: insurance
+description: Insurance customer service with claims processing, policy management, and B2B subrogation
+
+# Starting agent
+start_agent: AuthAgent
+
+# Agents to include in this scenario
+# Flow: AuthAgent (entry) → PolicyAdvisor OR FNOLAgent (Customer)
+#                         → SubroAgent (B2B Claimant Carriers)
+agents:
+  - AuthAgent
+  - PolicyAdvisor
+  - FNOLAgent
+  - SubroAgent
+
+# Handoff behavior - default for unlisted routes
+handoff_type: announced
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Handoff Graph - Directed edges between agents
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+#              ┌───────────────┐
+#              │   AuthAgent   │ (Entry Point - Authentication Gate)
+#              └───────┬───────┘
+#                      │
+#       ┌──────────────┼──────────────┐
+#       │              │              │
+#       ▼              ▼              ▼
+# ┌──────────┐  ┌────────────┐  ┌───────────┐
+# │  Policy  │  │    FNOL    │  │   Subro   │
+# │  Advisor │◄►│   Agent    │  │   Agent   │  (B2B only)
+# └──────────┘  └────────────┘  └───────────┘
+#
+#   PolicyAdvisor ↔ FNOLAgent (cross-handoffs for customers)
+#   SubroAgent is B2B-only, no cross-handoffs to customer agents
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+handoffs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # AuthAgent → Specialists (Entry routes)
+  # ─────────────────────────────────────────────────────────────────────────────
+  
+  # Customer paths (authenticated via verify_client_identity)
+  - from: AuthAgent
+    to: PolicyAdvisor
+    tool: handoff_policy_advisor
+    type: announced           # New agent greets the customer
+    share_context: true
+
+  - from: AuthAgent
+    to: FNOLAgent
+    tool: handoff_fnol_agent
+    type: announced           # New agent greets the customer
+    share_context: true
+
+  # B2B path (authenticated via verify_cc_caller)
+  - from: AuthAgent
+    to: SubroAgent
+    tool: handoff_subro_agent
+    type: discrete            # Seamless - same conversation continues
+    share_context: true
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Cross-Specialist Handoffs (customer expertise-based routing)
+  # ─────────────────────────────────────────────────────────────────────────────
+  - from: PolicyAdvisor
+    to: FNOLAgent
+    tool: handoff_fnol_agent
+    type: announced           # New agent greets the customer
+    share_context: true
+
+  - from: FNOLAgent
+    to: PolicyAdvisor
+    tool: handoff_policy_advisor
+    type: announced           # New agent greets the customer
+    share_context: true
+
+  # Note: SubroAgent has NO cross-handoffs - it's B2B only
+  # Subro callers cannot be transferred to PolicyAdvisor or FNOLAgent
+
+# Agent defaults applied to all agents
+agent_defaults:
+  institution_name: "Insurance Contoso Services"
+  industry: "insurance"
+  compliance_required: true
+  region: "US"
+  claims_processing: true

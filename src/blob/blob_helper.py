@@ -29,23 +29,19 @@ Security Note:
 
 import logging
 import os
-from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
 
 import aiofiles
 from azure.core.exceptions import (
-    AzureError,
-    ClientAuthenticationError,
-    HttpResponseError,
     ResourceNotFoundError,
 )
 from azure.identity.aio import DefaultAzureCredential
 from azure.storage.blob import ContainerSasPermissions, generate_container_sas
-from azure.storage.blob.aio import BlobClient, BlobServiceClient
+from azure.storage.blob.aio import BlobServiceClient
+from utils.azure_auth import get_credential
 
 # Configure structured logging
 logger = logging.getLogger(__name__)
@@ -68,13 +64,13 @@ class BlobOperationResult:
 
     success: bool
     operation_type: BlobOperationType
-    blob_name: Optional[str] = None
-    container_name: Optional[str] = None
-    error_message: Optional[str] = None
-    duration_ms: Optional[float] = None
-    size_bytes: Optional[int] = None
-    content: Optional[str] = None  # For download operations
-    blob_list: Optional[List[str]] = None  # For list operations
+    blob_name: str | None = None
+    container_name: str | None = None
+    error_message: str | None = None
+    duration_ms: float | None = None
+    size_bytes: int | None = None
+    content: str | None = None  # For download operations
+    blob_list: list[str] | None = None  # For list operations
 
 
 class AzureBlobHelper:
@@ -91,10 +87,10 @@ class AzureBlobHelper:
 
     def __init__(
         self,
-        account_name: Optional[str] = None,
-        container_name: Optional[str] = None,
-        connection_string: Optional[str] = None,
-        account_key: Optional[str] = None,
+        account_name: str | None = None,
+        container_name: str | None = None,
+        connection_string: str | None = None,
+        account_key: str | None = None,
         max_retry_attempts: int = 3,
     ):
         """
@@ -110,9 +106,7 @@ class AzureBlobHelper:
         # Configuration with validation
         self.account_name = account_name or os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
         self.container_name = container_name or os.getenv("AZURE_BLOB_CONTAINER", "acs")
-        self.connection_string = connection_string or os.getenv(
-            "AZURE_STORAGE_CONNECTION_STRING"
-        )
+        self.connection_string = connection_string or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
         self.account_key = account_key or os.getenv("AZURE_STORAGE_ACCOUNT_KEY")
 
         if not self.account_name:
@@ -123,14 +117,14 @@ class AzureBlobHelper:
 
         # Initialize authentication and client
         self._credential = self._setup_authentication()
-        self._blob_service: Optional[BlobServiceClient] = None
+        self._blob_service: BlobServiceClient | None = None
 
         logger.info(
             f"AzureBlobHelper initialized for account '{self.account_name}', "
             f"default container '{self.container_name}'"
         )
 
-    def _setup_authentication(self) -> Optional[DefaultAzureCredential]:
+    def _setup_authentication(self) -> DefaultAzureCredential | None:
         """
         Set up authentication with preference for Managed Identity.
 
@@ -186,7 +180,7 @@ class AzureBlobHelper:
         return self._blob_service
 
     async def generate_container_sas_url(
-        self, container_name: Optional[str] = None, expiry_hours: int = 24
+        self, container_name: str | None = None, expiry_hours: int = 24
     ) -> BlobOperationResult:
         """
         Generate a container URL with SAS token for Azure Blob Storage access.
@@ -199,7 +193,7 @@ class AzureBlobHelper:
         Returns:
             BlobOperationResult with SAS URL or error details
         """
-        start_time = datetime.now(timezone.utc)
+        start_time = datetime.now(UTC)
         container_name = container_name or self.container_name
 
         try:
@@ -256,16 +250,14 @@ class AzureBlobHelper:
                     expiry=expiry_time,
                 )
             else:
-                raise ValueError(
-                    "Either managed identity or account key must be available"
-                )
+                raise ValueError("Either managed identity or account key must be available")
 
             container_url = (
                 f"https://{self.account_name}.blob.core.windows.net/"
                 f"{container_name}?{sas_token}"
             )
 
-            duration = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            duration = (datetime.now(UTC) - start_time).total_seconds() * 1000
 
             logger.info(
                 f"Generated container SAS URL for '{container_name}' "
@@ -281,7 +273,7 @@ class AzureBlobHelper:
             )
 
         except Exception as e:
-            duration = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            duration = (datetime.now(UTC) - start_time).total_seconds() * 1000
             error_msg = f"Failed to generate container SAS token: {e}"
             logger.error(error_msg, exc_info=True)
 
@@ -303,7 +295,7 @@ class AzureBlobHelper:
         Returns:
             BlobOperationResult indicating access verification status
         """
-        start_time = datetime.now(timezone.utc)
+        start_time = datetime.now(UTC)
 
         try:
             # Extract container name from URL
@@ -311,17 +303,13 @@ class AzureBlobHelper:
             container_name = url_parts.split("/")[-1]
 
             # Create temporary blob service client with the SAS URL
-            async with BlobServiceClient.from_connection_string(
-                container_url
-            ) as client:
+            async with BlobServiceClient.from_connection_string(container_url) as client:
                 container_client = client.get_container_client(container_name)
 
                 # Check container existence
                 exists = await container_client.exists()
                 if not exists:
-                    raise ResourceNotFoundError(
-                        f"Container '{container_name}' does not exist"
-                    )
+                    raise ResourceNotFoundError(f"Container '{container_name}' does not exist")
 
                 # Test write permissions with a small test blob
                 test_blob_name = f"acs_test_permissions_{int(start_time.timestamp())}"
@@ -330,9 +318,7 @@ class AzureBlobHelper:
                 await test_blob.upload_blob("ACS test content", overwrite=True)
                 await test_blob.delete_blob()
 
-                duration = (
-                    datetime.now(timezone.utc) - start_time
-                ).total_seconds() * 1000
+                duration = (datetime.now(UTC) - start_time).total_seconds() * 1000
 
                 logger.info(
                     f"Successfully verified access to container '{container_name}' "
@@ -347,7 +333,7 @@ class AzureBlobHelper:
                 )
 
         except Exception as e:
-            duration = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            duration = (datetime.now(UTC) - start_time).total_seconds() * 1000
             error_msg = f"Failed to verify container access: {e}"
             logger.error(error_msg, exc_info=True)
 
@@ -359,7 +345,7 @@ class AzureBlobHelper:
             )
 
     async def save_transcript_to_blob(
-        self, call_id: str, transcript: str, container_name: Optional[str] = None
+        self, call_id: str, transcript: str, container_name: str | None = None
     ) -> BlobOperationResult:
         """
         Save transcript to blob storage with organized directory structure.
@@ -372,7 +358,7 @@ class AzureBlobHelper:
         Returns:
             BlobOperationResult indicating operation status
         """
-        start_time = datetime.now(timezone.utc)
+        start_time = datetime.now(UTC)
         container_name = container_name or self.container_name
 
         try:
@@ -389,9 +375,7 @@ class AzureBlobHelper:
 
             # Get blob client and upload
             service = await self._get_blob_service()
-            blob_client = service.get_blob_client(
-                container=container_name, blob=blob_name
-            )
+            blob_client = service.get_blob_client(container=container_name, blob=blob_name)
 
             # Upload with metadata
             content_bytes = transcript.encode("utf-8")
@@ -406,7 +390,7 @@ class AzureBlobHelper:
                 },
             )
 
-            duration = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            duration = (datetime.now(UTC) - start_time).total_seconds() * 1000
 
             logger.info(
                 f"Saved transcript for call '{call_id}' to '{blob_name}' "
@@ -423,7 +407,7 @@ class AzureBlobHelper:
             )
 
         except Exception as e:
-            duration = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            duration = (datetime.now(UTC) - start_time).total_seconds() * 1000
             error_msg = f"Failed to save transcript for call '{call_id}': {e}"
             logger.error(error_msg, exc_info=True)
 
@@ -435,7 +419,7 @@ class AzureBlobHelper:
             )
 
     async def save_wav_to_blob(
-        self, call_id: str, wav_file_path: str, container_name: Optional[str] = None
+        self, call_id: str, wav_file_path: str, container_name: str | None = None
     ) -> BlobOperationResult:
         """
         Save WAV file to blob storage from local file path.
@@ -448,7 +432,7 @@ class AzureBlobHelper:
         Returns:
             BlobOperationResult indicating operation status
         """
-        start_time = datetime.now(timezone.utc)
+        start_time = datetime.now(UTC)
         container_name = container_name or self.container_name
 
         try:
@@ -472,9 +456,7 @@ class AzureBlobHelper:
 
             # Read and upload file
             service = await self._get_blob_service()
-            blob_client = service.get_blob_client(
-                container=container_name, blob=blob_name
-            )
+            blob_client = service.get_blob_client(container=container_name, blob=blob_name)
 
             async with aiofiles.open(wav_file_path, "rb") as f:
                 wav_data = await f.read()
@@ -491,7 +473,7 @@ class AzureBlobHelper:
                 },
             )
 
-            duration = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            duration = (datetime.now(UTC) - start_time).total_seconds() * 1000
 
             logger.info(
                 f"Saved WAV file for call '{call_id}' to '{blob_name}' "
@@ -508,7 +490,7 @@ class AzureBlobHelper:
             )
 
         except Exception as e:
-            duration = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            duration = (datetime.now(UTC) - start_time).total_seconds() * 1000
             error_msg = f"Failed to save WAV file for call '{call_id}': {e}"
             logger.error(error_msg, exc_info=True)
 
@@ -520,7 +502,7 @@ class AzureBlobHelper:
             )
 
     async def stream_wav_to_blob(
-        self, call_id: str, wav_stream, container_name: Optional[str] = None
+        self, call_id: str, wav_stream, container_name: str | None = None
     ) -> BlobOperationResult:
         """
         Stream WAV data directly to Azure Blob Storage.
@@ -533,7 +515,7 @@ class AzureBlobHelper:
         Returns:
             BlobOperationResult indicating operation status
         """
-        start_time = datetime.now(timezone.utc)
+        start_time = datetime.now(UTC)
         container_name = container_name or self.container_name
 
         try:
@@ -547,9 +529,7 @@ class AzureBlobHelper:
 
             # Stream upload
             service = await self._get_blob_service()
-            blob_client = service.get_blob_client(
-                container=container_name, blob=blob_name
-            )
+            blob_client = service.get_blob_client(container=container_name, blob=blob_name)
 
             await blob_client.upload_blob(
                 wav_stream,
@@ -562,11 +542,10 @@ class AzureBlobHelper:
                 },
             )
 
-            duration = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            duration = (datetime.now(UTC) - start_time).total_seconds() * 1000
 
             logger.info(
-                f"Streamed WAV data for call '{call_id}' to '{blob_name}' "
-                f"in {duration:.2f}ms"
+                f"Streamed WAV data for call '{call_id}' to '{blob_name}' " f"in {duration:.2f}ms"
             )
 
             return BlobOperationResult(
@@ -578,7 +557,7 @@ class AzureBlobHelper:
             )
 
         except Exception as e:
-            duration = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            duration = (datetime.now(UTC) - start_time).total_seconds() * 1000
             error_msg = f"Failed to stream WAV data for call '{call_id}': {e}"
             logger.error(error_msg, exc_info=True)
 
@@ -590,7 +569,7 @@ class AzureBlobHelper:
             )
 
     async def get_transcript_from_blob(
-        self, call_id: str, container_name: Optional[str] = None
+        self, call_id: str, container_name: str | None = None
     ) -> BlobOperationResult:
         """
         Retrieve transcript from blob storage.
@@ -602,7 +581,7 @@ class AzureBlobHelper:
         Returns:
             BlobOperationResult with transcript content or error details
         """
-        start_time = datetime.now(timezone.utc)
+        start_time = datetime.now(UTC)
         container_name = container_name or self.container_name
 
         try:
@@ -617,18 +596,14 @@ class AzureBlobHelper:
             date_str = start_time.strftime("%Y-%m-%d")
             blob_name = f"transcripts/{date_str}/{call_id}.json"
 
-            blob_client = service.get_blob_client(
-                container=container_name, blob=blob_name
-            )
+            blob_client = service.get_blob_client(container=container_name, blob=blob_name)
 
             try:
                 stream = await blob_client.download_blob()
                 data = await stream.readall()
                 content = data.decode("utf-8")
 
-                duration = (
-                    datetime.now(timezone.utc) - start_time
-                ).total_seconds() * 1000
+                duration = (datetime.now(UTC) - start_time).total_seconds() * 1000
 
                 logger.info(
                     f"Retrieved transcript for call '{call_id}' from '{blob_name}' "
@@ -657,9 +632,7 @@ class AzureBlobHelper:
                 data = await stream.readall()
                 content = data.decode("utf-8")
 
-                duration = (
-                    datetime.now(timezone.utc) - start_time
-                ).total_seconds() * 1000
+                duration = (datetime.now(UTC) - start_time).total_seconds() * 1000
 
                 logger.info(
                     f"Retrieved transcript for call '{call_id}' from legacy path "
@@ -677,7 +650,7 @@ class AzureBlobHelper:
                 )
 
         except Exception as e:
-            duration = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            duration = (datetime.now(UTC) - start_time).total_seconds() * 1000
             error_msg = f"Failed to retrieve transcript for call '{call_id}': {e}"
             logger.error(error_msg, exc_info=True)
 
@@ -689,7 +662,7 @@ class AzureBlobHelper:
             )
 
     async def delete_transcript_from_blob(
-        self, call_id: str, container_name: Optional[str] = None
+        self, call_id: str, container_name: str | None = None
     ) -> BlobOperationResult:
         """
         Delete transcript from blob storage.
@@ -701,7 +674,7 @@ class AzureBlobHelper:
         Returns:
             BlobOperationResult indicating operation status
         """
-        start_time = datetime.now(timezone.utc)
+        start_time = datetime.now(UTC)
         container_name = container_name or self.container_name
 
         try:
@@ -715,9 +688,7 @@ class AzureBlobHelper:
             date_str = start_time.strftime("%Y-%m-%d")
             blob_name = f"transcripts/{date_str}/{call_id}.json"
 
-            blob_client = service.get_blob_client(
-                container=container_name, blob=blob_name
-            )
+            blob_client = service.get_blob_client(container=container_name, blob=blob_name)
 
             try:
                 await blob_client.delete_blob()
@@ -731,7 +702,7 @@ class AzureBlobHelper:
                 await blob_client_legacy.delete_blob()
                 blob_deleted = blob_name_legacy
 
-            duration = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            duration = (datetime.now(UTC) - start_time).total_seconds() * 1000
 
             logger.info(
                 f"Deleted transcript for call '{call_id}' from '{blob_deleted}' "
@@ -747,7 +718,7 @@ class AzureBlobHelper:
             )
 
         except Exception as e:
-            duration = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            duration = (datetime.now(UTC) - start_time).total_seconds() * 1000
             error_msg = f"Failed to delete transcript for call '{call_id}': {e}"
             logger.error(error_msg, exc_info=True)
 
@@ -759,7 +730,7 @@ class AzureBlobHelper:
             )
 
     async def list_transcripts_in_blob(
-        self, container_name: Optional[str] = None, date_filter: Optional[str] = None
+        self, container_name: str | None = None, date_filter: str | None = None
     ) -> BlobOperationResult:
         """
         List all transcripts in blob storage.
@@ -771,7 +742,7 @@ class AzureBlobHelper:
         Returns:
             BlobOperationResult with list of blob names or error details
         """
-        start_time = datetime.now(timezone.utc)
+        start_time = datetime.now(UTC)
         container_name = container_name or self.container_name
 
         try:
@@ -787,12 +758,10 @@ class AzureBlobHelper:
             # Also include legacy blobs (without date structure) for backwards compatibility
             if not date_filter:
                 async for blob in container_client.list_blobs():
-                    if blob.name.endswith(".json") and not blob.name.startswith(
-                        "transcripts/"
-                    ):
+                    if blob.name.endswith(".json") and not blob.name.startswith("transcripts/"):
                         blob_list.append(blob.name)
 
-            duration = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            duration = (datetime.now(UTC) - start_time).total_seconds() * 1000
 
             logger.info(
                 f"Listed {len(blob_list)} transcripts from container '{container_name}' "
@@ -808,7 +777,7 @@ class AzureBlobHelper:
             )
 
         except Exception as e:
-            duration = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            duration = (datetime.now(UTC) - start_time).total_seconds() * 1000
             error_msg = f"Failed to list transcripts: {e}"
             logger.error(error_msg, exc_info=True)
 
@@ -839,7 +808,7 @@ class AzureBlobHelper:
 
 # Global instance for backward compatibility
 # TODO: Consider migrating to dependency injection pattern
-_global_blob_helper: Optional[AzureBlobHelper] = None
+_global_blob_helper: AzureBlobHelper | None = None
 
 
 def get_blob_helper() -> AzureBlobHelper:
@@ -860,8 +829,8 @@ def get_blob_helper() -> AzureBlobHelper:
 
 
 async def generate_container_sas_url(
-    container_name: Optional[str] = None,
-    account_key: Optional[str] = None,
+    container_name: str | None = None,
+    account_key: str | None = None,
     expiry_hours: int = 24,
 ) -> str:
     """

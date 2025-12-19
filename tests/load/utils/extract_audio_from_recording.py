@@ -7,14 +7,15 @@ using Azure Speech Services. This works with the existing conversation recording
 format without needing to save files to disk first.
 """
 
-import json
 import base64
+import json
+import os
 import tempfile
 import wave
-import os
-from typing import List, Dict, Any, Optional
-import azure.cognitiveservices.speech as speechsdk
 from pathlib import Path
+from typing import Any
+
+import azure.cognitiveservices.speech as speechsdk
 
 
 class AudioExtractorFromRecording:
@@ -27,9 +28,7 @@ class AudioExtractorFromRecording:
 
         if not self.speech_key or not self.speech_region:
             print("⚠️  Azure Speech Service credentials not found.")
-            print(
-                "   Set AZURE_SPEECH_KEY and AZURE_SPEECH_REGION environment variables"
-            )
+            print("   Set AZURE_SPEECH_KEY and AZURE_SPEECH_REGION environment variables")
             print("   or the tool will skip transcription and only extract audio.")
             self.speech_enabled = False
         else:
@@ -53,7 +52,7 @@ class AudioExtractorFromRecording:
             temp_wav.seek(0)
             return temp_wav.read()
 
-    def transcribe_audio_bytes(self, audio_bytes: bytes) -> Dict[str, Any]:
+    def transcribe_audio_bytes(self, audio_bytes: bytes) -> dict[str, Any]:
         """Transcribe audio bytes to text."""
 
         if not self.speech_enabled:
@@ -116,9 +115,7 @@ class AudioExtractorFromRecording:
         except Exception as e:
             return {"text": "", "success": False, "error": str(e), "duration_s": 0}
 
-    def extract_audio_from_responses(
-        self, responses: List[Dict[str, Any]]
-    ) -> List[bytes]:
+    def extract_audio_from_responses(self, responses: list[dict[str, Any]]) -> list[bytes]:
         """Extract audio data from WebSocket response objects."""
 
         audio_chunks = []
@@ -135,13 +132,13 @@ class AudioExtractorFromRecording:
 
         return audio_chunks
 
-    def process_conversation_file(self, conversation_file: str) -> Dict[str, Any]:
+    def process_conversation_file(self, conversation_file: str) -> dict[str, Any]:
         """Process a conversation recording file and extract/transcribe audio."""
 
         print(f"🎤 Processing conversation file: {conversation_file}")
 
         try:
-            with open(conversation_file, "r") as f:
+            with open(conversation_file) as f:
                 conversations = json.load(f)
         except Exception as e:
             return {"error": f"Failed to load conversation file: {e}"}
@@ -156,9 +153,7 @@ class AudioExtractorFromRecording:
         }
 
         for conv_idx, conversation in enumerate(conversations):
-            print(
-                f"\n📞 Conversation {conv_idx + 1}: {conversation['session_id'][:8]}..."
-            )
+            print(f"\n📞 Conversation {conv_idx + 1}: {conversation['session_id'][:8]}...")
 
             conv_result = {
                 "session_id": conversation["session_id"],
@@ -179,13 +174,8 @@ class AudioExtractorFromRecording:
                 }
 
                 # Extract audio from full_responses_received if available
-                if (
-                    "full_responses_received" in turn
-                    and turn["full_responses_received"]
-                ):
-                    print(
-                        f"    📋 Found {len(turn['full_responses_received'])} raw responses"
-                    )
+                if "full_responses_received" in turn and turn["full_responses_received"]:
+                    print(f"    📋 Found {len(turn['full_responses_received'])} raw responses")
 
                     audio_chunks = self.extract_audio_from_responses(
                         turn["full_responses_received"]
@@ -207,29 +197,23 @@ class AudioExtractorFromRecording:
                             transcription = self.transcribe_audio_bytes(combined_audio)
 
                             if transcription["success"] and transcription["text"]:
-                                turn_result["combined_audio_text"] = transcription[
-                                    "text"
-                                ]
+                                turn_result["combined_audio_text"] = transcription["text"]
                                 results["audio_transcribed"] += 1
                                 print(f"    ✅ Agent said: '{transcription['text']}'")
                             else:
-                                error_msg = transcription.get(
-                                    "error", "No speech detected"
-                                )
+                                error_msg = transcription.get("error", "No speech detected")
                                 print(f"    📭 No speech transcribed: {error_msg}")
 
                         elif combined_audio:
-                            print(
-                                f"    📄 Audio extracted but speech recognition not available"
+                            print("    📄 Audio extracted but speech recognition not available")
+                            turn_result["combined_audio_text"] = (
+                                "[Audio available - speech recognition disabled]"
                             )
-                            turn_result[
-                                "combined_audio_text"
-                            ] = "[Audio available - speech recognition disabled]"
 
                     else:
-                        print(f"    📭 No audio chunks found in responses")
+                        print("    📭 No audio chunks found in responses")
                 else:
-                    print(f"    📭 No full_responses_received data available")
+                    print("    📭 No full_responses_received data available")
 
                 conv_result["turns"].append(turn_result)
                 results["turns_processed"] += 1
@@ -239,12 +223,12 @@ class AudioExtractorFromRecording:
 
         return results
 
-    def print_results(self, results: Dict[str, Any]):
+    def print_results(self, results: dict[str, Any]):
         """Print processing results in a readable format."""
 
-        print(f"\n" + "=" * 60)
-        print(f"AUDIO EXTRACTION AND TRANSCRIPTION RESULTS")
-        print(f"=" * 60)
+        print("\n" + "=" * 60)
+        print("AUDIO EXTRACTION AND TRANSCRIPTION RESULTS")
+        print("=" * 60)
 
         print(f"File: {results['file']}")
         print(f"Conversations processed: {results['conversations_processed']}")
@@ -253,9 +237,7 @@ class AudioExtractorFromRecording:
         print(f"Audio successfully transcribed: {results['audio_transcribed']}")
 
         for conv in results.get("conversations", []):
-            print(
-                f"\n📞 Conversation: {conv['session_id'][:8]}... ({conv['template_name']})"
-            )
+            print(f"\n📞 Conversation: {conv['session_id'][:8]}... ({conv['template_name']})")
 
             for turn in conv["turns"]:
                 print(f"  Turn {turn['turn_number']}:")
@@ -268,7 +250,7 @@ class AudioExtractorFromRecording:
                         f"    Agent: [Found {turn['audio_chunks_found']} audio chunks but no text transcribed]"
                     )
                 else:
-                    print(f"    Agent: [No audio found]")
+                    print("    Agent: [No audio found]")
 
         # Save results
         output_file = f"tests/load/results/audio_extraction_{int(results.get('timestamp', 0))}.json"
@@ -319,7 +301,7 @@ def main():
 
         extractor.print_results(results)
 
-        print(f"\n✅ Audio extraction and transcription complete!")
+        print("\n✅ Audio extraction and transcription complete!")
 
     except Exception as e:
         print(f"❌ Error: {e}")

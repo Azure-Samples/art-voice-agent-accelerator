@@ -1,10 +1,11 @@
 import asyncio
 import datetime
 
+from pymongo.errors import NetworkTimeout
+from utils.ml_logging import get_logger
+
 from src.cosmosdb.manager import CosmosDBMongoCoreManager
 from src.stateful.state_managment import MemoManager
-from utils.ml_logging import get_logger
-from pymongo.errors import NetworkTimeout
 
 logger = get_logger("postcall_analytics")
 
@@ -42,8 +43,7 @@ async def build_and_flush(cm: MemoManager, cosmos: CosmosDBMongoCoreManager):
     doc = {
         "_id": session_id,
         "session_id": session_id,
-        "timestamp": datetime.datetime.utcnow().replace(microsecond=0).isoformat()
-        + "Z",
+        "timestamp": datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
         "histories": histories,
         "context": context,
         "latency_summary": summary,
@@ -51,9 +51,7 @@ async def build_and_flush(cm: MemoManager, cosmos: CosmosDBMongoCoreManager):
     }
 
     try:
-        await asyncio.to_thread(
-            cosmos.upsert_document, document=doc, query={"_id": session_id}
-        )
+        await asyncio.to_thread(cosmos.upsert_document, document=doc, query={"_id": session_id})
         logger.info(f"Analytics document upserted for session {session_id}")
     except NetworkTimeout as err:
         hint = _connectivity_hint(cosmos)

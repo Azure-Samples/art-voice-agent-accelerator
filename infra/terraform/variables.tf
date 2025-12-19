@@ -1,16 +1,6 @@
 # ============================================================================
 # VARIABLES
 # ============================================================================
-variable "backend_api_public_url" {
-  description = "Fully qualified URL to map to the backend API, requirement to allow ACS to validate and deliver webhook and WebSocket events (e.g., https://<app-name>.azurewebsites.net)."
-  default     = null
-
-  validation {
-    condition     = var.backend_api_public_url == null || var.backend_api_public_url == "" || can(regex("^https://[^/]+$", var.backend_api_public_url))
-    error_message = "Backend API public URL must start with 'https://' and must not have a trailing slash."
-  }
-}
-
 variable "environment_name" {
   description = "Name of the environment that can be used as part of naming resource convention"
   type        = string
@@ -19,19 +9,11 @@ variable "environment_name" {
     error_message = "Environment name must be between 1 and 64 characters."
   }
 }
-variable "acs_source_phone_number" {
-  description = "Azure Communication Services phone number for outbound calls (E.164 format)"
-  type        = string
-  default     = null
-  validation {
-    condition     = var.acs_source_phone_number == null || can(regex("^\\+[1-9]\\d{1,14}$", var.acs_source_phone_number))
-    error_message = "ACS source phone number must be in E.164 format (e.g., +1234567890) or null."
-  }
-}
+
 variable "name" {
   description = "Base name for the real-time audio agent application"
   type        = string
-  default     = "rtaudioagent"
+  default     = "artagent"
   validation {
     condition     = length(var.name) >= 1 && length(var.name) <= 20
     error_message = "Name must be between 1 and 20 characters."
@@ -106,7 +88,7 @@ variable "acs_data_location" {
 variable "disable_local_auth" {
   description = "Disable local authentication and use Azure AD/managed identity only"
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "enable_redis_ha" {
@@ -133,6 +115,49 @@ variable "redis_port" {
   type        = number
   default     = 10000
 }
+variable "enable_voice_live" {
+  description = "Enable Azure Voice Live service for real-time speech capabilities"
+  type        = bool
+  default     = true
+}
+
+variable "voice_live_location" {
+  description = <<-EOT
+    Azure region for Voice Live resources.
+    Supported regions: eastus2, westus2, swedencentral, southeastasia
+    See: https://learn.microsoft.com/azure/ai-services/speech-service/regions?tabs=voice-live
+  EOT
+  type        = string
+  default     = "eastus2"
+  validation {
+    condition     = contains(["eastus2", "westus2", "swedencentral", "southeastasia"], var.voice_live_location)
+    error_message = "Voice Live location must be one of: eastus2, westus2, swedencentral, southeastasia. See https://learn.microsoft.com/azure/ai-services/speech-service/regions?tabs=voice-live"
+  }
+}
+
+variable "voice_live_model_deployments" {
+  description = "Azure OpenAI model deployments for Voice Live (real-time speech)"
+  type = list(object({
+    name     = string
+    version  = string
+    sku_name = string
+    capacity = number
+  }))
+  default = [
+    {
+      name     = "gpt-realtime"
+      version  = "2025-08-28"
+      sku_name = "GlobalStandard"
+      capacity = 4
+    },
+    {
+      name     = "gpt-4o-transcribe"
+      version  = "2025-03-20"
+      sku_name = "GlobalStandard"
+      capacity = 150
+    }
+  ]
+}
 
 variable "model_deployments" {
   description = "Azure OpenAI model deployments optimized for high performance"
@@ -150,23 +175,11 @@ variable "model_deployments" {
       capacity = 150
     },
     {
-      name     = "gpt-4o-mini"
-      version  = "2024-07-18"
-      sku_name = "DataZoneStandard"
-      capacity = 150
+      name     = "text-embedding-3-large"
+      version  = "1"
+      sku_name = "GlobalStandard"
+      capacity = 100
     },
-    {
-      name     = "gpt-4.1-mini"
-      version  = "2025-04-14"
-      sku_name = "DataZoneStandard"
-      capacity = 150
-    },
-    {
-      name     = "gpt-4.1"
-      version  = "2025-04-14"
-      sku_name = "DataZoneStandard"
-      capacity = 150
-    }
   ]
 }
 
