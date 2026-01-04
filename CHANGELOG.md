@@ -6,6 +6,54 @@ All notable changes to the **Azure Real-Time (ART) Agent Accelerator** are docum
 
 ---
 
+## [2.0.0-beta.1] - 2026-01-04
+
+### 🎯 Scenario Builder & Voice Handler Refactoring
+
+This release introduces the visual **Scenario Builder** for designing multi-agent workflows, comprehensive **VoiceHandler refactoring** with unified lifecycle management, and significant improvements to deployment scripts and telemetry.
+
+### Added
+
+- **Scenario Builder UI** — Visual graph-based editor for designing agent workflows with drag-and-drop node placement, edge connections, and handoff condition patterns
+- **Canvas Panning** — Infinite canvas navigation with drag-to-pan and reset-to-center controls
+- **Handoff Condition Patterns** — Pre-built templates (Authentication, Fraud/Security, Escalation, Technical Support, etc.) for common handoff scenarios
+- **Unified HandoffService** — Consolidated handoff logic across orchestrators for consistent behavior
+- **Evaluation Framework** — Model evaluation playground with A/B testing capabilities and comprehensive metrics
+- **VoiceHandler Migration** — Refactored MediaHandler into unified VoiceHandler with proper lifecycle management
+- **Responses API Infrastructure** — Dual model configuration support with GPT-4o and GPT-4.1
+- **Comprehensive Test Suite** — New tests for VoiceLive handler, cascade orchestrator, DTMF processor, and scenario orchestration contracts
+
+### Enhanced
+
+- **OpenTelemetry Consolidation** — Proper span hierarchy and lazy metrics initialization with shared metrics factory
+- **TTS Processing** — Text sanitization and sentence boundary detection for improved audio quality
+- **LiveOrchestrator** — Enhanced user message history management and context-only session updates without redundant UI broadcasts
+- **Deployment Scripts** — Pre/post-provisioning hooks with Azure CLI extension checks, EasyAuth configuration, and improved preflight checks
+- **Logging Consistency** — Standardized logging levels (info→debug) across connection manager, warmable pool, Redis, and speech modules
+- **AZD Hook Testing** — Dev Container testing workflow with environment validation and summary reporting
+- **Documentation** — Updated quickstart guide with demo profile creation, agent builder screenshots, and troubleshooting guidance
+
+### Fixed
+
+- **Redis Connection Handling** — Added error handling for connection issues with proper recovery
+- **Duplicate UI Updates** — LiveOrchestrator now omits redundant session_updated broadcasts during context-only updates
+- **Environment Logic** — Corrected pull_request event handling in Azure deployment workflow
+- **Terraform State Locks** — Added troubleshooting guidance for state lock errors with remote/local fix options
+- **Container Memory Formats** — Normalized memory configurations in deployment workflows
+
+### Infrastructure
+
+- **CI/CD Improvements** — Reusable workflow templates, parallel AZD hook testing across Linux/macOS/Windows
+- **GitHub PAT Support** — Optional PAT secret with enhanced environment variable handling
+- **Documentation Workflow** — Updated with deployment badges and improved navigation
+
+### Removed
+
+- **Deprecated Latency Tools** — Removed `latency_analytics.py`, `latency_tool.py`, `latency_tool_compat.py`, `latency_tool_v2.py` and related files (replaced by OpenTelemetry-based metrics)
+- **Backend IP Restrictions** — Removed configuration and related outputs
+
+---
+
 ## [2.0.0-beta] - 2025-12-19
 
 ### 🎉 Beta Release: Unified Agent & Scenario Framework
