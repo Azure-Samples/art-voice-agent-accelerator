@@ -16,20 +16,31 @@ readonly PROVIDER="${1:-}"
 # Logging (unified style)
 # ============================================================================
 
+if [[ -z "${BLUE+x}" ]]; then BLUE=$'\033[0;34m'; fi
+if [[ -z "${GREEN+x}" ]]; then GREEN=$'\033[0;32m'; fi
+if [[ -z "${GREEN_BOLD+x}" ]]; then GREEN_BOLD=$'\033[1;32m'; fi
+if [[ -z "${YELLOW+x}" ]]; then YELLOW=$'\033[1;33m'; fi
+if [[ -z "${RED+x}" ]]; then RED=$'\033[0;31m'; fi
+if [[ -z "${CYAN+x}" ]]; then CYAN=$'\033[0;36m'; fi
+if [[ -z "${DIM+x}" ]]; then DIM=$'\033[2m'; fi
+if [[ -z "${NC+x}" ]]; then NC=$'\033[0m'; fi
+readonly BLUE GREEN GREEN_BOLD YELLOW RED CYAN DIM NC
+
 is_ci() {
     [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" || "${AZD_SKIP_INTERACTIVE:-}" == "true" ]]
 }
 
-log()     { echo "│ $*"; }
-info()    { echo "│ ℹ️  $*"; }
-success() { echo "│ ✅ $*"; }
-warn()    { echo "│ ⚠️  $*"; }
-fail()    { echo "│ ❌ $*" >&2; }
+log()          { printf '│ %s%s%s\n' "$DIM" "$*" "$NC"; }
+info()         { printf '│ %s%s%s\n' "$BLUE" "$*" "$NC"; }
+success()      { printf '│ %s✔%s %s\n' "$GREEN" "$NC" "$*"; }
+phase_success(){ printf '│ %s✔ %s%s\n' "$GREEN_BOLD" "$*" "$NC"; }
+warn()         { printf '│ %s⚠%s  %s\n' "$YELLOW" "$NC" "$*"; }
+fail()         { printf '│ %s✖%s %s\n' "$RED" "$NC" "$*" >&2; }
 
 header() {
     echo ""
     echo "╭─────────────────────────────────────────────────────────────"
-    echo "│ $*"
+    echo "│ ${CYAN}$*${NC}"
     echo "├─────────────────────────────────────────────────────────────"
 }
 
@@ -368,7 +379,7 @@ provider_terraform() {
     if [[ "$local_state" != "true" ]] && [[ -f "$tf_init" ]]; then
         is_ci && export TF_INIT_SKIP_INTERACTIVE=true
         log "Setting up Terraform remote state..."
-        bash "$tf_init"
+        AZD_LOG_IN_BOX=true bash "$tf_init"
         
         # Re-check LOCAL_STATE after initialize-terraform.sh runs
         # User may have chosen local state interactively
@@ -436,7 +447,7 @@ provider_bicep() {
         fi
     else
         log "Running SSL pre-provisioning..."
-        bash "$ssl_script"
+        AZD_LOG_IN_BOX=true bash "$ssl_script"
     fi
     
     footer
@@ -476,7 +487,7 @@ main() {
             ;;
     esac
     
-    success "Pre-provisioning complete!"
+    phase_success "Pre-provisioning complete!"
 }
 
 main "$@"

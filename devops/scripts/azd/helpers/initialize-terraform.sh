@@ -8,18 +8,59 @@
 
 set -euo pipefail
 
-# Colors for output
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly NC='\033[0m' # No Color
+readonly LOG_IN_BOX="${AZD_LOG_IN_BOX:-false}"
 
-# Helper functions
-log_info() { echo -e "${BLUE}ℹ️  [INFO]${NC} $*"; }
-log_success() { echo -e "${GREEN}✅ [SUCCESS]${NC} $*"; }
-log_warning() { echo -e "${YELLOW}⚠️  [WARNING]${NC} $*"; }
-log_error() { echo -e "${RED}❌ [ERROR]${NC} $*" >&2; }
+# Logging (matches preprovision formatting)
+if [[ -z "${BLUE+x}" ]]; then BLUE=$'\033[0;34m'; fi
+if [[ -z "${GREEN+x}" ]]; then GREEN=$'\033[0;32m'; fi
+if [[ -z "${GREEN_BOLD+x}" ]]; then GREEN_BOLD=$'\033[1;32m'; fi
+if [[ -z "${YELLOW+x}" ]]; then YELLOW=$'\033[1;33m'; fi
+if [[ -z "${RED+x}" ]]; then RED=$'\033[0;31m'; fi
+if [[ -z "${CYAN+x}" ]]; then CYAN=$'\033[0;36m'; fi
+if [[ -z "${DIM+x}" ]]; then DIM=$'\033[2m'; fi
+if [[ -z "${NC+x}" ]]; then NC=$'\033[0m'; fi
+readonly BLUE GREEN GREEN_BOLD YELLOW RED CYAN DIM NC
+
+log()          { printf '│ %s%s%s\n' "$DIM" "$*" "$NC"; }
+info()         { printf '│ %s%s%s\n' "$BLUE" "$*" "$NC"; }
+success()      { printf '│ %s✔%s %s\n' "$GREEN" "$NC" "$*"; }
+phase_success(){ printf '│ %s✔ %s%s\n' "$GREEN_BOLD" "$*" "$NC"; }
+warn()         { printf '│ %s⚠%s  %s\n' "$YELLOW" "$NC" "$*"; }
+fail()         { printf '│ %s✖%s %s\n' "$RED" "$NC" "$*" >&2; }
+
+log_info()    { info "$@"; }
+log_success() { success "$@"; }
+log_warning() { warn "$@"; }
+log_error()   { fail "$@"; }
+
+header() {
+    if [[ "$LOG_IN_BOX" == "true" ]]; then
+        printf '│ %s%s%s\n' "$CYAN" "$*" "$NC"
+        return
+    fi
+    echo ""
+    echo "╭─────────────────────────────────────────────────────────────"
+    echo "│ ${CYAN}$*${NC}"
+    echo "├─────────────────────────────────────────────────────────────"
+}
+
+footer() {
+    if [[ "$LOG_IN_BOX" == "true" ]]; then
+        return
+    fi
+    echo "╰─────────────────────────────────────────────────────────────"
+    echo ""
+}
+
+prompt() {
+    local prompt_text="$1"
+    local __var="$2"
+    if [[ "$LOG_IN_BOX" == "true" ]]; then
+        read -rp "│ ${prompt_text}" "$__var"
+    else
+        read -rp "${prompt_text}" "$__var"
+    fi
+}
 
 # Check dependencies
 check_dependencies() {
@@ -298,9 +339,7 @@ is_dev_sandbox() {
 
 # Main execution
 main() {
-    echo "========================================================================="
-    echo "🏗️  Terraform Remote State Storage Setup"
-    echo "========================================================================="
+    header "🏗️  Terraform Remote State Storage Setup"
     
     check_dependencies
 
@@ -309,17 +348,18 @@ main() {
     if [[ "$local_state" == "true" ]]; then
         log_info "LOCAL_STATE=true is set in azd environment"
         log_info "Skipping remote state setup - using local state instead"
-        echo ""
+        log ""
         log_warning "Your Terraform state will be stored locally in the project directory."
         log_warning "This means:"
         log_warning "  • State is NOT shared with your team"
         log_warning "  • State may be lost if .terraform/ is deleted"
         log_warning "  • NOT recommended for production or shared environments"
-        echo ""
+        log ""
         log_info "To switch to remote state:"
         log_info "  azd env set LOCAL_STATE \"false\""
         log_info "  azd hooks run preprovision"
-        echo ""
+        log ""
+        footer
         return 0
     fi
 
@@ -374,39 +414,39 @@ main() {
         container="${container:-$gen_container}"
         resource_group="${resource_group:-$gen_resource_group}"
         
-        echo ""
-        echo "📋 Proposed remote state configuration:"
-        echo "   Resource Group:   $resource_group"
-        echo "   Storage Account:  $storage_account"
-        echo "   Container:        $container"
-        echo "   Location:         $location"
-        echo ""
+        log ""
+        log "📋 Proposed remote state configuration:"
+        log "   Resource Group:   $resource_group"
+        log "   Storage Account:  $storage_account"
+        log "   Container:        $container"
+        log "   Location:         $location"
+        log ""
         
         # In CI/non-interactive mode, auto-accept defaults
         local choice="Y"
         if [[ "${TF_INIT_SKIP_INTERACTIVE:-}" != "true" ]]; then
-            read -p "Use these values? [Y]es / [n]o (use local state) / [e]xisting: " choice
+            prompt "Use these values? [Y]es / [n]o (use local state) / [e]xisting: " choice
         else
             log_info "CI mode: auto-accepting proposed configuration"
         fi
         case "$choice" in
             [Nn]*)
-                echo ""
-                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                log ""
+                log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 log_warning "USING LOCAL TERRAFORM STATE"
-                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                echo ""
+                log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                log ""
                 log_warning "Your Terraform state will be stored locally in the project directory."
                 log_warning "This means:"
                 log_warning "  • State is NOT shared with your team"
                 log_warning "  • State may be lost if .terraform/ is deleted"
                 log_warning "  • NOT recommended for production or shared environments"
-                echo ""
+                log ""
                 
                 # Set LOCAL_STATE flag to indicate local backend should be used
                 azd env set LOCAL_STATE "true"
                 log_info "Set LOCAL_STATE=true in azd environment"
-                echo ""
+                log ""
                 
                 log_info "To switch to remote state later, run:"
                 log_info "  azd env set LOCAL_STATE \"false\""
@@ -414,23 +454,24 @@ main() {
                 log_info "  azd env set RS_STORAGE_ACCOUNT \"<storage-account-name>\""
                 log_info "  azd env set RS_CONTAINER_NAME \"<container-name>\""
                 log_info "  azd hooks run preprovision"
-                echo ""
+                log ""
+                footer
                 return 0
                 ;;
             [Ee]*)
-                echo ""
+                log ""
                 log_info "Enter existing values (press Enter to keep default):"
-                echo ""
-                read -p "   Resource Group [$resource_group]: " custom_rg
+                log ""
+                prompt "   Resource Group [$resource_group]: " custom_rg
                 resource_group="${custom_rg:-$resource_group}"
                 
-                read -p "   Storage Account [$storage_account]: " custom_sa
+                prompt "   Storage Account [$storage_account]: " custom_sa
                 storage_account="${custom_sa:-$storage_account}"
                 
-                read -p "   Container [$container]: " custom_container
+                prompt "   Container [$container]: " custom_container
                 container="${custom_container:-$container}"
                 
-                echo ""
+                log ""
                 log_info "Using existing remote state configuration:"
                 log_info "   Resource Group:  $resource_group"
                 log_info "   Storage Account: $storage_account"
@@ -444,26 +485,27 @@ main() {
                 azd env set RS_STATE_KEY "$env_name.tfstate"
                 
                 log_success "Remote state configuration saved"
-                echo ""
+                log ""
                 log_info "Terraform will validate connectivity during 'terraform init'"
                 log_info "If you see authentication errors, ensure you have 'Storage Blob Data Contributor'"
                 log_info "role on the storage account."
-                echo ""
+                log ""
                 
                 # Skip create_storage - jump directly to success
-                echo ""
-                log_success "✅ Terraform remote state setup completed!"
-                echo ""
-                echo "📋 Configuration:"
-                echo "   Storage Account: $storage_account"
-                echo "   Container: $container"
-                echo "   Resource Group: $resource_group"
-                echo ""
-                echo "📁 Files created/updated:"
-                echo "   - infra/terraform/provider.conf.json"
-                echo ""
-                echo "💡 Terraform variables (environment_name, location) are provided via"
-                echo "   TF_VAR_* environment variables from preprovision.sh"
+                log ""
+                log_success "Terraform remote state setup completed!"
+                log ""
+                log "📋 Configuration:"
+                log "   Storage Account: $storage_account"
+                log "   Container: $container"
+                log "   Resource Group: $resource_group"
+                log ""
+                log "📁 Files created/updated:"
+                log "   - infra/terraform/provider.conf.json"
+                log ""
+                log "💡 Terraform variables (environment_name, location) are provided via"
+                log "   TF_VAR_* environment variables from preprovision.sh"
+                footer
                 return 0
                 ;;
         esac
@@ -479,18 +521,19 @@ main() {
     fi
 
     
-    log_success "✅ Terraform remote state setup completed!"
-    echo ""
-    echo "📋 Configuration:"
-    echo "   Storage Account: $storage_account"
-    echo "   Container: $container"
-    echo "   Resource Group: $resource_group"
-    echo ""
-    echo "📁 Files created/updated:"
-    echo "   - infra/terraform/provider.conf.json"
-    echo ""
-    echo "💡 Terraform variables (environment_name, location) are provided via"
-    echo "   TF_VAR_* environment variables from preprovision.sh"
+    log_success "Terraform remote state setup completed!"
+    log ""
+    log "📋 Configuration:"
+    log "   Storage Account: $storage_account"
+    log "   Container: $container"
+    log "   Resource Group: $resource_group"
+    log ""
+    log "📁 Files created/updated:"
+    log "   - infra/terraform/provider.conf.json"
+    log ""
+    log "💡 Terraform variables (environment_name, location) are provided via"
+    log "   TF_VAR_* environment variables from preprovision.sh"
+    footer
 }
 
 # Handle script interruption

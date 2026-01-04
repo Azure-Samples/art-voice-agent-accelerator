@@ -26,16 +26,26 @@ set -e
 LOCAL_DEV_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Color codes
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+if [[ -z "${BLUE+x}" ]]; then BLUE=$'\033[0;34m'; fi
+if [[ -z "${GREEN+x}" ]]; then GREEN=$'\033[0;32m'; fi
+if [[ -z "${GREEN_BOLD+x}" ]]; then GREEN_BOLD=$'\033[1;32m'; fi
+if [[ -z "${YELLOW+x}" ]]; then YELLOW=$'\033[1;33m'; fi
+if [[ -z "${RED+x}" ]]; then RED=$'\033[0;31m'; fi
+if [[ -z "${DIM+x}" ]]; then DIM=$'\033[2m'; fi
+if [[ -z "${NC+x}" ]]; then NC=$'\033[0m'; fi
+readonly BLUE GREEN GREEN_BOLD YELLOW RED DIM NC
 
-log_info() { echo -e "${BLUE}ℹ️  $1${NC}"; }
-log_success() { echo -e "${GREEN}✅ $1${NC}"; }
-log_warning() { echo -e "${YELLOW}⚠️  $1${NC}"; }
-log_error() { echo -e "${RED}❌ $1${NC}"; }
+log_prefix() {
+    if [[ "${AZD_LOG_IN_BOX:-false}" == "true" ]]; then
+        printf '│ '
+    fi
+}
+
+log_info() { printf '%s%s%s%s\n' "$(log_prefix)" "$BLUE" "$1" "$NC"; }
+log_success() { printf '%s%s✔%s %s\n' "$(log_prefix)" "$GREEN" "$NC" "$1"; }
+log_warning() { printf '%s%s⚠%s  %s\n' "$(log_prefix)" "$YELLOW" "$NC" "$1"; }
+log_error() { printf '%s%s✖%s %s\n' "$(log_prefix)" "$RED" "$NC" "$1"; }
+log_detail() { printf '%s%s%s%s\n' "$(log_prefix)" "$DIM" "$1" "$NC"; }
 
 # Safely get azd environment value
 get_azd_value() {
@@ -111,13 +121,13 @@ EOF
     chmod 644 "$output_file"
     log_success "Generated minimal environment file: $output_file"
     
-    echo ""
-    echo "📋 To use this configuration:"
-    echo "   source $output_file"
-    echo ""
-    echo "💡 The app will fetch remaining config from Azure App Configuration"
-    echo "   Endpoint: $appconfig_endpoint"
-    echo "   Label: $env_name"
+    log_detail ""
+    log_detail "📋 To use this configuration:"
+    log_detail "   source $output_file"
+    log_detail ""
+    log_detail "💡 The app will fetch remaining config from Azure App Configuration"
+    log_detail "   Endpoint: $appconfig_endpoint"
+    log_detail "   Label: $env_name"
     
     return 0
 }
@@ -139,17 +149,17 @@ generate_legacy_env() {
 
 # Show current configuration status
 show_config_status() {
-    echo ""
-    echo "📊 Configuration Status"
-    echo "========================"
+    log_detail ""
+    log_detail "📊 Configuration Status"
+    log_detail "========================"
     
     local appconfig_endpoint
     appconfig_endpoint=$(get_azd_value "AZURE_APPCONFIG_ENDPOINT")
     
     if [[ -n "$appconfig_endpoint" ]]; then
-        echo "   ✅ App Configuration: $appconfig_endpoint"
+        log_success "App Configuration: $appconfig_endpoint"
     else
-        echo "   ⚠️  App Configuration: Not deployed"
+        log_warning "App Configuration: Not deployed"
     fi
     
     # Check for existing env files
@@ -157,21 +167,21 @@ show_config_status() {
         if [[ -f "$f" ]]; then
             local var_count
             var_count=$(grep -c '^[A-Z]' "$f" 2>/dev/null || echo "0")
-            echo "   📄 $f: $var_count variables"
+            log_detail "   📄 $f: $var_count variables"
         fi
     done
     
-    echo ""
+    log_detail ""
 }
 
 # Main
 main() {
     local mode="${1:-interactive}"
     
-    echo ""
-    echo "🧑‍💻 Local Development Setup"
-    echo "============================"
-    echo ""
+    log_detail ""
+    log_detail "🧑‍💻 Local Development Setup"
+    log_detail "============================"
+    log_detail ""
     
     case "$mode" in
         --minimal|-m)
@@ -186,17 +196,17 @@ main() {
         interactive|*)
             show_config_status
             
-            echo "Select setup mode:"
-            echo "  1) Minimal (App Config-based) - Recommended"
-            echo "  2) Legacy (full .env file)"
-            echo "  3) Show status only"
-            echo ""
-            echo "(Auto-selecting minimal in 10 seconds if no input...)"
+            log_detail "Select setup mode:"
+            log_detail "  1) Minimal (App Config-based) - Recommended"
+            log_detail "  2) Legacy (full .env file)"
+            log_detail "  3) Show status only"
+            log_detail ""
+            log_detail "(Auto-selecting minimal in 10 seconds if no input...)"
             
             if read -t 10 -p "Choice (1-3): " choice; then
                 : # Got input
             else
-                echo ""
+                log_detail ""
                 log_info "No input received, using minimal (App Config-based) setup"
                 choice="1"
             fi
