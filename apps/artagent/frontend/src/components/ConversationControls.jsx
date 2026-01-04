@@ -73,7 +73,8 @@ const ConversationControls = React.memo(({
   return (
     <div style={styles.controlSection}>
       {/* Mini view toggle "hat" above the main control cluster (non-intrusive) */}
-      {typeof onMainViewChange === "function" && (
+      {/* DISABLED: View toggle buttons for chat/graph/timeline */}
+      {false && typeof onMainViewChange === "function" && (
         <div
           onMouseEnter={() => setHatHovered(true)}
           onMouseLeave={() => setHatHovered(false)}
