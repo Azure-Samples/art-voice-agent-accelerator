@@ -24,14 +24,19 @@ TRACING_ENABLED = os.getenv("ENABLE_TRACING", "false").lower() == "true"
 # Logical service names used in logs/attributes (Resource `service.name` should
 # be configured at process startup; these are for human-friendly values only.)
 SERVICE_NAMES = {
+    # Azure services - use consistent naming matching PeerService constants
+    "azure_openai": "azure.ai.openai",
+    "azure_speech": "azure.speech",
+    "azure_communication": "azure.communication",
+    # Internal services
     "acs_router": "acs-router",
     "acs_media_ws": "acs-websocket",
     "acs_media_handler": "acs-media-handler",
+    "acs_lifecycle": "azure.communication",  # Map lifecycle to ACS service
     "orchestrator": "orchestration-engine",
     "fraud_agent": "fraud-detection-service",
     "claim_intake_agent": "claims-service",
     "gpt_flow": "gpt-completion-service",
-    "azure_openai": "azure-openai-service",
     # Legacy aliases
     "websocket": "acs-websocket",
     "media_handler": "acs-media-handler",
@@ -302,10 +307,13 @@ def trace_acs_dependency(
         **extra_attrs,
     )
 
+    # Use Azure-style span naming for better App Map grouping
+    span_name = f"Azure.Communication.{operation}"
+
     return TracedOperation(
         tracer=tracer,
         logger=logger,
-        span_name=f"acs_events.call_{target_service}",
+        span_name=span_name,
         service_name="acs_event_handlers",
         operation=operation,
         span_kind=SpanKind.CLIENT,

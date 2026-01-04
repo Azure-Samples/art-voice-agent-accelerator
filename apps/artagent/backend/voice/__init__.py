@@ -59,6 +59,7 @@ from .shared import (
     DEFAULT_START_AGENT,
     OrchestratorContext,
     OrchestratorResult,
+    TransportType,
     resolve_from_app_state,
     resolve_orchestrator_config,
 )
@@ -117,6 +118,22 @@ _VOICELIVE_EXPORTS = {
     "unregister_voicelive_orchestrator",
 }
 
+# VoiceHandler (Phase 3 unified handler) - lazy loaded
+_VOICEHANDLER_EXPORTS = {
+    "VoiceHandler",
+    "VoiceHandlerConfig",
+    "pcm16le_rms",
+    "ACSMessageKind",
+    "RMS_SILENCE_THRESHOLD",
+    "SILENCE_GAP_MS",
+    "VOICE_LIVE_PCM_SAMPLE_RATE",
+    "VOICE_LIVE_SPEECH_RMS_THRESHOLD",
+    "VOICE_LIVE_SILENCE_GAP_SECONDS",
+    "BROWSER_PCM_SAMPLE_RATE",
+    "BROWSER_SPEECH_RMS_THRESHOLD",
+    "BROWSER_SILENCE_GAP_SECONDS",
+}
+
 _MESSAGING_EXPORTS = {
     "BrowserBargeInController",
     "broadcast_session_envelope",
@@ -139,11 +156,14 @@ def __getattr__(name: str):
         from .speech_cascade import handler
         return getattr(handler, name)
     if name in _TTS_EXPORTS:
-        from .speech_cascade import tts
+        from . import tts  # TTSPlayback moved from speech_cascade.tts to voice.tts
         return getattr(tts, name)
     if name in _VOICELIVE_EXPORTS:
         from . import voicelive
         return getattr(voicelive, name)
+    if name in _VOICEHANDLER_EXPORTS:
+        from . import handler as voice_handler_module
+        return getattr(voice_handler_module, name)
     if name in _MESSAGING_EXPORTS:
         from . import messaging
         return getattr(messaging, name)
@@ -176,9 +196,23 @@ __all__ = [
     "record_tts_ttfb",
     "record_stt_latency",
     "record_turn_complete",
+    # VoiceHandler (Phase 3 unified) - lazy loaded
+    "VoiceHandler",
+    "VoiceHandlerConfig",
+    "pcm16le_rms",
+    "ACSMessageKind",
+    "RMS_SILENCE_THRESHOLD",
+    "SILENCE_GAP_MS",
+    "VOICE_LIVE_PCM_SAMPLE_RATE",
+    "VOICE_LIVE_SPEECH_RMS_THRESHOLD",
+    "VOICE_LIVE_SILENCE_GAP_SECONDS",
+    "BROWSER_PCM_SAMPLE_RATE",
+    "BROWSER_SPEECH_RMS_THRESHOLD",
+    "BROWSER_SILENCE_GAP_SECONDS",
     # Orchestrator Data Classes - direct import
     "OrchestratorContext",
     "OrchestratorResult",
+    "TransportType",
     # Cascade Orchestrator (unified agents) - direct import
     "CascadeOrchestratorAdapter",
     "CascadeConfig",

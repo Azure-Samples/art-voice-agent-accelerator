@@ -5,44 +5,46 @@ V1 API Handlers
 Business logic handlers for V1 API endpoints.
 
 Handler Architecture:
-- media_handler: Unified handler for both ACS and Browser (composing SpeechCascadeHandler)
+- VoiceHandler: Unified handler for both ACS and Browser (Phase 3 replacement)
+- MediaHandler: Deprecated alias → VoiceHandler (for backward compatibility)
 - acs_call_lifecycle: ACS call lifecycle management
 - dtmf_validation_lifecycle: DTMF validation handling
 
-Voice channel handlers have moved to:
-    apps/artagent/backend/voice_channels/
-
-Re-exports are provided here for backward compatibility.
+Voice channel handlers live in:
+    apps/artagent/backend/voice/
 """
 
-# Voice channel re-exports (moved to apps/artagent/backend/voice_channels/)
+# Voice channel imports - all from unified voice module
 from apps.artagent.backend.voice import (
+    ACSMessageKind,
+    BROWSER_PCM_SAMPLE_RATE,
+    BROWSER_SILENCE_GAP_SECONDS,
+    BROWSER_SPEECH_RMS_THRESHOLD,
     BargeInController,
+    RMS_SILENCE_THRESHOLD,
     RouteTurnThread,
+    SILENCE_GAP_MS,
     SpeechCascadeHandler,
     SpeechEvent,
     SpeechEventType,
     SpeechSDKThread,
     ThreadBridge,
-    VoiceLiveSDKHandler,
-)
-
-from .media_handler import (
-    BROWSER_PCM_SAMPLE_RATE,
-    BROWSER_SILENCE_GAP_SECONDS,
-    BROWSER_SPEECH_RMS_THRESHOLD,
-    RMS_SILENCE_THRESHOLD,
-    SILENCE_GAP_MS,
+    TransportType,
     VOICE_LIVE_PCM_SAMPLE_RATE,
     VOICE_LIVE_SILENCE_GAP_SECONDS,
     VOICE_LIVE_SPEECH_RMS_THRESHOLD,
-    ACSMediaHandler,  # Backward compat alias
-    ACSMessageKind,
-    MediaHandler,
-    MediaHandlerConfig,
-    TransportType,
+    VoiceHandler,
+    VoiceHandlerConfig,
+    VoiceLiveSDKHandler,
     pcm16le_rms,
 )
+
+# DEPRECATED: MediaHandler is now an alias to VoiceHandler
+# All new code should use VoiceHandler directly
+MediaHandler = VoiceHandler
+MediaHandlerConfig = VoiceHandlerConfig
+ACSMediaHandler = VoiceHandler  # Legacy alias
+
 
 __all__ = [
     # Speech processing (generic)
@@ -53,12 +55,15 @@ __all__ = [
     "RouteTurnThread",
     "SpeechSDKThread",
     "BargeInController",
-    # Unified media handler
-    "MediaHandler",
-    "MediaHandlerConfig",
+    # Unified voice handler (new - Phase 3)
+    "VoiceHandler",
+    "VoiceHandlerConfig",
     "TransportType",
     "ACSMessageKind",
-    "ACSMediaHandler",  # Backward compat alias
+    # Legacy (deprecated - Phase 2)
+    "MediaHandler",
+    "MediaHandlerConfig",
+    "ACSMediaHandler",
     # VoiceLive
     "VoiceLiveSDKHandler",
     # Audio utilities

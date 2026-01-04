@@ -11,7 +11,7 @@ Endpoint Architecture:
 
 Handler Pattern (matches media.py):
 - Voice Live: VoiceLiveSDKHandler created directly in endpoint
-- Speech Cascade: MediaHandler.create() factory (handles all setup)
+- Speech Cascade: VoiceHandler.create() factory (handles all setup)
 
 The endpoint handles:
 1. WebSocket accept/close lifecycle
@@ -63,13 +63,13 @@ from utils.session_context import session_context
 
 from apps.artagent.backend.src.orchestration.unified import cleanup_adapter
 
-from ..handlers.media_handler import (
+from apps.artagent.backend.voice import (
     VOICE_LIVE_PCM_SAMPLE_RATE,
     VOICE_LIVE_SILENCE_GAP_SECONDS,
     VOICE_LIVE_SPEECH_RMS_THRESHOLD,
-    MediaHandler,
-    MediaHandlerConfig,
     TransportType,
+    VoiceHandler,
+    VoiceHandlerConfig,
     pcm16le_rms,
 )
 from ..schemas.realtime import RealtimeStatusResponse
@@ -198,12 +198,12 @@ async def browser_conversation_endpoint(
 
     Supports two modes:
     - Voice Live: VoiceLiveSDKHandler (direct, like media.py)
-    - Speech Cascade: MediaHandler.create() factory
+    - Speech Cascade: VoiceHandler.create() factory
     
     Query Parameters:
     - scenario: Industry scenario (banking, default, etc.)
     """
-    handler: Any = None  # MediaHandler or VoiceLiveSDKHandler
+    handler: Any = None  # VoiceHandler or VoiceLiveSDKHandler
     memory_manager: MemoManager | None = None
     conn_id: str | None = None
 
@@ -249,8 +249,8 @@ async def browser_conversation_endpoint(
                         "stream_mode": str(stream_mode),
                     }
                 else:
-                    # Speech Cascade - use MediaHandler factory
-                    config = MediaHandlerConfig(
+                    # Speech Cascade - use VoiceHandler factory
+                    config = VoiceHandlerConfig(
                         session_id=session_id,
                         websocket=websocket,
                         transport=TransportType.BROWSER,
@@ -258,7 +258,7 @@ async def browser_conversation_endpoint(
                         user_email=user_email,
                         scenario=scenario,
                     )
-                    handler = await MediaHandler.create(config, websocket.app.state)
+                    handler = await VoiceHandler.create(config, websocket.app.state)
                     memory_manager = handler.memory_manager
                     metadata = handler.metadata
 
@@ -293,12 +293,17 @@ async def browser_conversation_endpoint(
                 await _process_voice_live_messages(websocket, handler, session_id, conn_id)
             else:
                 # Start speech cascade and run message loop
+                logger.info("[%s] Starting VoiceHandler (stream_mode=%s)", session_id, stream_mode)
                 await handler.start()
+                logger.info("[%s] VoiceHandler started, entering run loop", session_id)
                 await handler.run()
+                logger.info("[%s] VoiceHandler run loop exited normally", session_id)
 
         except WebSocketDisconnect as e:
+            logger.warning("[%s] WebSocketDisconnect caught: code=%s", session_id, e.code)
             _log_disconnect("conversation", session_id, e)
         except Exception as e:
+            logger.error("[%s] Exception caught before handler started: %s", session_id, e, exc_info=True)
             _log_error("conversation", session_id, e)
             raise
         finally:
@@ -650,6 +655,7 @@ def _log_error(endpoint: str, identifier: str | None, e: Exception) -> None:
         identifier=identifier,
         error=str(e),
         error_type=type(e).__name__,
+        exc_info=True,
     )
 
 
@@ -687,7 +693,7 @@ async def _cleanup_dashboard(
 async def _cleanup_conversation(
     websocket: WebSocket,
     session_id: str | None,
-    handler: Any,  # MediaHandler or VoiceLiveSDKHandler
+    handler: Any,  # VoiceHandler or VoiceLiveSDKHandler
     memory_manager: MemoManager | None,
     conn_id: str | None,
     stream_mode: StreamMode,
@@ -703,7 +709,7 @@ async def _cleanup_conversation(
 
             # Handler cleanup based on type
             if handler:
-                if isinstance(handler, MediaHandler):
+                if isinstance(handler, VoiceHandler):
                     await handler.stop()
                 # VoiceLiveSDKHandler cleanup already done in processing finally block
 

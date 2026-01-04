@@ -72,6 +72,7 @@ from apps.artagent.backend.voice.shared.session_state import (
 from apps.artagent.backend.voice.speech_cascade.tts_processor import TTSTextProcessor
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
+from src.enums.monitoring import GenAIOperation, GenAIProvider, SpanAttr
 
 
 @dataclass
@@ -412,8 +413,13 @@ class CascadeOrchestratorAdapter:
         because scenario changes during a call would be disruptive anyway.
         """
         if not hasattr(self, "_cached_orchestrator_config"):
+            # Get scenario_name from session memo_manager if available
+            scenario_name = None
+            if self._current_memo_manager:
+                scenario_name = self._current_memo_manager.get_value_from_corememory("scenario_name", None)
             self._cached_orchestrator_config = resolve_orchestrator_config(
-                session_id=self.config.session_id
+                session_id=self.config.session_id,
+                scenario_name=scenario_name,
             )
             logger.debug(
                 "Cached orchestrator config | scenario=%s session=%s",
@@ -502,6 +508,30 @@ class CascadeOrchestratorAdapter:
         config = self._orchestrator_config
         scenario = config.scenario
         if not scenario:
+            logger.warning(
+                "No scenario loaded for handoff tool injection | agent=%s scenario_name=%s",
+                agent.name,
+                config.scenario_name,
+            )
+            # Fallback: still add handoff_to_agent if agent has explicit handoff tools defined
+            # This ensures basic handoff capability even without scenario config
+            agent_tools = agent.get_tools()
+            has_handoff_tools = any(
+                self.handoff_service.is_handoff(t.get("function", {}).get("name", ""))
+                for t in agent_tools
+            )
+            if has_handoff_tools:
+                from apps.artagent.backend.registries.toolstore import get_tools_for_agent, initialize_tools
+                initialize_tools()
+                handoff_tools = get_tools_for_agent(["handoff_to_agent"])
+                if handoff_tools:
+                    # Enhance with available agent names
+                    handoff_tools = self._enhance_handoff_tool_with_agents(handoff_tools, agent.name)
+                    tools = list(tools) + handoff_tools
+                    logger.info(
+                        "Added handoff_to_agent (fallback) | agent=%s reason=agent_has_handoff_tools",
+                        agent.name,
+                    )
             return tools
 
         # Add handoff_to_agent if generic handoffs enabled or agent has outgoing edges
@@ -530,6 +560,8 @@ class CascadeOrchestratorAdapter:
             initialize_tools()
             handoff_tools = get_tools_for_agent(["handoff_to_agent"])
             if handoff_tools:
+                # Enhance with available agent names
+                handoff_tools = self._enhance_handoff_tool_with_agents(handoff_tools, agent.name)
                 tools = list(tools) + handoff_tools
                 logger.info(
                     "Added handoff_to_agent tool | agent=%s scenario=%s",
@@ -538,6 +570,59 @@ class CascadeOrchestratorAdapter:
                 )
 
         return tools
+
+    def _enhance_handoff_tool_with_agents(
+        self, handoff_tools: list[dict[str, Any]], current_agent: str
+    ) -> list[dict[str, Any]]:
+        """
+        Enhance handoff_to_agent tool description with available agent names.
+
+        This helps the LLM know exactly which agents it can hand off to,
+        preventing hallucinated agent names like "CardSpecialist" instead
+        of the correct "CardRecommendation".
+
+        Args:
+            handoff_tools: List of handoff tool schemas
+            current_agent: The current agent name (to exclude from targets)
+
+        Returns:
+            Modified tool schemas with agent names in description
+        """
+        import copy
+
+        # Get available agents (excluding current agent)
+        available_agents = [name for name in self.agents.keys() if name != current_agent]
+
+        if not available_agents:
+            return handoff_tools
+
+        enhanced_tools = []
+        for tool in handoff_tools:
+            tool_copy = copy.deepcopy(tool)
+            func = tool_copy.get("function", {})
+            if func.get("name") == "handoff_to_agent":
+                # Update description to include available agents
+                original_desc = func.get("description", "")
+                agent_list = ", ".join(sorted(available_agents))
+                enhanced_desc = (
+                    f"{original_desc}\n\n"
+                    f"AVAILABLE AGENTS: {agent_list}\n"
+                    f"You MUST use one of these exact agent names as the target_agent parameter."
+                )
+                func["description"] = enhanced_desc
+
+                # Also update the target_agent parameter with enum
+                params = func.get("parameters", {})
+                props = params.get("properties", {})
+                if "target_agent" in props:
+                    props["target_agent"]["enum"] = sorted(available_agents)
+                    props["target_agent"]["description"] = (
+                        f"The name of the agent to transfer to. Must be one of: {agent_list}"
+                    )
+
+            enhanced_tools.append(tool_copy)
+
+        return enhanced_tools
 
     def set_on_agent_switch(self, callback: Callable[[str, str], Awaitable[None]] | None) -> None:
         """
@@ -1316,7 +1401,7 @@ class CascadeOrchestratorAdapter:
                 "rt.call.connection_id": self.config.call_connection_id or "",
                 # Azure Monitor semantic conventions
                 "dependency.type": "Azure OpenAI",
-                "peer.service": "azure-openai",
+                "peer.service": "azure.ai.openai",
                 "component": "cascade_adapter",
                 "cascade.streaming": True,
                 "cascade.tool_loop_iteration": _iteration,
@@ -1337,6 +1422,7 @@ class CascadeOrchestratorAdapter:
                 tool_buffers: dict[str, dict[str, Any]] = {}
                 collected_text: list[str] = []
                 stream_error: list[Exception] = []
+                stream_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
                 loop = asyncio.get_running_loop()
                 tool_call_detected = False  # Track if tool calls are streaming
 
@@ -1393,7 +1479,7 @@ class CascadeOrchestratorAdapter:
                             kind=SpanKind.CLIENT,
                             attributes={
                                 "dependency.type": "Azure OpenAI",
-                                "peer.service": "azure-openai",
+                                "peer.service": "azure.ai.openai",
                                 "gen_ai.operation.name": "chat",
                                 "gen_ai.request.model": model_name,
                                 "gen_ai.request.temperature": temp_value,
@@ -1420,6 +1506,21 @@ class CascadeOrchestratorAdapter:
 
                             for chunk in stream:
                                 chunk_count += 1
+
+                                # Capture usage data from final chunk (stream_options.include_usage)
+                                # Usage comes in a separate chunk at the end of the stream
+                                usage = getattr(chunk, "usage", None)
+                                if usage:
+                                    # Handle both OpenAI and Azure naming conventions
+                                    input_tok = getattr(usage, "prompt_tokens", None) or getattr(usage, "input_tokens", None) or 0
+                                    output_tok = getattr(usage, "completion_tokens", None) or getattr(usage, "output_tokens", None) or 0
+                                    stream_usage["input_tokens"] = input_tok
+                                    stream_usage["output_tokens"] = output_tok
+                                    logger.debug(
+                                        "Stream usage captured | input=%d output=%d",
+                                        input_tok, output_tok
+                                    )
+
                                 if not getattr(chunk, "choices", None):
                                     continue
                                 choice = chunk.choices[0]
@@ -1559,21 +1660,32 @@ class CascadeOrchestratorAdapter:
                             continue
                     tool_calls.append(tc)
 
-                # Estimate token usage and track via metrics
-                output_tokens = len(response_text) // 4
-                self._metrics.add_tokens(output_tokens=output_tokens)
+                # Use actual token usage from stream if available, fallback to estimate
+                input_tokens = stream_usage.get("input_tokens", 0)
+                output_tokens = stream_usage.get("output_tokens", 0)
+                
+                # Fallback to estimate if stream didn't provide usage
+                if output_tokens == 0 and response_text:
+                    output_tokens = len(response_text) // 4
+                    logger.debug("Using estimated output_tokens=%d (stream usage not available)", output_tokens)
+                
+                # Track tokens via metrics - now includes input tokens
+                self._metrics.add_tokens(input_tokens=input_tokens, output_tokens=output_tokens)
                 self._metrics.record_response()
 
                 logger.info(
-                    "LLM response (streamed) | agent=%s text_len=%d tool_calls=%d (filtered from %d) iteration=%d",
+                    "LLM response (streamed) | agent=%s text_len=%d tool_calls=%d (filtered from %d) iteration=%d tokens=%d/%d",
                     self._active_agent,
                     len(response_text),
                     len(tool_calls),
                     len(raw_tool_calls),
                     _iteration,
+                    input_tokens,
+                    output_tokens,
                 )
 
-                # Set GenAI semantic convention attributes
+                # Set GenAI semantic convention attributes for App Insights
+                span.set_attribute("gen_ai.usage.input_tokens", input_tokens)
                 span.set_attribute("gen_ai.usage.output_tokens", output_tokens)
                 span.set_attribute("gen_ai.response.length", len(response_text))
 
@@ -1650,62 +1762,90 @@ class CascadeOrchestratorAdapter:
                         tool_id = tool_call.get("id", "")
                         raw_args = tool_call.get("arguments", "{}")
 
-                        if on_tool_start:
-                            await on_tool_start(tool_name, raw_args)
-
-                        result: dict[str, Any] = {"error": "Tool execution failed"}
-                        if agent:
-                            try:
-                                args = (
-                                    json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                                )
-                                # Inject session context into tool args for profile-aware tools
-                                # This allows tools to use already-loaded session data
-                                if cm:
-                                    session_profile = cm.get_value_from_corememory("session_profile")
-                                    if session_profile:
-                                        args["_session_profile"] = session_profile
-                                result = await agent.execute_tool(tool_name, args)
-                                logger.info(
-                                    "Tool executed | name=%s result_keys=%s",
-                                    tool_name,
-                                    (
-                                        list(result.keys())
-                                        if isinstance(result, dict)
-                                        else type(result).__name__
-                                    ),
-                                )
-
-                                # Persist tool output to MemoManager for context continuity
-                                if cm:
-                                    try:
-                                        cm.persist_tool_output(tool_name, result)
-                                        # Update any slots returned by the tool
-                                        if isinstance(result, dict) and "slots" in result:
-                                            cm.update_slots(result["slots"])
-                                    except Exception as persist_err:
-                                        logger.debug(
-                                            "Failed to persist tool output: %s", persist_err
-                                        )
-
-                            except Exception as e:
-                                logger.error("Tool execution failed for %s: %s", tool_name, e)
-                                result = {"error": str(e), "tool_name": tool_name}
-
-                        if on_tool_end:
-                            await on_tool_end(tool_name, result)
-
-                        # Append tool result message
-                        tool_result_msg = {
-                            "tool_call_id": tool_id,
-                            "role": "tool",
-                            "name": tool_name,
-                            "content": (
-                                json.dumps(result) if isinstance(result, dict) else str(result)
-                            ),
+                        # Create tool execution span for App Insights tracing
+                        tool_span_attrs = {
+                            SpanAttr.GENAI_OPERATION_NAME.value: GenAIOperation.EXECUTE_TOOL,
+                            SpanAttr.GENAI_TOOL_NAME.value: tool_name,
+                            SpanAttr.GENAI_TOOL_CALL_ID.value: tool_id,
+                            SpanAttr.GENAI_TOOL_TYPE.value: "function",
+                            SpanAttr.PEER_SERVICE.value: "agent.tools",
                         }
-                        messages.append(tool_result_msg)
-                        tool_results_for_history.append(tool_result_msg)
+
+                        with tracer.start_as_current_span(
+                            f"execute_tool {tool_name}",
+                            kind=trace.SpanKind.INTERNAL,
+                            attributes=tool_span_attrs,
+                        ) as tool_span:
+                            if on_tool_start:
+                                await on_tool_start(tool_name, raw_args)
+
+                            result: dict[str, Any] = {"error": "Tool execution failed"}
+                            if agent:
+                                try:
+                                    args = (
+                                        json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                                    )
+                                    # Inject session context into tool args for profile-aware tools
+                                    # This allows tools to use already-loaded session data
+                                    if cm:
+                                        session_profile = cm.get_value_from_corememory("session_profile")
+                                        if session_profile:
+                                            args["_session_profile"] = session_profile
+                                    result = await agent.execute_tool(tool_name, args)
+                                    logger.info(
+                                        "Tool executed | name=%s result_keys=%s",
+                                        tool_name,
+                                        (
+                                            list(result.keys())
+                                            if isinstance(result, dict)
+                                            else type(result).__name__
+                                        ),
+                                    )
+
+                                    # Persist tool output to MemoManager for context continuity
+                                    if cm:
+                                        try:
+                                            cm.persist_tool_output(tool_name, result)
+                                            # Update any slots returned by the tool
+                                            if isinstance(result, dict) and "slots" in result:
+                                                cm.update_slots(result["slots"])
+                                        except Exception as persist_err:
+                                            logger.debug(
+                                                "Failed to persist tool output: %s", persist_err
+                                            )
+
+                                    # Mark tool span as successful
+                                    tool_span.set_status(Status(StatusCode.OK))
+
+                                except Exception as e:
+                                    logger.error("Tool execution failed for %s: %s", tool_name, e)
+                                    result = {"error": str(e), "tool_name": tool_name}
+                                    # Record GenAI error for failed tool execution
+                                    tool_span.set_status(Status(StatusCode.ERROR, str(e)))
+                                    tool_span.record_exception(e)
+                                    tool_span.add_event(
+                                        "gen_ai.tool.execution_error",
+                                        {
+                                            "error.type": type(e).__name__,
+                                            "error.message": str(e),
+                                            "gen_ai.tool.name": tool_name,
+                                        },
+                                    )
+
+                            if on_tool_end:
+                                await on_tool_end(tool_name, result)
+
+                            # Append tool result message
+                            tool_result_msg = {
+                                "tool_call_id": tool_id,
+                                "role": "tool",
+                                "name": tool_name,
+                                "content": (
+                                    json.dumps(result) if isinstance(result, dict) else str(result)
+                                ),
+                            }
+                            messages.append(tool_result_msg)
+                            tool_results_for_history.append(tool_result_msg)
 
                     # Persist tool results to MemoManager for history continuity
                     if cm and tool_results_for_history:

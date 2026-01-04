@@ -270,7 +270,7 @@ class _SessionMessenger:
         self._active_agent_label = new_label
 
         # Emit agent change envelope for frontend UI (cascade updates)
-        if self._can_emit() and agent_name:
+        if self._can_emit() and agent_name and previous_agent:
             envelope = make_envelope(
                 etype="event",
                 sender="System",

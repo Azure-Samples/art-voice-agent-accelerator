@@ -207,6 +207,11 @@ async def play_response(
     initial_backoff: float = 0.1,
 ):
     """
+    DEPRECATED: Use apps.artagent.backend.voice.tts.TTSPlayback instead.
+
+    This function uses Azure's TextSource/SsmlSource API instead of the modern
+    media streaming approach. It's slower and less responsive than the new TTS module.
+
     Plays `response_text` into the given ACS call, using the SpeechConfig.
     Sets bot_speaking=True at start, False when done or on error.
 
@@ -219,6 +224,13 @@ async def play_response(
     :param max_retries:        Maximum retry attempts for 8500 errors
     :param initial_backoff:    Initial backoff time in seconds
     """
+    import warnings
+    warnings.warn(
+        "play_response() is deprecated and will be removed. "
+        "Use apps.artagent.backend.voice.tts.TTSPlayback instead for better performance.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     call_connection_id = ws.headers.get("x-ms-call-connection-id")
     acs_caller = ws.app.state.acs_caller
     call_conn = acs_caller.get_call_connection(call_connection_id=call_connection_id)
@@ -362,6 +374,11 @@ async def play_response_with_queue(
     transcription_resume_delay: float = 0.1,
 ):
     """
+    DEPRECATED: Use apps.artagent.backend.voice.tts.TTSPlayback instead.
+
+    This function uses Azure's TextSource/SsmlSource API with manual queuing instead
+    of the modern media streaming approach. The new TTS module handles this better.
+
     Enhanced play_response that supports message queuing for sequential playback.
     If the bot is already speaking, messages are queued and played in order.
 
@@ -375,6 +392,13 @@ async def play_response_with_queue(
     :param initial_backoff:           Initial backoff time in seconds
     :param transcription_resume_delay: Extra delay after media ends to ensure transcription resumes
     """
+    import warnings
+    warnings.warn(
+        "play_response_with_queue() is deprecated and will be removed. "
+        "Use apps.artagent.backend.voice.tts.TTSPlayback instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     cm = getattr(ws.state, "cm", None)
     call_connection_id = ws.headers.get("x-ms-call-connection-id")
 
@@ -493,6 +517,8 @@ async def _play_response_direct(
     transcription_resume_delay: float = 1.0,
 ):
     """
+    DEPRECATED: Internal helper for play_response_with_queue().
+
     Direct implementation of play_response without queuing logic.
     This is the core playback function that handles the actual TTS.
 
