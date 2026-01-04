@@ -71,6 +71,8 @@ import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import EditIcon from '@mui/icons-material/Edit';
 import HearingIcon from '@mui/icons-material/Hearing';
 import CloseIcon from '@mui/icons-material/Close';
+import DownloadIcon from '@mui/icons-material/Download';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import PersonIcon from '@mui/icons-material/Person';
 import BusinessIcon from '@mui/icons-material/Business';
 import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
@@ -1026,7 +1028,9 @@ export default function AgentBuilderContent({
   const [detailAgent, setDetailAgent] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [selectedTool, setSelectedTool] = useState(null);
-  
+  const [showExportInstructions, setShowExportInstructions] = useState(false);
+  const [exportedYaml, setExportedYaml] = useState('');
+
   // Agent configuration state
   const [config, setConfig] = useState({
     name: 'Custom Agent',
@@ -1551,6 +1555,99 @@ export default function AgentBuilderContent({
     } catch {
       setError('Failed to reset');
     }
+  };
+
+  const handleExportAgent = () => {
+    const agentName = config.name.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+    const yamlLines = [
+      `# ${config.name}`,
+      config.description ? `# ${config.description}` : null,
+      '',
+      `name: ${config.name}`,
+      `description: ${config.description || config.name}`,
+      '',
+      '# Handoff configuration',
+      config.handoff_trigger ? `handoff:` : null,
+      config.handoff_trigger ? `  trigger: ${config.handoff_trigger}` : null,
+      '',
+      '# Greetings',
+      config.greeting ? `greeting: |` : null,
+    ];
+
+    if (config.greeting) {
+      config.greeting.split('\n').forEach(line => {
+        yamlLines.push(`  ${line}`);
+      });
+    }
+
+    if (config.return_greeting) {
+      yamlLines.push('');
+      yamlLines.push('return_greeting: |');
+      config.return_greeting.split('\n').forEach(line => {
+        yamlLines.push(`  ${line}`);
+      });
+    }
+
+    yamlLines.push('');
+    yamlLines.push('# Voice configuration');
+    yamlLines.push('voice:');
+    yamlLines.push(`  name: ${config.voice.name}`);
+    yamlLines.push(`  type: ${config.voice.type}`);
+    if (config.voice.rate) yamlLines.push(`  rate: "${config.voice.rate}"`);
+    if (config.voice.pitch) yamlLines.push(`  pitch: "${config.voice.pitch}"`);
+    if (config.voice.style) yamlLines.push(`  style: ${config.voice.style}`);
+
+    yamlLines.push('');
+    yamlLines.push('# VoiceLive model configuration');
+    yamlLines.push('voicelive_model:');
+    yamlLines.push(`  deployment_id: ${config.voicelive_model.deployment_id}`);
+    yamlLines.push(`  temperature: ${config.voicelive_model.temperature}`);
+    yamlLines.push(`  max_tokens: ${config.voicelive_model.max_tokens}`);
+
+    yamlLines.push('');
+    yamlLines.push('# Cascade model configuration');
+    yamlLines.push('cascade_model:');
+    yamlLines.push(`  deployment_id: ${config.cascade_model.deployment_id}`);
+    yamlLines.push(`  temperature: ${config.cascade_model.temperature}`);
+    yamlLines.push(`  max_tokens: ${config.cascade_model.max_tokens}`);
+
+    yamlLines.push('');
+    yamlLines.push('# Session configuration (VoiceLive mode)');
+    yamlLines.push('session:');
+    yamlLines.push(`  modalities: [${config.session.modalities.join(', ')}]`);
+    yamlLines.push(`  input_audio_format: ${config.session.input_audio_format}`);
+    yamlLines.push(`  output_audio_format: ${config.session.output_audio_format}`);
+    yamlLines.push(`  turn_detection:`);
+    yamlLines.push(`    type: ${config.session.turn_detection_type}`);
+    yamlLines.push(`    threshold: ${config.session.turn_detection_threshold}`);
+    yamlLines.push(`    prefix_padding_ms: ${config.session.prefix_padding_ms}`);
+    yamlLines.push(`    silence_duration_ms: ${config.session.silence_duration_ms}`);
+    yamlLines.push(`  tool_choice: ${config.session.tool_choice}`);
+
+    yamlLines.push('');
+    yamlLines.push('# Tools (referenced by name from shared registry)');
+    yamlLines.push('tools:');
+    if (config.tools && config.tools.length > 0) {
+      config.tools.forEach(tool => {
+        yamlLines.push(`  - ${tool}`);
+      });
+    } else {
+      yamlLines.push('  []');
+    }
+
+    yamlLines.push('');
+    yamlLines.push('# Prompt (file reference or inline)');
+    yamlLines.push('prompts:');
+    yamlLines.push(`  path: prompt.jinja`);
+    yamlLines.push('');
+    yamlLines.push('# Note: Create a separate prompt.jinja file with the following content:');
+    yamlLines.push('# ---prompt.jinja---');
+    yamlLines.push(config.prompt);
+    yamlLines.push('# ---end prompt.jinja---');
+
+    const yamlContent = yamlLines.filter(line => line !== null).join('\n');
+    setExportedYaml(yamlContent);
+    setShowExportInstructions(true);
   };
 
   const renderAgentCard = (agent) => {
@@ -2300,35 +2397,34 @@ export default function AgentBuilderContent({
 
                       <Divider />
 
-                      {/* Shared parameters (show for both) */}
-                      <Box>
-                        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
-                          <Stack direction="row" alignItems="center" spacing={1}>
-                            <Typography variant="body2" fontWeight={500}>Temperature</Typography>
-                            <Tooltip title="Controls randomness. Lower = focused, Higher = creative.">
-                              <InfoOutlinedIcon fontSize="small" color="action" />
-                            </Tooltip>
-                          </Stack>
-                          <Chip label={config.cascade_model?.temperature ?? 0.7} size="small" color="primary" />
-                        </Stack>
-                        <Slider
-                          value={config.cascade_model?.temperature ?? 0.7}
-                          onChange={(_e, v) => handleNestedConfigChange('cascade_model', 'temperature', v)}
-                          min={0}
-                          max={2}
-                          step={0.1}
-                          marks={[
-                            { value: 0, label: 'Focused' },
-                            { value: 0.7, label: '0.7' },
-                            { value: 1, label: 'Balanced' },
-                            { value: 2, label: 'Creative' },
-                          ]}
-                        />
-                      </Box>
-
-                      {/* Show chat completions parameters */}
+                      {/* Show chat completions parameters (including temperature) */}
                       {cascadeEndpointPreference === 'chat' && (
                         <>
+                          <Box>
+                            <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+                              <Stack direction="row" alignItems="center" spacing={1}>
+                                <Typography variant="body2" fontWeight={500}>Temperature</Typography>
+                                <Tooltip title="Controls randomness. Lower = focused, Higher = creative.">
+                                  <InfoOutlinedIcon fontSize="small" color="action" />
+                                </Tooltip>
+                              </Stack>
+                              <Chip label={config.cascade_model?.temperature ?? 0.7} size="small" color="primary" />
+                            </Stack>
+                            <Slider
+                              value={config.cascade_model?.temperature ?? 0.7}
+                              onChange={(_e, v) => handleNestedConfigChange('cascade_model', 'temperature', v)}
+                              min={0}
+                              max={2}
+                              step={0.1}
+                              marks={[
+                                { value: 0, label: 'Focused' },
+                                { value: 0.7, label: '0.7' },
+                                { value: 1, label: 'Balanced' },
+                                { value: 2, label: 'Creative' },
+                              ]}
+                            />
+                          </Box>
+
                           <Box>
                             <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
                               <Stack direction="row" alignItems="center" spacing={1}>
@@ -2602,35 +2698,34 @@ export default function AgentBuilderContent({
 
                       <Divider />
 
-                      {/* Shared parameters */}
-                      <Box>
-                        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
-                          <Stack direction="row" alignItems="center" spacing={1}>
-                            <Typography variant="body2" fontWeight={500}>Temperature</Typography>
-                            <Tooltip title="Controls randomness. Lower = focused, Higher = creative.">
-                              <InfoOutlinedIcon fontSize="small" color="action" />
-                            </Tooltip>
-                          </Stack>
-                          <Chip label={config.voicelive_model?.temperature ?? 0.7} size="small" color="primary" />
-                        </Stack>
-                        <Slider
-                          value={config.voicelive_model?.temperature ?? 0.7}
-                          onChange={(_e, v) => handleNestedConfigChange('voicelive_model', 'temperature', v)}
-                          min={0}
-                          max={2}
-                          step={0.1}
-                          marks={[
-                            { value: 0, label: 'Focused' },
-                            { value: 0.7, label: '0.7' },
-                            { value: 1, label: 'Balanced' },
-                            { value: 2, label: 'Creative' },
-                          ]}
-                        />
-                      </Box>
-
-                      {/* Chat completions parameters */}
+                      {/* Chat completions parameters (including temperature) */}
                       {voiceliveEndpointPreference === 'chat' && (
                         <>
+                          <Box>
+                            <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+                              <Stack direction="row" alignItems="center" spacing={1}>
+                                <Typography variant="body2" fontWeight={500}>Temperature</Typography>
+                                <Tooltip title="Controls randomness. Lower = focused, Higher = creative.">
+                                  <InfoOutlinedIcon fontSize="small" color="action" />
+                                </Tooltip>
+                              </Stack>
+                              <Chip label={config.voicelive_model?.temperature ?? 0.7} size="small" color="primary" />
+                            </Stack>
+                            <Slider
+                              value={config.voicelive_model?.temperature ?? 0.7}
+                              onChange={(_e, v) => handleNestedConfigChange('voicelive_model', 'temperature', v)}
+                              min={0}
+                              max={2}
+                              step={0.1}
+                              marks={[
+                                { value: 0, label: 'Focused' },
+                                { value: 0.7, label: '0.7' },
+                                { value: 1, label: 'Balanced' },
+                                { value: 2, label: 'Creative' },
+                              ]}
+                            />
+                          </Box>
+
                           <Box>
                             <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
                               <Stack direction="row" alignItems="center" spacing={1}>
@@ -3025,6 +3120,14 @@ export default function AgentBuilderContent({
           Reset
         </Button>
         <Button
+          onClick={handleExportAgent}
+          startIcon={<DownloadIcon />}
+          disabled={!config.name.trim() || config.prompt.length < 10}
+          variant="outlined"
+        >
+          Export YAML
+        </Button>
+        <Button
           variant="contained"
           onClick={handleSave}
           startIcon={saving ? <CircularProgress size={18} color="inherit" /> : <SaveIcon />}
@@ -3040,6 +3143,180 @@ export default function AgentBuilderContent({
             : isEditMode ? 'Update Agent' : 'Create Agent'}
         </Button>
       </Box>
+
+      {/* Export Instructions Dialog */}
+      <Dialog
+        open={showExportInstructions}
+        onClose={() => setShowExportInstructions(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <FolderOpenIcon color="primary" />
+          <Box sx={{ flex: 1 }}>
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>
+              Export Agent Configuration
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Follow these steps to persist your agent in the backend code
+            </Typography>
+          </Box>
+          <IconButton onClick={() => setShowExportInstructions(false)}>
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+
+        <DialogContent dividers>
+          <Stack spacing={3}>
+            {/* Step 1 */}
+            <Box>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Chip label="1" size="small" color="primary" />
+                Copy the agent YAML configuration
+              </Typography>
+              <Paper variant="outlined" sx={{ p: 2, backgroundColor: '#f8fafc', position: 'relative' }}>
+                <Typography
+                  component="pre"
+                  variant="body2"
+                  sx={{
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    maxHeight: 300,
+                    overflowY: 'auto',
+                    m: 0,
+                  }}
+                >
+                  {exportedYaml}
+                </Typography>
+                <Tooltip title="Copy to clipboard">
+                  <IconButton
+                    size="small"
+                    onClick={() => {
+                      navigator.clipboard.writeText(exportedYaml);
+                      setSuccess('YAML copied to clipboard!');
+                      setTimeout(() => setSuccess(null), 2000);
+                    }}
+                    sx={{ position: 'absolute', top: 8, right: 8, backgroundColor: 'white' }}
+                  >
+                    <ContentCopyIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </Paper>
+            </Box>
+
+            {/* Step 2 */}
+            <Box>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Chip label="2" size="small" color="primary" />
+                Create the agent directory
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                In your terminal, create the agent directory:
+              </Typography>
+              <Paper variant="outlined" sx={{ p: 1.5, backgroundColor: '#1e1e1e', borderRadius: 1 }}>
+                <Typography
+                  component="code"
+                  variant="body2"
+                  sx={{ fontFamily: 'monospace', color: '#a5d6ff', fontSize: 13 }}
+                >
+                  mkdir -p apps/artagent/backend/registries/agentstore/{config.name.toLowerCase().replace(/[^a-z0-9_-]/g, '_')}
+                </Typography>
+              </Paper>
+            </Box>
+
+            {/* Step 3 */}
+            <Box>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Chip label="3" size="small" color="primary" />
+                Create agent.yaml and prompt.jinja files
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                Create two files in the agent directory:
+              </Typography>
+              <Stack spacing={1}>
+                <Paper variant="outlined" sx={{ p: 1.5, backgroundColor: '#1e1e1e', borderRadius: 1 }}>
+                  <Typography
+                    component="code"
+                    variant="body2"
+                    sx={{ fontFamily: 'monospace', color: '#a5d6ff', fontSize: 13 }}
+                  >
+                    # 1. agent.yaml (copy YAML above, but exclude the prompt section at the end)<br/>
+                    apps/artagent/backend/registries/agentstore/{config.name.toLowerCase().replace(/[^a-z0-9_-]/g, '_')}/agent.yaml
+                  </Typography>
+                </Paper>
+                <Paper variant="outlined" sx={{ p: 1.5, backgroundColor: '#1e1e1e', borderRadius: 1 }}>
+                  <Typography
+                    component="code"
+                    variant="body2"
+                    sx={{ fontFamily: 'monospace', color: '#a5d6ff', fontSize: 13 }}
+                  >
+                    # 2. prompt.jinja (copy prompt content from YAML comments)<br/>
+                    apps/artagent/backend/registries/agentstore/{config.name.toLowerCase().replace(/[^a-z0-9_-]/g, '_')}/prompt.jinja
+                  </Typography>
+                </Paper>
+              </Stack>
+            </Box>
+
+            {/* Step 4 */}
+            <Box>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Chip label="4" size="small" color="primary" />
+                Restart the backend
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                The backend will automatically discover the new agent on restart:
+              </Typography>
+              <Paper variant="outlined" sx={{ p: 1.5, backgroundColor: '#1e1e1e', borderRadius: 1 }}>
+                <Typography
+                  component="code"
+                  variant="body2"
+                  sx={{ fontFamily: 'monospace', color: '#a5d6ff', fontSize: 13 }}
+                >
+                  # Restart your backend service<br/>
+                  # The agent will be available in the agent builder and scenarios
+                </Typography>
+              </Paper>
+            </Box>
+
+            {/* Info Box */}
+            <Paper sx={{ p: 2, backgroundColor: '#fef3c7', border: '1px solid #fbbf24' }}>
+              <Typography variant="body2" sx={{ fontWeight: 600, color: '#92400e', mb: 1 }}>
+                ⚠️ Important Notes
+              </Typography>
+              <Typography variant="body2" color="text.secondary" component="div">
+                <ul style={{ margin: '4px 0', paddingLeft: 20 }}>
+                  <li>The YAML export includes the prompt as comments. Extract it into a separate <code style={{ backgroundColor: '#fde68a', padding: '2px 4px', borderRadius: 2 }}>prompt.jinja</code> file</li>
+                  <li>Agent names should be unique across your agentstore</li>
+                  <li>Tools referenced in the YAML must exist in the toolstore registry</li>
+                </ul>
+              </Typography>
+            </Paper>
+          </Stack>
+        </DialogContent>
+
+        <DialogActions sx={{ p: 2 }}>
+          <Button onClick={() => setShowExportInstructions(false)}>
+            Close
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<DownloadIcon />}
+            onClick={() => {
+              const blob = new Blob([exportedYaml], { type: 'text/yaml' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `${config.name.toLowerCase().replace(/[^a-z0-9_-]/g, '_')}_agent.yaml`;
+              a.click();
+              URL.revokeObjectURL(url);
+            }}
+          >
+            Download YAML File
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
