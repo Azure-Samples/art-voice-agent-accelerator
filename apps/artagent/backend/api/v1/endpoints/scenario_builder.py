@@ -196,6 +196,11 @@ class AgentInfo(BaseModel):
     is_entry_point: bool = False
     is_session_agent: bool = False  # True if this is a dynamically created session agent
     session_id: str | None = None  # Session ID if this is a session agent
+    # Model and voice configuration for UI display
+    model: dict[str, Any] | None = None  # Primary model config
+    cascade_model: dict[str, Any] | None = None  # Cascade mode model config
+    voicelive_model: dict[str, Any] | None = None  # VoiceLive mode model config
+    voice: dict[str, Any] | None = None  # Voice/TTS config
 
 
 _JINJA_VAR_RE = re.compile(
@@ -233,6 +238,49 @@ def extract_handoff_context_vars(prompt_template: str | None) -> list[str]:
     return [
         var for var in extract_prompt_vars(prompt_template) if var.startswith("handoff_context.")
     ]
+
+
+def extract_model_config(agent: Any) -> dict[str, Any] | None:
+    """Extract model configuration as a dict for API response."""
+    model = getattr(agent, "model", None)
+    if model is None:
+        return None
+    if hasattr(model, "__dict__"):
+        return {
+            "deployment_id": getattr(model, "deployment_id", None),
+            "model_name": getattr(model, "model_name", None),
+            "endpoint": getattr(model, "endpoint", None),
+        }
+    return None
+
+
+def extract_mode_model_config(agent: Any, mode: str) -> dict[str, Any] | None:
+    """Extract cascade_model or voicelive_model config as a dict for API response."""
+    model = getattr(agent, mode, None)
+    if model is None:
+        return None
+    if hasattr(model, "__dict__"):
+        return {
+            "deployment_id": getattr(model, "deployment_id", None),
+            "model_name": getattr(model, "model_name", None),
+            "endpoint": getattr(model, "endpoint", None),
+        }
+    return None
+
+
+def extract_voice_config(agent: Any) -> dict[str, Any] | None:
+    """Extract voice configuration as a dict for API response."""
+    voice = getattr(agent, "voice", None)
+    if voice is None:
+        return None
+    if hasattr(voice, "__dict__"):
+        return {
+            "voice_name": getattr(voice, "voice_name", None),
+            "display_name": getattr(voice, "display_name", None) or getattr(voice, "voice_name", None),
+            "provider": getattr(voice, "provider", None),
+            "language": getattr(voice, "language", None),
+        }
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -416,6 +464,10 @@ async def list_available_agents(session_id: str | None = None) -> dict[str, Any]
                 or "concierge" in name.lower(),
                 is_session_agent=False,
                 session_id=None,
+                model=extract_model_config(agent),
+                cascade_model=extract_mode_model_config(agent, "cascade_model"),
+                voicelive_model=extract_mode_model_config(agent, "voicelive_model"),
+                voice=extract_voice_config(agent),
             )
         )
 
@@ -453,6 +505,10 @@ async def list_available_agents(session_id: str | None = None) -> dict[str, Any]
                     is_entry_point=False,
                     is_session_agent=True,
                     session_id=session_id,
+                    model=extract_model_config(agent),
+                    cascade_model=extract_mode_model_config(agent, "cascade_model"),
+                    voicelive_model=extract_mode_model_config(agent, "voicelive_model"),
+                    voice=extract_voice_config(agent),
                 )
             )
             session_agents_added += 1
@@ -493,6 +549,10 @@ async def list_available_agents(session_id: str | None = None) -> dict[str, Any]
                     is_entry_point=False,
                     is_session_agent=True,
                     session_id=agent_session_id,
+                    model=extract_model_config(agent),
+                    cascade_model=extract_mode_model_config(agent, "cascade_model"),
+                    voicelive_model=extract_mode_model_config(agent, "voicelive_model"),
+                    voice=extract_voice_config(agent),
                 )
             )
             session_agents_added += 1

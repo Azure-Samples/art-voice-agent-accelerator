@@ -1,0 +1,492 @@
+/**
+ * Flowy Styles
+ * ============
+ * 
+ * Custom styles for the Flowy flowchart library integration.
+ * Based on the original flowy.min.css with customizations for agent blocks.
+ */
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   FLOWY BASE STYLES (from flowy.min.css)
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+#canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: visible;
+  min-height: 400px;
+  z-index: 1;
+}
+
+.blockelem {
+  position: absolute;
+  cursor: grab;
+  user-select: none;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+  z-index: 10;
+}
+
+.blockelem:active {
+  cursor: grabbing;
+}
+
+.blockelem.block {
+  background: transparent;
+}
+
+/* Dragged blocks appear above everything */
+.blockelem.dragging {
+  z-index: 100000 !important;
+  opacity: 0.9;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  transform: scale(1.02);
+  pointer-events: none;
+}
+
+/* Block being cloned during drag - appears on body */
+body > .blockelem {
+  z-index: 100000 !important;
+  position: fixed !important;
+}
+
+.create-flowy {
+  position: relative;
+  cursor: grab;
+  z-index: 5;
+}
+
+.create-flowy:active {
+  cursor: grabbing;
+}
+
+.create-flowy.dragnow {
+  opacity: 0.4;
+}
+
+.grabme {
+  position: relative;
+}
+
+.grabbing {
+  cursor: grabbing !important;
+}
+
+/* Indicator for drop zones */
+.indicator {
+  position: absolute;
+  background: #6366f1;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  z-index: 1000;
+  width: 12px;
+  height: 12px;
+}
+
+.indicator.invisible {
+  display: none;
+  opacity: 0;
+}
+
+.indicator.visible {
+  opacity: 1;
+  display: block;
+}
+
+/* Left and right connection points */
+.blockyleft,
+.blockyright {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #8b5cf6;
+  border: 2px solid white;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  cursor: pointer;
+  z-index: 10;
+}
+
+.blockyleft {
+  left: -6px;
+}
+
+.blockyright {
+  right: -6px;
+}
+
+.blockelem:hover .blockyleft,
+.blockelem:hover .blockyright {
+  opacity: 1;
+}
+
+/* Dragging state */
+.blockelem.dragging {
+  opacity: 0.8;
+  z-index: 1000;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  transform: scale(1.02);
+}
+
+/* Drop target highlight */
+.blockelem.drop-target {
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.4);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   FLOWY CONNECTION ARROWS (SVG)
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+#arrowblock,
+.arrowblock {
+  position: absolute;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 5;
+}
+
+.arrowblock svg {
+  overflow: visible;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.arrowblock svg path {
+  fill: none;
+  stroke: #8b5cf6;
+  stroke-width: 2px;
+  stroke-linecap: round;
+}
+
+.arrowblock svg path:last-child {
+  fill: #8b5cf6;
+}
+
+.arrowblock.highlighted svg path {
+  stroke: #6366f1;
+  stroke-width: 3;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   AGENT BLOCK STYLES
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+.agent-block {
+  position: relative;
+  background: #f5f3ff;
+  border: 2px solid #8b5cf6;
+  border-radius: 12px;
+  padding: 12px 16px;
+  min-width: 160px;
+  max-width: 200px;
+  cursor: grab;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.agent-block:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+.agent-block:active {
+  cursor: grabbing;
+  transform: scale(0.98);
+}
+
+/* Start agent style */
+.agent-block.start {
+  background: #ecfdf5;
+  border-color: #10b981;
+}
+
+/* Custom agent style */
+.agent-block.custom {
+  background: #fef3c7;
+  border-color: #f59e0b;
+}
+
+/* Agent avatar */
+.agent-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #7c3aed;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.agent-block.start .agent-avatar {
+  background: #059669;
+}
+
+.agent-block.custom .agent-avatar {
+  background: #d97706;
+}
+
+/* Agent content */
+.agent-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.agent-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.agent-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: #1e293b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+}
+
+.agent-desc {
+  font-size: 10px;
+  color: #64748b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+  margin-top: 2px;
+}
+
+/* Badges */
+.start-badge,
+.custom-badge {
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+  z-index: 5;
+}
+
+.start-badge {
+  background: #10b981;
+  color: white;
+}
+
+.custom-badge {
+  background: #f59e0b;
+  color: white;
+}
+
+/* Action buttons */
+.agent-actions {
+  position: absolute;
+  bottom: -14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.agent-block:hover .agent-actions {
+  opacity: 1;
+}
+
+.agent-action-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: white;
+  border: 2px solid #e5e7eb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+}
+
+.agent-action-btn:hover {
+  transform: scale(1.1);
+  border-color: #8b5cf6;
+  background: #f5f3ff;
+}
+
+.agent-action-btn.delete:hover {
+  border-color: #ef4444;
+  background: #fef2f2;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   SIDEBAR BLOCKS (Draggable source blocks)
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+#flowy-blocks .create-flowy {
+  margin-bottom: 8px;
+}
+
+#flowy-blocks .agent-block {
+  cursor: grab;
+}
+
+#flowy-blocks .agent-block:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   CANVAS STYLES
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+.flowy-canvas-container {
+  position: relative;
+  background: #f8fafc;
+  background-image: radial-gradient(circle, #d1d5db 1px, transparent 1px);
+  background-size: 20px 20px;
+  min-height: 400px;
+  overflow: auto;
+}
+
+/* Scrollbar styling */
+.flowy-canvas-container::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.flowy-canvas-container::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 5px;
+}
+
+.flowy-canvas-container::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 5px;
+}
+
+.flowy-canvas-container::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   ANIMATION KEYFRAMES
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+@keyframes pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(99, 102, 241, 0);
+  }
+}
+
+.agent-block.pulse {
+  animation: pulse 2s infinite;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.blockelem {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   RESPONSIVE ADJUSTMENTS
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 768px) {
+  .agent-block {
+    min-width: 140px;
+    padding: 10px 12px;
+  }
+
+  .agent-avatar {
+    width: 30px;
+    height: 30px;
+    font-size: 12px;
+  }
+
+  .agent-name {
+    font-size: 12px;
+  }
+
+  .agent-desc {
+    font-size: 9px;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   HANDOFF TYPE INDICATORS
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+.handoff-indicator {
+  position: absolute;
+  right: -8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #8b5cf6;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  border: 2px solid white;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+
+.handoff-indicator.announced {
+  background: #8b5cf6;
+}
+
+.handoff-indicator.discrete {
+  background: #f59e0b;
+}
+
+/* Count badge for multiple handoffs */
+.handoff-count {
+  position: absolute;
+  bottom: -8px;
+  right: 8px;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  background: #8b5cf6;
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}

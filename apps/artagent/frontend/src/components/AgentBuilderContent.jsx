@@ -880,6 +880,9 @@ function AgentDetailsDialog({ open, onClose, agent, loading }) {
   );
 }
 
+// Export for use in other components
+export { AgentDetailsDialog };
+
 function ToolDetailsDialog({ open, onClose, tool }) {
   if (!tool) return null;
 

@@ -72,10 +72,11 @@ nav:
       - Cascade Orchestrator: architecture/orchestration/cascade.md
       - VoiceLive Orchestrator: architecture/orchestration/voicelive.md
       - Handoff Service: architecture/orchestration/handoff-service.md
-    - Speech:
+    - Speech & Voice:
       - Streaming Modes: architecture/speech/README.md
       - Recognition: architecture/speech/recognition.md
       - Synthesis: architecture/speech/synthesis.md
+      - Voice Processing: architecture/voice/README.md
     - Data:
       - Session Management: architecture/data/README.md
       - Data Flows: architecture/data/flows.md
