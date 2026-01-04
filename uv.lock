@@ -181,7 +181,7 @@ wheels = [
 
 [[package]]
 name = "art-voice-agent-accelerator"
-version = "1.0.0"
+version = "2.0.0b0"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },

@@ -100,6 +100,7 @@ tools:
   # Handoffs - Insurance Scenario (Customer)
   - handoff_policy_advisor         # Transfer to PolicyAdvisor (insurance)
   - handoff_fnol_agent             # Transfer to FNOLAgent (insurance claims)
+  - handoff_claims_specialist      # Transfer to ClaimsSpecialist (claims processing)
   
   # Handoffs - Insurance Scenario (B2B)
   - handoff_subro_agent            # Transfer to SubroAgent (subrogation/CC inquiries)

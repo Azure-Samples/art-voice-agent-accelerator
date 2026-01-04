@@ -140,6 +140,15 @@ class AcsCaller:
             audio_format=AudioFormat.PCM16_K_MONO,  # Ensure this matches what your STT expects
         )
 
+        # Log configuration for debugging
+        logger.info("=" * 80)
+        logger.info("ACS Helper Configuration:")
+        logger.info(f"  Source Number: {source_number}")
+        logger.info(f"  🔗 Callback URL: {callback_url}")
+        logger.info(f"  🔗 WebSocket URL: {websocket_url}")
+        logger.info(f"  Recording Callback: {recording_callback_url}")
+        logger.info("=" * 80)
+
         # Initialize ACS client with proper authentication
         try:
             if acs_connection_string:
@@ -207,11 +216,12 @@ class AcsCaller:
 
         try:
             logger.info(f"Initiating call from {self.source_number} to {target_number}")
+            logger.info(f"🔗 ACS Callback URL: {self.callback_url}")
+            logger.info(f"🔗 ACS WebSocket URL: {self.media_streaming_options.transport_url if self.media_streaming_options else 'N/A'}")
             logger.debug(f"Stream mode: {stream_mode}")
             logger.debug(f"Transcription options: {self.transcription_opts}")
             logger.debug(f"Media streaming options: {self.media_streaming_options}")
             logger.debug(f"Cognitive services endpoint: {self.cognitive_services_endpoint}")
-            logger.debug(f"Callback URL: {self.callback_url}")
 
             # Determine which capabilities to enable based on stream_mode
             transcription = None
@@ -241,7 +251,7 @@ class AcsCaller:
                 "Azure.Communication.CallAutomation.CreateCall",
                 kind=SpanKind.CLIENT,
                 attributes={
-                    "peer.service": "azure-communication-services",
+                    "peer.service": "azure.communication",
                     "net.peer.name": endpoint_host,
                 },
             ):
@@ -274,7 +284,9 @@ class AcsCaller:
         Answer an incoming call and set up live transcription.
         """
         try:
-            logger.debug(f"Answering incoming call: {incoming_call_context}")
+            logger.info(f"Answering incoming call: {incoming_call_context}")
+            logger.info(f"🔗 ACS Callback URL: {self.callback_url}")
+            logger.info(f"🔗 ACS WebSocket URL: {self.media_streaming_options.transport_url if self.media_streaming_options else 'N/A'}")
             transcription = None
             cognitive_services_endpoint = None
             media_streaming = None
@@ -300,7 +312,7 @@ class AcsCaller:
                 "Azure.Communication.CallAutomation.AnswerCall",
                 kind=SpanKind.CLIENT,
                 attributes={
-                    "peer.service": "azure-communication-services",
+                    "peer.service": "azure.communication",
                     "net.peer.name": endpoint_host,
                 },
             ):
@@ -342,7 +354,7 @@ class AcsCaller:
                 "Azure.Communication.CallAutomation.StartRecording",
                 kind=SpanKind.CLIENT,
                 attributes={
-                    "peer.service": "azure-communication-services",
+                    "peer.service": "azure.communication",
                     "net.peer.name": endpoint_host,
                 },
             ):
@@ -370,7 +382,7 @@ class AcsCaller:
                 "Azure.Communication.CallAutomation.StopRecording",
                 kind=SpanKind.CLIENT,
                 attributes={
-                    "peer.service": "azure-communication-services",
+                    "peer.service": "azure.communication",
                     "net.peer.name": endpoint_host,
                 },
             ):

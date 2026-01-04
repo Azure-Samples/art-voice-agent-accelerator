@@ -832,7 +832,7 @@ class StreamingSpeechRecognizerFromBytes:
                     "session_id": self.call_connection_id,
                     "ai.operation.id": self.call_connection_id,
                     # Service and network identification
-                    "peer.service": "azure-cognitive-speech",
+                    "peer.service": "azure.speech",
                     "server.address": f"{self.region}.stt.speech.microsoft.com",
                     "server.port": 443,
                     "network.protocol.name": "websocket",

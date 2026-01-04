@@ -67,6 +67,94 @@ const deriveTemplateId = (configPath) => {
   return parts.length >= 2 ? parts[parts.length - 2] : null;
 };
 
+const TextInputBar = React.memo(function TextInputBar({ onSend }) {
+  const [value, setValue] = useState("");
+  const hasText = value.trim().length > 0;
+
+  const handleChange = useCallback((event) => {
+    setValue(event.target.value);
+  }, []);
+
+  const handleSend = useCallback(() => {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    const sent = onSend(trimmed);
+    if (sent !== false) {
+      setValue("");
+    }
+  }, [onSend, value]);
+
+  const handleKeyDown = useCallback(
+    (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        handleSend();
+      }
+    },
+    [handleSend],
+  );
+
+  const sendButtonSx = useMemo(
+    () => ({
+      width: "48px",
+      height: "48px",
+      minWidth: "48px",
+      borderRadius: "50%",
+      padding: 0,
+      background: hasText
+        ? "linear-gradient(135deg, #10b981, #059669)"
+        : "linear-gradient(135deg, #f1f5f9, #e2e8f0)",
+      color: hasText ? "white" : "#cbd5e1",
+      border: hasText ? "none" : "1px solid #e2e8f0",
+      boxShadow: hasText
+        ? "0 4px 14px rgba(16,185,129,0.3), inset 0 1px 2px rgba(255,255,255,0.2)"
+        : "0 2px 6px rgba(0,0,0,0.06)",
+      transition: "all 0.25s cubic-bezier(0.4, 0, 0.2, 1)",
+      cursor: hasText ? "pointer" : "not-allowed",
+      '&:hover': hasText
+        ? {
+            background: "linear-gradient(135deg, #059669, #047857)",
+            transform: "scale(1.08) translateY(-1px)",
+            boxShadow:
+              "0 8px 20px rgba(16,185,129,0.4), 0 0 0 3px rgba(16,185,129,0.15), inset 0 1px 2px rgba(255,255,255,0.2)",
+          }
+        : {},
+      '&:active': hasText
+        ? {
+            transform: "scale(1.02) translateY(0px)",
+            boxShadow: "0 2px 8px rgba(16,185,129,0.3)",
+          }
+        : {},
+      '& svg': {
+        fontSize: '20px',
+        transform: 'translateX(1px)',
+      },
+    }),
+    [hasText],
+  );
+
+  return (
+    <div style={styles.textInputContainer}>
+      <input
+        type="text"
+        value={value}
+        onChange={handleChange}
+        onKeyDown={handleKeyDown}
+        placeholder="Type your message here..."
+        style={styles.textInput}
+      />
+      <IconButton
+        onClick={handleSend}
+        disabled={!hasText}
+        disableRipple
+        sx={sendButtonSx}
+      >
+        <SendRoundedIcon />
+      </IconButton>
+    </div>
+  );
+});
+
 // Component styles
 
 
@@ -212,8 +300,6 @@ function RealTimeVoiceApp() {
   const [sessionUpdateError, setSessionUpdateError] = useState(null);
   const [currentCallId, setCurrentCallId] = useState(null);
   const [showAgentPanel, setShowAgentPanel] = useState(false);
-  const [showTextInput, setShowTextInput] = useState(false);
-  const [textInput, setTextInput] = useState("");
   const [graphEvents, setGraphEvents] = useState([]);
   const graphEventCounterRef = useRef(0);
   const currentAgentRef = useRef("Concierge");
@@ -515,9 +601,10 @@ function RealTimeVoiceApp() {
     return null;
   }, []);
 
-  const handleSendText = useCallback(() => {
-    if (!textInput.trim()) return;
-    
+  const handleSendText = useCallback((rawText) => {
+    const trimmed = (rawText || "").trim();
+    if (!trimmed) return false;
+
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       // BARGE-IN: Stop TTS audio playback before sending text
       // NOTE: We do NOT suspend the recording context (microphone) because
@@ -535,17 +622,17 @@ function RealTimeVoiceApp() {
       }
       
       // Send as raw text message
-      const userText = textInput.trim();
-      socketRef.current.send(userText);
+      socketRef.current.send(trimmed);
 
       // Let backend echo the user message to avoid duplicate bubbles
-      appendLog(`User (text): ${userText}`);
+      appendLog(`User (text): ${trimmed}`);
       setActiveSpeaker("User");
-      setTextInput("");
+      return true;
     } else {
       appendLog("⚠️ Cannot send text: WebSocket not connected");
+      return false;
     }
-  }, [textInput, appendLog]);
+  }, [appendLog]);
 
   const appendSystemMessage = useCallback((text, options = {}) => {
     const timestamp = options.timestamp ?? new Date().toISOString();
@@ -2543,19 +2630,19 @@ function RealTimeVoiceApp() {
           if (summary) {
             setAgentInventory(summary);
           }
-          const agentCount = summary ? (summary.count ?? summary.agents?.length ?? 0) : 0;
-          const names = summary?.agents?.slice(0, 5).map((a) => a.name).join(", ");
-          setMessages((prev) => [
-            ...prev,
-            {
-              speaker: "System",
-              text: `Agents loaded (${agentCount})${summary?.scenario ? ` · scenario: ${summary.scenario}` : ""}${
-                names ? ` · ${names}` : ""
-              }`,
-              statusTone: "info",
-              meta: summary,
-            },
-          ]);
+          // const agentCount = summary ? (summary.count ?? summary.agents?.length ?? 0) : 0;
+          // const names = summary?.agents?.slice(0, 5).map((a) => a.name).join(", ");
+          // setMessages((prev) => [
+          //   ...prev,
+          //   {
+          //     speaker: "System",
+          //     text: `Agents loaded (${agentCount})${summary?.scenario ? ` · scenario: ${summary.scenario}` : ""}${
+          //       names ? ` · ${names}` : ""
+          //     }`,
+          //     statusTone: "info",
+          //     meta: summary,
+          //   },
+          // ]);
           appendGraphEvent({
             kind: "system",
             from: "System",
@@ -4117,55 +4204,7 @@ function RealTimeVoiceApp() {
 
             {/* Text Input - Shows above controls when recording */}
             {recording && (
-              <div style={styles.textInputContainer}>
-                <input
-                  type="text"
-                  value={textInput}
-                  onChange={(e) => setTextInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && textInput.trim()) handleSendText();
-                  }}
-                  placeholder="Type your message here..."
-                  style={styles.textInput}
-                />
-                <IconButton 
-                  onClick={handleSendText} 
-                  disabled={!textInput.trim()}
-                  disableRipple
-                  sx={{
-                    width: "48px",
-                    height: "48px",
-                    minWidth: "48px",
-                    borderRadius: "50%",
-                    padding: 0,
-                    background: textInput.trim() 
-                      ? "linear-gradient(135deg, #10b981, #059669)" 
-                      : "linear-gradient(135deg, #f1f5f9, #e2e8f0)",
-                    color: textInput.trim() ? "white" : "#cbd5e1",
-                    border: textInput.trim() ? "none" : "1px solid #e2e8f0",
-                    boxShadow: textInput.trim() 
-                      ? "0 4px 14px rgba(16,185,129,0.3), inset 0 1px 2px rgba(255,255,255,0.2)" 
-                      : "0 2px 6px rgba(0,0,0,0.06)",
-                    transition: "all 0.25s cubic-bezier(0.4, 0, 0.2, 1)",
-                    cursor: textInput.trim() ? "pointer" : "not-allowed",
-                    '&:hover': textInput.trim() ? {
-                      background: "linear-gradient(135deg, #059669, #047857)",
-                      transform: "scale(1.08) translateY(-1px)",
-                      boxShadow: "0 8px 20px rgba(16,185,129,0.4), 0 0 0 3px rgba(16,185,129,0.15), inset 0 1px 2px rgba(255,255,255,0.2)",
-                    } : {},
-                    '&:active': textInput.trim() ? {
-                      transform: "scale(1.02) translateY(0px)",
-                      boxShadow: "0 2px 8px rgba(16,185,129,0.3)",
-                    } : {},
-                    '& svg': {
-                      fontSize: '20px',
-                      transform: 'translateX(1px)',
-                    },
-                  }}
-                >
-                  <SendRoundedIcon />
-                </IconButton>
-              </div>
+              <TextInputBar onSend={handleSendText} />
             )}
 
             {/* Control Buttons - Clean 3-button layout */}

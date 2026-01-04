@@ -534,7 +534,7 @@ class AzureOpenAIManager:
                 "Azure.OpenAI.WhisperTranscription",
                 kind=SpanKind.CLIENT,
                 attributes={
-                    "peer.service": "azure-openai",
+                    "peer.service": "azure.ai.openai",
                     "net.peer.name": endpoint_host,
                     "rt.call.connection_id": self.call_connection_id or "unknown",
                 },
@@ -1348,6 +1348,11 @@ class AzureOpenAIManager:
             if value is not None and key not in responses_only_params:
                 params[key] = value
 
+        # Add stream_options for usage tracking when streaming is enabled
+        # This ensures token consumption is properly reported in telemetry
+        if kwargs.get("stream"):
+            params["stream_options"] = {"include_usage": True}
+
         return params
 
     def _prepare_responses_params(
@@ -1504,6 +1509,10 @@ class AzureOpenAIManager:
                     capped_value = min(value, 4096)
                     params["max_completion_tokens"] = capped_value
                     logger.debug(f"Converting kwargs max_tokens={value} to max_completion_tokens={capped_value} for responses API")
+
+        # NOTE: stream_options is NOT supported by responses API
+        # The responses API provides usage data differently (in the response object)
+        # Only chat completions API supports stream_options={"include_usage": True}
 
         return params
 

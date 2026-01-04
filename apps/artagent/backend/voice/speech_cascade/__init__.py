@@ -23,9 +23,11 @@ Usage:
         SpeechCascadeHandler,
         SpeechEvent,
         SpeechEventType,
-        TTSPlayback,
         record_stt_recognition,
     )
+
+Note:
+    TTSPlayback is now in apps.artagent.backend.voice.tts (not speech_cascade)
 """
 
 # Orchestrator is lightweight - direct import for evaluation use cases
@@ -52,21 +54,12 @@ _HANDLER_EXPORTS = {
     "TranscriptEmitter",
 }
 
-_TTS_EXPORTS = {
-    "TTSPlayback",
-    "SAMPLE_RATE_ACS",
-    "SAMPLE_RATE_BROWSER",
-}
-
 
 def __getattr__(name: str):
-    """Lazy import for handler and TTS components."""
+    """Lazy import for handler components."""
     if name in _HANDLER_EXPORTS:
         from . import handler
         return getattr(handler, name)
-    if name in _TTS_EXPORTS:
-        from . import tts
-        return getattr(tts, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -81,10 +74,6 @@ __all__ = [
     "BargeInController",
     "ResponseSender",
     "TranscriptEmitter",
-    # Unified TTS Playback (lazy-loaded)
-    "TTSPlayback",
-    "SAMPLE_RATE_BROWSER",
-    "SAMPLE_RATE_ACS",
     # Orchestrator shim (direct import)
     "CascadeOrchestratorAdapter",
     "StateKeys",  # Re-export of SessionStateKeys for backward compatibility

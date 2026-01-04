@@ -49,21 +49,48 @@ class TTSPlayback:
     - Voice resolved from context.current_agent or fallback
     - Routes to appropriate transport (Browser/ACS) automatically
     - Thread-safe cancellation via context.cancel_event
+
+    Backward Compatibility:
+    - Also accepts legacy parameters (websocket, app_state, session_id)
+    - Automatically creates VoiceSessionContext from legacy parameters
     """
 
     def __init__(
         self,
-        context: VoiceSessionContext,
+        context: VoiceSessionContext | WebSocket,
         app_state: Any,
+        session_id: str | None = None,
+        *,
+        cancel_event: asyncio.Event | None = None,
     ):
         """
         Initialize TTS playback.
 
         Args:
-            context: VoiceSessionContext with session, websocket, and agent info
+            context: VoiceSessionContext OR WebSocket (legacy)
             app_state: Application state with TTS pool and executor
+            session_id: Session ID (legacy, only if context is WebSocket)
+            cancel_event: Cancel event (legacy, only if context is WebSocket)
         """
-        self._context = context
+        # Backward compatibility: detect legacy API
+        if isinstance(context, WebSocket):
+            # Legacy API: context is actually a websocket
+            from apps.artagent.backend.voice.shared.context import (
+                VoiceSessionContext,
+                TransportType,
+            )
+
+            websocket = context
+            self._context = VoiceSessionContext(
+                session_id=session_id or "unknown",
+                transport=TransportType.BROWSER,  # Default, will be inferred
+                _websocket=websocket,
+                cancel_event=cancel_event or asyncio.Event(),
+            )
+        else:
+            # New API: context is VoiceSessionContext
+            self._context = context
+
         self._app_state = app_state
         self._tts_lock = asyncio.Lock()
         self._is_playing = False
@@ -147,6 +174,36 @@ class TTSPlayback:
             self._session_short,
         )
         return ("en-US-AvaMultilingualNeural", "conversational", None)
+
+    def set_active_agent(self, agent_name: str | None) -> None:
+        """
+        Set the current active agent for voice resolution (legacy API).
+
+        For backward compatibility with MediaHandler. New code should
+        set context.current_agent directly.
+
+        Args:
+            agent_name: Name of the active agent
+        """
+        if agent_name:
+            # Look up agent in unified_agents and set on context
+            unified_agents = getattr(self._app_state, "unified_agents", {})
+            agent = unified_agents.get(agent_name)
+            if agent:
+                self._context.current_agent = agent
+                logger.debug(
+                    "[%s] Active agent set for TTS: %s",
+                    self._session_short,
+                    agent_name,
+                )
+            else:
+                logger.warning(
+                    "[%s] Agent '%s' not found in unified_agents",
+                    self._session_short,
+                    agent_name,
+                )
+        else:
+            self._context.current_agent = None
 
     async def speak(
         self,
@@ -306,6 +363,7 @@ class TTSPlayback:
             True if playback completed, False if cancelled or failed
         """
         if not text or not text.strip():
+            logger.warning("[%s] ACS TTS: Empty text, skipping", self._session_short)
             return False
 
         run_id = uuid.uuid4().hex[:8]
@@ -317,12 +375,14 @@ class TTSPlayback:
         style = voice_style or "conversational"
         rate = voice_rate or "medium"
 
-        logger.debug(
-            "[%s] ACS TTS: voice=%s style=%s rate=%s (run=%s)",
+        logger.info(
+            "[%s] ACS TTS START: text='%s...' voice=%s style=%s rate=%s blocking=%s (run=%s)",
             self._session_short,
+            text[:50],
             voice_name,
             style,
             rate,
+            blocking,
             run_id,
         )
 
@@ -347,16 +407,21 @@ class TTSPlayback:
                     return False
 
                 # Synthesize audio
+                logger.info("[%s] ACS TTS: Starting synthesis at %dHz", self._session_short, SAMPLE_RATE_ACS)
                 pcm_bytes = await self._synthesize(
                     synth, text, voice_name, style, rate, SAMPLE_RATE_ACS
                 )
 
                 if not pcm_bytes:
-                    logger.warning("[%s] ACS TTS returned empty audio", self._session_short)
+                    logger.error("[%s] ACS TTS returned empty audio (synthesis failed)", self._session_short)
                     return False
 
+                logger.info("[%s] ACS TTS: Synthesis OK, got %d bytes, starting stream", self._session_short, len(pcm_bytes))
+
                 # Stream to ACS
-                return await self._stream_to_acs(pcm_bytes, blocking, on_first_audio, run_id)
+                result = await self._stream_to_acs(pcm_bytes, blocking, on_first_audio, run_id)
+                logger.info("[%s] ACS TTS: Stream complete, result=%s", self._session_short, result)
+                return result
 
             except asyncio.CancelledError:
                 logger.debug("[%s] ACS TTS cancelled", self._session_short)
@@ -487,8 +552,25 @@ class TTSPlayback:
         run_id: str,
     ) -> bool:
         """Stream PCM audio to ACS WebSocket."""
-        chunk_size = 640  # 40ms at 16kHz mono 16-bit
+        chunk_size = 1280  # 40ms at 16kHz mono 16-bit (640 samples × 2 bytes/sample)
         first_sent = False
+        chunks_sent = 0
+        total_chunks = (len(pcm_bytes) + chunk_size - 1) // chunk_size
+
+        # Verify WebSocket is available
+        if self._ws is None:
+            logger.error("[%s] ACS stream ERROR: WebSocket is None!", self._session_short)
+            return False
+
+        logger.info(
+            "[%s] ACS stream START: %d bytes, %d chunks (chunk_size=%d, blocking=%s) ws=%s",
+            self._session_short,
+            len(pcm_bytes),
+            total_chunks,
+            chunk_size,
+            blocking,
+            type(self._ws).__name__,
+        )
 
         for i in range(0, len(pcm_bytes), chunk_size):
             if self._cancel_event.is_set():
@@ -499,17 +581,31 @@ class TTSPlayback:
             chunk = pcm_bytes[i : i + chunk_size]
             b64_chunk = base64.b64encode(chunk).decode("utf-8")
 
-            await self._ws.send_json(
-                {
-                    "kind": "AudioData",
-                    "audioData": {
-                        "data": b64_chunk,
-                        "timestamp": None,
-                        "participantRawID": None,
-                        "silent": False,
-                    },
-                }
-            )
+            message = {
+                "kind": "AudioData",
+                "audioData": {
+                    "data": b64_chunk,
+                    "timestamp": None,
+                    "participantRawID": None,
+                    "silent": False,
+                },
+            }
+
+            try:
+                await self._ws.send_json(message)
+                chunks_sent += 1
+
+                if chunks_sent == 1:
+                    logger.info("[%s] ACS stream: First chunk sent successfully", self._session_short)
+            except Exception as e:
+                logger.error(
+                    "[%s] ACS stream ERROR sending chunk %d/%d: %s",
+                    self._session_short,
+                    chunks_sent + 1,
+                    total_chunks,
+                    e
+                )
+                return False
 
             if not first_sent:
                 first_sent = True
@@ -524,9 +620,10 @@ class TTSPlayback:
             else:
                 await asyncio.sleep(0)
 
-        logger.debug(
-            "[%s] ACS TTS complete: %d bytes (run=%s)",
+        logger.info(
+            "[%s] ACS stream COMPLETE: %d chunks sent, %d bytes total (run=%s)",
             self._session_short,
+            chunks_sent,
             len(pcm_bytes),
             run_id,
         )
