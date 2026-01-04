@@ -46,6 +46,7 @@ log_success() { printf '%s%s✔%s %s\n' "$(log_prefix)" "$GREEN" "$NC" "$1"; }
 log_warning() { printf '%s%s⚠%s  %s\n' "$(log_prefix)" "$YELLOW" "$NC" "$1"; }
 log_error() { printf '%s%s✖%s %s\n' "$(log_prefix)" "$RED" "$NC" "$1"; }
 log_detail() { printf '%s%s%s%s\n' "$(log_prefix)" "$DIM" "$1" "$NC"; }
+log_plain() { printf '%s%s\n' "$(log_prefix)" "$1"; }
 
 # Safely get azd environment value
 get_azd_value() {
@@ -121,11 +122,11 @@ EOF
     chmod 644 "$output_file"
     log_success "Generated minimal environment file: $output_file"
     
-    log_detail ""
-    log_detail "📋 To use this configuration:"
-    log_detail "   source $output_file"
-    log_detail ""
-    log_detail "💡 The app will fetch remaining config from Azure App Configuration"
+    log_plain ""
+    log_plain "■ To use this configuration:"
+    log_plain "   source $output_file"
+    log_plain ""
+    log_info "The app will fetch remaining config from Azure App Configuration"
     log_detail "   Endpoint: $appconfig_endpoint"
     log_detail "   Label: $env_name"
     
@@ -149,9 +150,9 @@ generate_legacy_env() {
 
 # Show current configuration status
 show_config_status() {
-    log_detail ""
-    log_detail "📊 Configuration Status"
-    log_detail "========================"
+    log_plain ""
+    log_plain "📊 Configuration Status"
+    log_plain "========================"
     
     local appconfig_endpoint
     appconfig_endpoint=$(get_azd_value "AZURE_APPCONFIG_ENDPOINT")
@@ -171,17 +172,17 @@ show_config_status() {
         fi
     done
     
-    log_detail ""
+    log_plain ""
 }
 
 # Main
 main() {
     local mode="${1:-interactive}"
     
-    log_detail ""
-    log_detail "🧑‍💻 Local Development Setup"
-    log_detail "============================"
-    log_detail ""
+    log_plain ""
+    log_plain "🧑‍💻 Local Development Setup"
+    log_plain "============================"
+    log_plain ""
     
     case "$mode" in
         --minimal|-m)
@@ -200,13 +201,13 @@ main() {
             log_detail "  1) Minimal (App Config-based) - Recommended"
             log_detail "  2) Legacy (full .env file)"
             log_detail "  3) Show status only"
-            log_detail ""
+            log_plain ""
             log_detail "(Auto-selecting minimal in 10 seconds if no input...)"
             
-            if read -t 10 -p "Choice (1-3): " choice; then
+            if read -t 10 -p "$(log_prefix)Choice (1-3): " choice; then
                 : # Got input
             else
-                log_detail ""
+                log_plain ""
                 log_info "No input received, using minimal (App Config-based) setup"
                 choice="1"
             fi
