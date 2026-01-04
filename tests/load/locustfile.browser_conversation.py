@@ -1,19 +1,53 @@
 # locustfile.py
+"""
+Browser Conversation WebSocket Load Test
+========================================
+
+Tests browser-based voice conversation endpoints with simulated audio turns.
+Tracks TTFB, barge-in latency, and Azure service rate limits.
+
+Pipeline Selection:
+    PIPELINE=cascade (default)  Custom Cascade: Azure Speech STT → Azure OpenAI → Azure Speech TTS
+    PIPELINE=voicelive          VoiceLive SDK: Azure OpenAI Realtime API with native audio I/O
+
+Metric naming convention (for clean table output):
+- ttfb/{N}          Time-to-first-byte for turn N
+- barge/{N}         Barge-in latency for turn N
+- turn/{N}          Total turn completion time
+- ws/close          WebSocket closed (benign if WS_IGNORE_CLOSE_EXCEPTIONS=true)
+- ws/error          WebSocket connection error
+- turn/error        Turn processing error
+- rate/openai       Azure OpenAI rate limit hit (429)
+- rate/speech       Azure Speech rate limit hit
+- rate/unknown      Unknown rate limit error
+- err/{code}        Specific error code from server
+"""
 import json
 import os
 import random
+import re
 import ssl
 import struct
 import time
 import urllib.parse
 import uuid
+from collections import Counter
 from pathlib import Path
 
 import certifi
 import websocket
 from gevent import sleep
-from locust import User, between, task
+from locust import User, between, events, task
 from websocket import WebSocketConnectionClosedException, WebSocketTimeoutException
+
+# ============================================================================
+# Pipeline Configuration
+# ============================================================================
+# PIPELINE: 'cascade' (default) or 'voicelive'
+#   cascade   = Custom Cascade Orchestrator (Azure Speech STT → Azure OpenAI Chat → Azure Speech TTS)
+#   voicelive = VoiceLive SDK (Azure OpenAI Realtime API with native audio I/O)
+PIPELINE = os.getenv("PIPELINE", "cascade").lower().strip()
+USE_VOICELIVE = PIPELINE in {"voicelive", "voice_live", "live", "realtime"}
 
 # Treat benign WebSocket closes as non-errors (1000/1001/1006 often benign in load)
 WS_IGNORE_CLOSE_EXCEPTIONS = os.getenv("WS_IGNORE_CLOSE_EXCEPTIONS", "true").lower() in {
@@ -21,6 +55,105 @@ WS_IGNORE_CLOSE_EXCEPTIONS = os.getenv("WS_IGNORE_CLOSE_EXCEPTIONS", "true").low
     "true",
     "yes",
 }
+
+# ============================================================================
+# Rate Limit Tracking
+# ============================================================================
+# Global counters for rate limit events (thread-safe via gevent)
+rate_limit_counters: Counter = Counter()
+
+
+def _detect_rate_limit(message: str | dict) -> str | None:
+    """
+    Detect rate limit errors from server messages.
+
+    Returns:
+        str: Rate limit type ('openai', 'speech', 'unknown') or None if not a rate limit.
+    """
+    if isinstance(message, dict):
+        text = json.dumps(message).lower()
+    else:
+        text = str(message).lower()
+
+    # Azure OpenAI rate limits
+    if any(
+        pattern in text
+        for pattern in [
+            "ratelimitexceeded",
+            "rate_limit",
+            "429",
+            "too many requests",
+            "tokens per minute",
+            "requests per minute",
+            "retry after",
+        ]
+    ):
+        if "openai" in text or "aoai" in text or "gpt" in text or "deployment" in text:
+            return "openai"
+        if "speech" in text or "cognitive" in text or "stt" in text or "tts" in text:
+            return "speech"
+        return "unknown"
+
+    # Azure Speech rate limits
+    if "speech" in text and any(
+        pattern in text for pattern in ["quota", "exceeded", "throttl", "limit"]
+    ):
+        return "speech"
+
+    return None
+
+
+def _detect_error_code(message: str | dict) -> str | None:
+    """
+    Extract error code from server error messages.
+
+    Returns:
+        str: Error code or None if not an error.
+    """
+    if isinstance(message, dict):
+        # Check for ErrorData format: {"kind": "ErrorData", "errorData": {"code": "...", "message": "..."}}
+        if message.get("kind") == "ErrorData":
+            error_data = message.get("errorData", {})
+            return error_data.get("code")
+        # Check for inline error format
+        if "error" in message:
+            error = message.get("error", {})
+            if isinstance(error, dict):
+                return error.get("code")
+        if "code" in message:
+            return message.get("code")
+    else:
+        text = str(message)
+        # Try to extract code from JSON string
+        match = re.search(r'"code":\s*"([^"]+)"', text)
+        if match:
+            return match.group(1)
+    return None
+
+
+@events.init.add_listener
+def print_pipeline_info(environment, **kwargs):
+    """Print pipeline configuration at test start."""
+    pipeline_name = "VoiceLive SDK (OpenAI Realtime API)" if USE_VOICELIVE else "Custom Cascade (STT→LLM→TTS)"
+    print("\n" + "=" * 60)
+    print("BROWSER CONVERSATION LOAD TEST")
+    print(f"  Pipeline: {pipeline_name}")
+    print(f"  Endpoint: {'/api/v1/live-voice/session' if USE_VOICELIVE else '/api/v1/realtime/conversation'}")
+    print("=" * 60 + "\n")
+
+
+@events.quitting.add_listener
+def print_rate_limit_summary(environment, **kwargs):
+    """Print rate limit summary at end of test."""
+    if rate_limit_counters:
+        print("\n" + "=" * 60)
+        print("RATE LIMIT SUMMARY")
+        print("=" * 60)
+        for limit_type, count in rate_limit_counters.most_common():
+            print(f"  {limit_type:20s}: {count:5d} occurrences")
+        print("=" * 60 + "\n")
+    else:
+        print("\n✅ No rate limits detected during test.\n")
 
 ## For debugging websocket connections
 # websocket.enableTrace(True)
@@ -98,7 +231,18 @@ def generate_silence_chunk(duration_ms: float = 100.0, sample_rate: int = 16000)
     return bytes(audio_data)
 
 
-class ACSUser(User):
+class BrowserConversationUser(User):
+    """
+    Locust User simulating browser-based voice conversations.
+
+    Supports two pipelines:
+    - cascade (default): Custom Cascade Orchestrator (STT→LLM→TTS)
+    - voicelive: VoiceLive SDK (Azure OpenAI Realtime API)
+    """
+
+    # Track turn number per user for cleaner metric names
+    _turn_number: int = 0
+
     def _resolve_ws_url(self) -> str:
         candidate = (self.environment.host or DEFAULT_WS_URL or "").strip()
         if not candidate:
@@ -118,7 +262,11 @@ class ACSUser(User):
         parsed = urllib.parse.urlparse(candidate)
         path = parsed.path or ""
         if path in {"", "/"}:
-            parsed = parsed._replace(path="/api/v1/realtime/conversation")
+            # Select endpoint based on pipeline
+            if USE_VOICELIVE:
+                parsed = parsed._replace(path="/api/v1/live-voice/session")
+            else:
+                parsed = parsed._replace(path="/api/v1/realtime/conversation")
             candidate = urllib.parse.urlunparse(parsed)
 
         return candidate
@@ -126,17 +274,42 @@ class ACSUser(User):
     def _get_ws_timeout(self) -> float:
         return getattr(self, "_ws_default_timeout", _safe_timeout_value(WS_OPERATION_TIMEOUT_SEC))
 
-    def _recv_with_timeout(self, per_attempt_timeout: float):
+    def _recv_with_timeout(self, per_attempt_timeout: float) -> tuple[str | None, bool]:
+        """
+        Receive a message with timeout, detecting rate limits and errors.
+
+        Returns:
+            tuple: (message, is_rate_limit) where is_rate_limit indicates if we hit a limit
+        """
         try:
             self.ws.settimeout(_safe_timeout_value(per_attempt_timeout))
-            return self.ws.recv()
+            msg = self.ws.recv()
+            if msg:
+                # Try to parse as JSON for better detection
+                try:
+                    parsed = json.loads(msg) if isinstance(msg, str) else msg
+                except (json.JSONDecodeError, TypeError):
+                    parsed = msg
+
+                # Check for rate limits
+                rate_type = _detect_rate_limit(parsed)
+                if rate_type:
+                    self._record_rate_limit(rate_type, 0)
+                    return msg, True
+
+                # Check for error codes
+                error_code = _detect_error_code(parsed)
+                if error_code:
+                    self._record_error_code(error_code, 0)
+
+            return msg, False
         except WebSocketConnectionClosedException:
             self._connect_ws()
-            return None
+            return None, False
         except WebSocketTimeoutException:
-            return None
+            return None, False
         except Exception:
-            return None
+            return None, False
         finally:
             if getattr(self, "ws", None):
                 try:
@@ -152,7 +325,7 @@ class ACSUser(User):
         deadline = start + max_wait_sec
         turn_anchor = turn_start_ts or start
         while time.time() < deadline:
-            msg = self._recv_with_timeout(0.05)
+            msg, _ = self._recv_with_timeout(0.05)
             if msg:
                 return True, (time.time() - turn_anchor) * 1000.0
         return False, (time.time() - turn_anchor) * 1000.0
@@ -176,7 +349,7 @@ class ACSUser(User):
         quiet_sec = max(quiet_ms / 1000.0, per_attempt)
         turn_anchor = turn_start_ts or start
         while time.time() < deadline:
-            msg = self._recv_with_timeout(per_attempt)
+            msg, _ = self._recv_with_timeout(per_attempt)
             if msg:
                 last_msg_at = time.time()
                 text = str(msg).lower()
@@ -191,15 +364,27 @@ class ACSUser(User):
     wait_time = between(0.3, 1.1)
 
     def _record(self, name: str, response_time_ms: float, exc: Exception | None = None):
-        # Unified request event (Locust 2.39+)
+        """Record a metric event with consistent naming for clean table output."""
         self.environment.events.request.fire(
-            request_type="websocket",
+            request_type="ws",
             name=name,
             response_time=response_time_ms,
             response_length=0,
             exception=exc,
             context={"call_connection_id": getattr(self, "call_connection_id", None)},
         )
+
+    def _record_rate_limit(self, limit_type: str, response_time_ms: float):
+        """Record a rate limit event and increment global counter."""
+        global rate_limit_counters
+        rate_limit_counters[limit_type] += 1
+        self._record(f"rate/{limit_type}", response_time_ms, Exception(f"rate_limit_{limit_type}"))
+
+    def _record_error_code(self, code: str, response_time_ms: float):
+        """Record a specific error code from the server."""
+        # Truncate long codes for table readability
+        short_code = code[:15] if len(code) > 15 else code
+        self._record(f"err/{short_code}", response_time_ms, Exception(code))
 
     def _connect_ws(self):
         # Emulate ACS headers that many servers expect for correlation
@@ -282,6 +467,7 @@ class ACSUser(User):
             raise RuntimeError(f"No valid PCM inputs found. Checked PCM_DIR={PCM_DIR}")
         self.pcm_files = validated
         self.turn_index = 0
+        self._turn_number = 0  # For cleaner metric names
         # placeholders initialized per turn
         self.audio = b""
         self.offset = 0
@@ -372,10 +558,12 @@ class ACSUser(User):
         turns_completed = 0
 
         while True:
+            self._turn_number += 1
+            turn_label = f"{self._turn_number:02d}"  # Zero-padded for sorting
             t0 = time.time()
             try:
                 # pick file for this turn
-                file_used = self._begin_turn_audio()
+                self._begin_turn_audio()
                 turn_start = t0
                 # stream N chunks at ~CHUNK_MS cadence
                 for _ in range(max(1, CHUNKS_PER_TURN)):
@@ -402,9 +590,9 @@ class ACSUser(User):
                 # TTFB: measure time from now (after EOS) to first server frame
                 ttfb_ok, ttfb_ms = self._measure_ttfb(FIRST_BYTE_TIMEOUT_SEC, turn_start)
                 self._record(
-                    name=f"ttfb[{Path(file_used).name}]",
+                    name=f"ttfb/{turn_label}",
                     response_time_ms=ttfb_ms,
-                    exc=None if ttfb_ok else Exception("ttfb_timeout"),
+                    exc=None if ttfb_ok else Exception("timeout"),
                 )
 
                 if ttfb_ok:
@@ -426,16 +614,16 @@ class ACSUser(User):
                     BARGE_QUIET_MS, TURN_TIMEOUT_SEC, barge_start
                 )
                 self._record(
-                    name=f"barge_latency[{Path(file_used).name}]",
+                    name=f"barge/{turn_label}",
                     response_time_ms=barge_latency_ms,
-                    exc=None if barge_done else Exception("barge_timeout"),
+                    exc=None if barge_done else Exception("timeout"),
                 )
 
                 total_turn_ms = barge_latency_ms + max(0.0, (barge_start - turn_start) * 1000.0)
                 self._record(
-                    name=f"turn_complete[{Path(file_used).name}]",
+                    name=f"turn/{turn_label}",
                     response_time_ms=total_turn_ms,
-                    exc=None if barge_done else Exception("turn_timeout"),
+                    exc=None if barge_done else Exception("timeout"),
                 )
 
             except WebSocketConnectionClosedException as e:
@@ -443,20 +631,19 @@ class ACSUser(User):
                 if WS_IGNORE_CLOSE_EXCEPTIONS:
                     # Optionally record a benign close event as success for observability
                     self._record(
-                        name="websocket_closed",
+                        name="ws/close",
                         response_time_ms=(time.time() - t0) * 1000.0,
                         exc=None,
                     )
                 else:
                     self._record(
-                        name=f"turn_error[{Path(file_used).name if 'file_used' in locals() else 'unknown'}]",
+                        name="ws/error",
                         response_time_ms=(time.time() - t0) * 1000.0,
                         exc=e,
                     )
             except Exception as e:
-                turn_name = f"{Path(file_used).name}" if "file_used" in locals() else "unknown"
                 self._record(
-                    name=f"turn_error[{turn_name}]",
+                    name="turn/error",
                     response_time_ms=(time.time() - t0) * 1000.0,
                     exc=e,
                 )

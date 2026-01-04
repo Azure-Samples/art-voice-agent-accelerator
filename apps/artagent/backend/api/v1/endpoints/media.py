@@ -13,6 +13,7 @@ WebSocket Flow:
 """
 
 import asyncio
+import json
 import uuid
 
 from apps.artagent.backend.src.ws_helpers.shared_ws import send_agent_inventory
@@ -372,7 +373,14 @@ async def _process_media_stream(
 
                 # Handle message based on streaming mode
                 if stream_mode == StreamMode.MEDIA:
-                    await handler.handle_media_message(msg_text)
+                    try:
+                        parsed_msg = json.loads(msg_text)
+                    except json.JSONDecodeError:
+                        logger.warning(
+                            f"[{call_connection_id}] Failed to parse message as JSON"
+                        )
+                        continue
+                    await handler.handle_media_message(parsed_msg)
                 elif stream_mode == StreamMode.TRANSCRIPTION:
                     await handler.handle_transcription_message(msg_text)
                 elif stream_mode == StreamMode.VOICE_LIVE:

@@ -1569,6 +1569,9 @@ class VoiceLiveSDKHandler:
             )
             self._mark_audio_playback(True)
             if self._transport == "acs":
+                if not self._websocket_open:
+                    logger.debug("[VoiceLiveSDK] Skipping audio delta: WebSocket closed")
+                    return
                 message = {
                     "kind": "AudioData",
                     "AudioData": {"data": resampled},
@@ -1637,6 +1640,9 @@ class VoiceLiveSDKHandler:
             return
         if self._stop_audio_pending:
             return
+        if not self._websocket_open:
+            self._stop_audio_pending = False
+            return
         stop_message = {"kind": "StopAudio", "AudioData": None, "StopAudio": {}}
         try:
             await self.websocket.send_json(stop_message)
@@ -1646,6 +1652,8 @@ class VoiceLiveSDKHandler:
             logger.debug("Failed to send StopAudio", exc_info=True)
 
     async def _send_error(self, event: Any) -> None:
+        if not self._websocket_open:
+            return
         error_info: dict[str, Any] = {
             "kind": "ErrorData",
             "errorData": {

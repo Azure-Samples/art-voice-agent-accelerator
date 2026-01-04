@@ -35,7 +35,7 @@ theme:
 
 plugins:
   - search
-  - mermaid2
+  - mermaid-zoom
   - neoteroi.mkdocsoad
   - mkdocstrings:
       handlers:
@@ -112,6 +112,10 @@ nav:
     - Utilities & Services: guides/utilities.md
 extra_css:
   - assets/oad-styles.css
+
+extra_javascript:
+  - assets/javascripts/mermaid.min.js
+
 markdown_extensions:
   - pymdownx.emoji:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
@@ -123,11 +127,10 @@ markdown_extensions:
   - pymdownx.inlinehilite
   - pymdownx.snippets
   - pymdownx.superfences:
-        # make exceptions to highlighting of code:
       custom_fences:
         - name: mermaid
           class: mermaid
-          format: !!python/name:mermaid2.fence_mermaid
+          format: !!python/name:pymdownx.superfences.fence_div_format
   - pymdownx.tabbed:
       alternate_style: true
   - admonition

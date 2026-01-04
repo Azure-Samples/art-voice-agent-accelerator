@@ -260,6 +260,7 @@ dev = [
 docs = [
     { name = "mkdocs" },
     { name = "mkdocs-material" },
+    { name = "mkdocs-mermaid-zoom" },
     { name = "mkdocs-mermaid2-plugin" },
     { name = "mkdocstrings", extra = ["python"] },
     { name = "neoteroi-mkdocs" },
@@ -309,6 +310,7 @@ requires-dist = [
     { name = "locust", marker = "extra == 'dev'", specifier = ">=2.20.0" },
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6.1" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.4.0" },
+    { name = "mkdocs-mermaid-zoom", marker = "extra == 'docs'", specifier = ">=0.1.0" },
     { name = "mkdocs-mermaid2-plugin", marker = "extra == 'docs'", specifier = ">=1.2.2" },
     { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = ">=0.20.0" },
     { name = "neoteroi-mkdocs", marker = "extra == 'docs'", specifier = "==1.1.3" },
@@ -2338,6 +2340,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/79/9b/9b4c96d6593b2a541e1cb8b34899a6d021d208bb357042823d4d2cabdbe7/mkdocs_material_extensions-1.3.1.tar.gz", hash = "sha256:10c9511cea88f568257f960358a467d12b970e1f7b2c0e5fb2bb48cab1928443", size = 11847, upload-time = "2023-11-22T19:09:45.208Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5b/54/662a4743aa81d9582ee9339d4ffa3c8fd40a4965e033d77b9da9774d3960/mkdocs_material_extensions-1.3.1-py3-none-any.whl", hash = "sha256:adff8b62700b25cb77b53358dad940f3ef973dd6db797907c49e3c2ef3ab4e31", size = 8728, upload-time = "2023-11-22T19:09:43.465Z" },
+]
+
+[[package]]
+name = "mkdocs-mermaid-zoom"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "mkdocs" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/cc/18/d37df48c3200a624c509121a9ecff947700793ca1a750dcdff812c30011a/mkdocs_mermaid_zoom-0.1.0.tar.gz", hash = "sha256:115287e0fdf444a82d8a4cbcf737f0fc827afe7972b5cd441e106f8d9f039967", size = 996169, upload-time = "2025-07-26T06:31:58.799Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/31/28/aabcf8e6f8de4af9544ef22e512f211d96008def730269ff8fafe152353d/mkdocs_mermaid_zoom-0.1.0-py3-none-any.whl", hash = "sha256:3908a3bba3ccdc3ab744e4374e8f196219ad846bbc8b710ccc3b0e98f3ecbb68", size = 6233, upload-time = "2025-07-26T06:31:56.387Z" },
 ]
 
 [[package]]

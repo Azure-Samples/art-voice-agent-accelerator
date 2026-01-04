@@ -149,6 +149,14 @@ async def send_pcm_frames(
     try:
 
         for b64 in b64_frames:
+            # Check WebSocket connection before sending
+            if (
+                ws.client_state != WebSocketState.CONNECTED
+                or ws.application_state != WebSocketState.CONNECTED
+            ):
+                logger.debug("send_pcm_frames aborted: WebSocket disconnected")
+                return
+
             payload = {
                 "kind": "AudioData",
                 "AudioData": {"data": b64},

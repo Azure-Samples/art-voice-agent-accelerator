@@ -27,6 +27,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from fastapi import WebSocket
+from fastapi.websockets import WebSocketState
 from utils.ml_logging import get_logger
 from utils.telemetry_decorators import add_speech_tts_metrics, trace_speech
 
@@ -38,6 +39,14 @@ SAMPLE_RATE_BROWSER = 48000  # Browser WebAudio prefers 48kHz
 SAMPLE_RATE_ACS = 16000  # ACS telephony uses 16kHz
 
 logger = get_logger("voice.tts.playback")
+
+
+def _ws_is_connected(ws: WebSocket) -> bool:
+    """Return True if both client and application states are active."""
+    return (
+        ws.client_state == WebSocketState.CONNECTED
+        and ws.application_state == WebSocketState.CONNECTED
+    )
 
 
 class TTSPlayback:
@@ -508,6 +517,11 @@ class TTSPlayback:
                 logger.debug("[%s] Browser stream cancelled", self._session_short)
                 return False
 
+            # Check WebSocket connection before sending
+            if not _ws_is_connected(self._ws):
+                logger.warning("[%s] Browser stream aborted: WebSocket disconnected", self._session_short)
+                return False
+
             chunk = pcm_bytes[i : i + chunk_size]
             b64_chunk = base64.b64encode(chunk).decode("utf-8")
             frame_index = chunks_sent
@@ -580,6 +594,11 @@ class TTSPlayback:
 
             chunk = pcm_bytes[i : i + chunk_size]
             b64_chunk = base64.b64encode(chunk).decode("utf-8")
+
+            # Check WebSocket connection before sending
+            if not _ws_is_connected(self._ws):
+                logger.warning("[%s] ACS stream aborted: WebSocket disconnected", self._session_short)
+                return False
 
             message = {
                 "kind": "AudioData",

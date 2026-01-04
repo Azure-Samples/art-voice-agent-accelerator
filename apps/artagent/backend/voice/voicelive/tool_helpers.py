@@ -14,9 +14,18 @@ import time
 from typing import Any
 
 from fastapi import WebSocket
+from fastapi.websockets import WebSocketState
 from utils.ml_logging import get_logger
 
 logger = get_logger("voicelive.tool_helpers")
+
+
+def _ws_is_connected(ws: WebSocket) -> bool:
+    """Return True if both client and application states are active."""
+    return (
+        ws.client_state == WebSocketState.CONNECTED
+        and ws.application_state == WebSocketState.CONNECTED
+    )
 
 
 async def _emit(
@@ -48,6 +57,9 @@ async def _emit(
                 asyncio.create_task(ws.app.state.conn_manager.broadcast(payload))
     else:
         # Direct send for browser WebSocket
+        if not _ws_is_connected(ws):
+            logger.debug("Skipping tool frame: WebSocket disconnected")
+            return
         try:
             await ws.send_json(payload)
         except Exception as e:
