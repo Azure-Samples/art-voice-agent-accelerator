@@ -48,6 +48,7 @@ import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import DeleteIcon from '@mui/icons-material/Delete';
+import DownloadIcon from '@mui/icons-material/Download';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import HubIcon from '@mui/icons-material/Hub';
 import LinkIcon from '@mui/icons-material/Link';
@@ -65,6 +66,15 @@ import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import BuildIcon from '@mui/icons-material/Build';
 import DescriptionIcon from '@mui/icons-material/Description';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import HomeIcon from '@mui/icons-material/Home';
+import GpsFixedIcon from '@mui/icons-material/GpsFixed';
+import CreditCardIcon from '@mui/icons-material/CreditCard';
+import WarningIcon from '@mui/icons-material/Warning';
+import TrendingUpIcon from '@mui/icons-material/TrendingUp';
+import AttachMoneyIcon from '@mui/icons-material/AttachMoney';
+import EditIcon from '@mui/icons-material/Edit';
 
 import { API_BASE_URL } from '../config/constants.js';
 import logger from '../utils/logger.js';
@@ -89,8 +99,8 @@ const colors = {
 const HANDOFF_CONDITION_PATTERNS = [
   {
     id: 'authentication',
-    name: '🔐 Authentication Required',
-    icon: '🔐',
+    name: 'Authentication Required',
+    IconComponent: PersonAddIcon,
     description: 'When identity verification or login is needed',
     condition: `Transfer when the customer needs to:
 - Verify their identity or authenticate
@@ -100,15 +110,15 @@ const HANDOFF_CONDITION_PATTERNS = [
   },
   {
     id: 'specialized_topic',
-    name: '🎯 Specialized Topic',
-    icon: '🎯',
+    name: 'Specialized Topic',
+    IconComponent: GpsFixedIcon,
     description: 'When conversation requires specific expertise',
     condition: `Transfer when the customer asks about topics that require specialized knowledge or expertise that this agent cannot provide.`,
   },
   {
     id: 'account_issue',
-    name: '💳 Account/Billing Issue',
-    icon: '💳',
+    name: 'Account/Billing Issue',
+    IconComponent: CreditCardIcon,
     description: 'Account management or billing concerns',
     condition: `Transfer when the customer mentions:
 - Account access problems or lockouts
@@ -118,8 +128,8 @@ const HANDOFF_CONDITION_PATTERNS = [
   },
   {
     id: 'fraud_security',
-    name: '🚨 Fraud/Security Concern',
-    icon: '🚨',
+    name: 'Fraud/Security Concern',
+    IconComponent: WarningIcon,
     description: 'Suspicious activity or security issues',
     condition: `Transfer IMMEDIATELY when the customer reports:
 - Unauthorized transactions or suspicious activity
@@ -129,8 +139,8 @@ const HANDOFF_CONDITION_PATTERNS = [
   },
   {
     id: 'technical_support',
-    name: '🔧 Technical Support',
-    icon: '🔧',
+    name: 'Technical Support',
+    IconComponent: BuildIcon,
     description: 'Technical issues requiring troubleshooting',
     condition: `Transfer when the customer needs help with:
 - Technical problems or error messages
@@ -140,8 +150,8 @@ const HANDOFF_CONDITION_PATTERNS = [
   },
   {
     id: 'escalation',
-    name: '⬆️ Escalation Request',
-    icon: '⬆️',
+    name: 'Escalation Request',
+    IconComponent: TrendingUpIcon,
     description: 'Customer requests supervisor or escalation',
     condition: `Transfer when the customer:
 - Explicitly requests to speak with a supervisor or manager
@@ -151,8 +161,8 @@ const HANDOFF_CONDITION_PATTERNS = [
   },
   {
     id: 'sales_upsell',
-    name: '💰 Sales/Upsell Opportunity',
-    icon: '💰',
+    name: 'Sales/Upsell Opportunity',
+    IconComponent: AttachMoneyIcon,
     description: 'Interest in purchasing or upgrading',
     condition: `Transfer when the customer expresses interest in:
 - Purchasing new products or services
@@ -162,8 +172,8 @@ const HANDOFF_CONDITION_PATTERNS = [
   },
   {
     id: 'custom',
-    name: '✏️ Custom Condition',
-    icon: '✏️',
+    name: 'Custom Condition',
+    IconComponent: EditIcon,
     description: 'Write your own handoff condition',
     condition: '',
   },
@@ -308,14 +318,13 @@ function HighlightedPromptPreview({ previewData, targetAgent }) {
 // HANDOFF EDITOR DIALOG (Full implementation with patterns and preview)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const HandoffEditorDialog = React.memo(function HandoffEditorDialog({ open, onClose, handoff, agents, handoffs, onSave, onDelete }) {
+const HandoffEditorDialog = React.memo(function HandoffEditorDialog({ open, onClose, handoff, agents, scenarioAgents = [], handoffs, onSave, onDelete }) {
   const [type, setType] = useState(handoff?.type || 'announced');
   const [shareContext, setShareContext] = useState(handoff?.share_context !== false);
   const [handoffCondition, setHandoffCondition] = useState(handoff?.handoff_condition || '');
   const [selectedPattern, setSelectedPattern] = useState(null);
   const [showPatternPicker, setShowPatternPicker] = useState(false);
-  const [showFullPrompt, setShowFullPrompt] = useState(false);
-  
+
   // Editable source and target agents
   const [fromAgent, setFromAgent] = useState(handoff?.from_agent || '');
   const [toAgent, setToAgent] = useState(handoff?.to_agent || '');
@@ -419,6 +428,16 @@ const HandoffEditorDialog = React.memo(function HandoffEditorDialog({ open, onCl
   // Get available agents for target (exclude current source)
   const availableTargetAgents = agents?.filter(a => a.name !== fromAgent) || [];
 
+  // Categorize agents into in-canvas and available-to-add
+  const categorizeAgents = (agentList) => {
+    const inCanvas = agentList.filter(a => scenarioAgents.includes(a.name));
+    const availableToAdd = agentList.filter(a => !scenarioAgents.includes(a.name));
+    return { inCanvas, availableToAdd };
+  };
+
+  const sourceAgentCategories = categorizeAgents(availableSourceAgents);
+  const targetAgentCategories = categorizeAgents(availableTargetAgents);
+
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -502,36 +521,106 @@ const HandoffEditorDialog = React.memo(function HandoffEditorDialog({ open, onCl
             anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
             transformOrigin={{ vertical: 'top', horizontal: 'center' }}
           >
-            <Box sx={{ p: 1, minWidth: 200 }}>
+            <Box sx={{ p: 1, minWidth: 250, maxHeight: 400, overflowY: 'auto' }}>
               <Typography variant="caption" color="text.secondary" sx={{ px: 1, py: 0.5, display: 'block' }}>
                 Select Source Agent
               </Typography>
-              {availableSourceAgents.map((agent) => (
-                <MenuItem
-                  key={agent.name}
-                  selected={agent.name === fromAgent}
-                  onClick={() => {
-                    setFromAgent(agent.name);
-                    setSourceAnchorEl(null);
-                  }}
-                  sx={{ borderRadius: 1, my: 0.25 }}
-                >
-                  <Avatar sx={{ width: 24, height: 24, mr: 1, bgcolor: colors.active.avatar, fontSize: 12 }}>
-                    {agent.name[0]}
-                  </Avatar>
-                  <Box sx={{ flex: 1 }}>
-                    <Typography variant="body2" sx={{ fontWeight: agent.name === fromAgent ? 600 : 400 }}>
-                      {agent.name}
-                    </Typography>
-                    {agent.description && (
-                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: 10 }}>
-                        {agent.description.slice(0, 40)}{agent.description.length > 40 ? '...' : ''}
-                      </Typography>
-                    )}
-                  </Box>
-                  {agent.name === fromAgent && <CheckIcon sx={{ ml: 1, color: '#6366f1', fontSize: 18 }} />}
-                </MenuItem>
-              ))}
+
+              {/* In Canvas Section */}
+              {sourceAgentCategories.inCanvas.length > 0 && (
+                <>
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      px: 1,
+                      py: 0.5,
+                      mt: 0.5,
+                      display: 'block',
+                      fontWeight: 600,
+                      color: '#10b981',
+                      textTransform: 'uppercase',
+                      fontSize: 9,
+                      letterSpacing: 0.5,
+                    }}
+                  >
+                    In Canvas
+                  </Typography>
+                  {sourceAgentCategories.inCanvas.map((agent) => (
+                    <MenuItem
+                      key={agent.name}
+                      selected={agent.name === fromAgent}
+                      onClick={() => {
+                        setFromAgent(agent.name);
+                        setSourceAnchorEl(null);
+                      }}
+                      sx={{ borderRadius: 1, my: 0.25, backgroundColor: 'rgba(16, 185, 129, 0.04)' }}
+                    >
+                      <Avatar sx={{ width: 24, height: 24, mr: 1, bgcolor: colors.active.avatar, fontSize: 12 }}>
+                        {agent.name[0]}
+                      </Avatar>
+                      <Box sx={{ flex: 1 }}>
+                        <Typography variant="body2" sx={{ fontWeight: agent.name === fromAgent ? 600 : 400 }}>
+                          {agent.name}
+                        </Typography>
+                        {agent.description && (
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: 10 }}>
+                            {agent.description.slice(0, 40)}{agent.description.length > 40 ? '...' : ''}
+                          </Typography>
+                        )}
+                      </Box>
+                      {agent.name === fromAgent && <CheckIcon sx={{ ml: 1, color: '#6366f1', fontSize: 18 }} />}
+                    </MenuItem>
+                  ))}
+                </>
+              )}
+
+              {/* Available to Add Section */}
+              {sourceAgentCategories.availableToAdd.length > 0 && (
+                <>
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      px: 1,
+                      py: 0.5,
+                      mt: sourceAgentCategories.inCanvas.length > 0 ? 1 : 0.5,
+                      display: 'block',
+                      fontWeight: 600,
+                      color: '#94a3b8',
+                      textTransform: 'uppercase',
+                      fontSize: 9,
+                      letterSpacing: 0.5,
+                    }}
+                  >
+                    Available to Add
+                  </Typography>
+                  {sourceAgentCategories.availableToAdd.map((agent) => (
+                    <MenuItem
+                      key={agent.name}
+                      selected={agent.name === fromAgent}
+                      onClick={() => {
+                        setFromAgent(agent.name);
+                        setSourceAnchorEl(null);
+                      }}
+                      sx={{ borderRadius: 1, my: 0.25, opacity: 0.7 }}
+                    >
+                      <Avatar sx={{ width: 24, height: 24, mr: 1, bgcolor: colors.active.avatar, fontSize: 12 }}>
+                        {agent.name[0]}
+                      </Avatar>
+                      <Box sx={{ flex: 1 }}>
+                        <Typography variant="body2" sx={{ fontWeight: agent.name === fromAgent ? 600 : 400 }}>
+                          {agent.name}
+                        </Typography>
+                        {agent.description && (
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: 10 }}>
+                            {agent.description.slice(0, 40)}{agent.description.length > 40 ? '...' : ''}
+                          </Typography>
+                        )}
+                      </Box>
+                      {agent.name === fromAgent && <CheckIcon sx={{ ml: 1, color: '#6366f1', fontSize: 18 }} />}
+                    </MenuItem>
+                  ))}
+                </>
+              )}
             </Box>
           </Popover>
 
@@ -543,43 +632,120 @@ const HandoffEditorDialog = React.memo(function HandoffEditorDialog({ open, onCl
             anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
             transformOrigin={{ vertical: 'top', horizontal: 'center' }}
           >
-            <Box sx={{ p: 1, minWidth: 200 }}>
+            <Box sx={{ p: 1, minWidth: 250, maxHeight: 400, overflowY: 'auto' }}>
               <Typography variant="caption" color="text.secondary" sx={{ px: 1, py: 0.5, display: 'block' }}>
                 Select Target Agent
               </Typography>
-              {availableTargetAgents.map((agent) => (
-                <MenuItem
-                  key={agent.name}
-                  selected={agent.name === toAgent}
-                  onClick={() => {
-                    setToAgent(agent.name);
-                    setTargetAnchorEl(null);
-                    // Update handoff condition if using a pattern
-                    if (selectedPattern && selectedPattern !== 'custom') {
-                      const pattern = HANDOFF_CONDITION_PATTERNS.find(p => p.id === selectedPattern);
-                      if (pattern) {
-                        setHandoffCondition(pattern.condition.replace(/\{target_agent\}/g, agent.name));
-                      }
-                    }
-                  }}
-                  sx={{ borderRadius: 1, my: 0.25 }}
-                >
-                  <Avatar sx={{ width: 24, height: 24, mr: 1, bgcolor: colors.start.avatar, fontSize: 12 }}>
-                    {agent.name[0]}
-                  </Avatar>
-                  <Box sx={{ flex: 1 }}>
-                    <Typography variant="body2" sx={{ fontWeight: agent.name === toAgent ? 600 : 400 }}>
-                      {agent.name}
-                    </Typography>
-                    {agent.description && (
-                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: 10 }}>
-                        {agent.description.slice(0, 40)}{agent.description.length > 40 ? '...' : ''}
-                      </Typography>
-                    )}
-                  </Box>
-                  {agent.name === toAgent && <CheckIcon sx={{ ml: 1, color: '#10b981', fontSize: 18 }} />}
-                </MenuItem>
-              ))}
+
+              {/* In Canvas Section */}
+              {targetAgentCategories.inCanvas.length > 0 && (
+                <>
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      px: 1,
+                      py: 0.5,
+                      mt: 0.5,
+                      display: 'block',
+                      fontWeight: 600,
+                      color: '#10b981',
+                      textTransform: 'uppercase',
+                      fontSize: 9,
+                      letterSpacing: 0.5,
+                    }}
+                  >
+                    In Canvas
+                  </Typography>
+                  {targetAgentCategories.inCanvas.map((agent) => (
+                    <MenuItem
+                      key={agent.name}
+                      selected={agent.name === toAgent}
+                      onClick={() => {
+                        setToAgent(agent.name);
+                        setTargetAnchorEl(null);
+                        // Update handoff condition if using a pattern
+                        if (selectedPattern && selectedPattern !== 'custom') {
+                          const pattern = HANDOFF_CONDITION_PATTERNS.find(p => p.id === selectedPattern);
+                          if (pattern) {
+                            setHandoffCondition(pattern.condition.replace(/\{target_agent\}/g, agent.name));
+                          }
+                        }
+                      }}
+                      sx={{ borderRadius: 1, my: 0.25, backgroundColor: 'rgba(16, 185, 129, 0.04)' }}
+                    >
+                      <Avatar sx={{ width: 24, height: 24, mr: 1, bgcolor: colors.start.avatar, fontSize: 12 }}>
+                        {agent.name[0]}
+                      </Avatar>
+                      <Box sx={{ flex: 1 }}>
+                        <Typography variant="body2" sx={{ fontWeight: agent.name === toAgent ? 600 : 400 }}>
+                          {agent.name}
+                        </Typography>
+                        {agent.description && (
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: 10 }}>
+                            {agent.description.slice(0, 40)}{agent.description.length > 40 ? '...' : ''}
+                          </Typography>
+                        )}
+                      </Box>
+                      {agent.name === toAgent && <CheckIcon sx={{ ml: 1, color: '#10b981', fontSize: 18 }} />}
+                    </MenuItem>
+                  ))}
+                </>
+              )}
+
+              {/* Available to Add Section */}
+              {targetAgentCategories.availableToAdd.length > 0 && (
+                <>
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      px: 1,
+                      py: 0.5,
+                      mt: targetAgentCategories.inCanvas.length > 0 ? 1 : 0.5,
+                      display: 'block',
+                      fontWeight: 600,
+                      color: '#94a3b8',
+                      textTransform: 'uppercase',
+                      fontSize: 9,
+                      letterSpacing: 0.5,
+                    }}
+                  >
+                    Available to Add
+                  </Typography>
+                  {targetAgentCategories.availableToAdd.map((agent) => (
+                    <MenuItem
+                      key={agent.name}
+                      selected={agent.name === toAgent}
+                      onClick={() => {
+                        setToAgent(agent.name);
+                        setTargetAnchorEl(null);
+                        // Update handoff condition if using a pattern
+                        if (selectedPattern && selectedPattern !== 'custom') {
+                          const pattern = HANDOFF_CONDITION_PATTERNS.find(p => p.id === selectedPattern);
+                          if (pattern) {
+                            setHandoffCondition(pattern.condition.replace(/\{target_agent\}/g, agent.name));
+                          }
+                        }
+                      }}
+                      sx={{ borderRadius: 1, my: 0.25, opacity: 0.7 }}
+                    >
+                      <Avatar sx={{ width: 24, height: 24, mr: 1, bgcolor: colors.start.avatar, fontSize: 12 }}>
+                        {agent.name[0]}
+                      </Avatar>
+                      <Box sx={{ flex: 1 }}>
+                        <Typography variant="body2" sx={{ fontWeight: agent.name === toAgent ? 600 : 400 }}>
+                          {agent.name}
+                        </Typography>
+                        {agent.description && (
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: 10 }}>
+                            {agent.description.slice(0, 40)}{agent.description.length > 40 ? '...' : ''}
+                          </Typography>
+                        )}
+                      </Box>
+                      {agent.name === toAgent && <CheckIcon sx={{ ml: 1, color: '#10b981', fontSize: 18 }} />}
+                    </MenuItem>
+                  ))}
+                </>
+              )}
             </Box>
           </Popover>
 
@@ -590,92 +756,29 @@ const HandoffEditorDialog = React.memo(function HandoffEditorDialog({ open, onCl
               When should this handoff happen?
             </Typography>
 
-            {/* Source Agent Full Prompt - Expandable */}
-            <Accordion 
-              expanded={showFullPrompt} 
-              onChange={() => setShowFullPrompt(!showFullPrompt)}
-              sx={{ 
-                mb: 2, 
-                border: '1px solid #e5e7eb', 
-                borderRadius: '8px !important',
-                '&:before': { display: 'none' },
-                boxShadow: 'none',
-              }}
-            >
-              <AccordionSummary
-                expandIcon={<ExpandMoreIcon />}
-                sx={{ 
-                  backgroundColor: '#f8fafc', 
-                  borderRadius: '8px',
-                  minHeight: 48,
-                  '&.Mui-expanded': { minHeight: 48 },
-                }}
-              >
-                <Stack direction="row" alignItems="center" spacing={1}>
-                  <DescriptionIcon sx={{ fontSize: 16, color: '#6366f1' }} />
-                  <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                    View {fromAgent}'s Full System Prompt
-                  </Typography>
-                  <Chip 
-                    label="Read-only" 
-                    size="small" 
-                    sx={{ 
-                      height: 20, 
-                      fontSize: 10, 
-                      backgroundColor: '#e0e7ff', 
-                      color: '#4338ca' 
-                    }} 
-                  />
-                </Stack>
-              </AccordionSummary>
-              <AccordionDetails sx={{ p: 0 }}>
-                <Box
-                  sx={{
-                    maxHeight: '300px',
-                    overflowY: 'auto',
-                    p: 2,
-                    backgroundColor: '#fafafa',
-                    borderTop: '1px solid #e5e7eb',
-                  }}
-                >
-                  <Typography
-                    component="pre"
-                    variant="caption"
-                    sx={{ 
-                      fontFamily: 'monospace', 
-                      whiteSpace: 'pre-wrap', 
-                      fontSize: 11, 
-                      lineHeight: 1.6,
-                      margin: 0,
-                      color: '#374151',
-                    }}
-                  >
-                    {sourceAgent?.prompt_full || sourceAgent?.prompt_preview || 'No system prompt available for this agent.'}
-                  </Typography>
-                </Box>
-              </AccordionDetails>
-            </Accordion>
-            
             {/* Quick pattern chips */}
             <Box sx={{ mb: 2 }}>
               <Stack direction="row" flexWrap="wrap" gap={1}>
-                {HANDOFF_CONDITION_PATTERNS.slice(0, 6).map((pattern) => (
-                  <Chip
-                    key={pattern.id}
-                    icon={<span style={{ fontSize: 14 }}>{pattern.icon}</span>}
-                    label={pattern.name.replace(pattern.icon + ' ', '')}
-                    onClick={() => handlePatternSelect(pattern.id)}
-                    variant={selectedPattern === pattern.id ? 'filled' : 'outlined'}
-                    color={selectedPattern === pattern.id ? 'primary' : 'default'}
-                    sx={{
-                      cursor: 'pointer',
-                      fontWeight: selectedPattern === pattern.id ? 600 : 400,
-                      '&:hover': { backgroundColor: selectedPattern === pattern.id ? undefined : 'rgba(99, 102, 241, 0.08)' },
-                    }}
-                  />
-                ))}
+                {HANDOFF_CONDITION_PATTERNS.slice(0, 6).map((pattern) => {
+                  const Icon = pattern.IconComponent;
+                  return (
+                    <Chip
+                      key={pattern.id}
+                      icon={<Icon sx={{ fontSize: 18 }} />}
+                      label={pattern.name}
+                      onClick={() => handlePatternSelect(pattern.id)}
+                      variant={selectedPattern === pattern.id ? 'filled' : 'outlined'}
+                      color={selectedPattern === pattern.id ? 'primary' : 'default'}
+                      sx={{
+                        cursor: 'pointer',
+                        fontWeight: selectedPattern === pattern.id ? 600 : 400,
+                        '&:hover': { backgroundColor: selectedPattern === pattern.id ? undefined : 'rgba(99, 102, 241, 0.08)' },
+                      }}
+                    />
+                  );
+                })}
                 <Chip
-                  icon={<span style={{ fontSize: 14 }}>➕</span>}
+                  icon={<AddIcon sx={{ fontSize: 18 }} />}
                   label="More..."
                   onClick={() => setShowPatternPicker(!showPatternPicker)}
                   variant="outlined"
@@ -691,37 +794,40 @@ const HandoffEditorDialog = React.memo(function HandoffEditorDialog({ open, onCl
                   All Handoff Patterns:
                 </Typography>
                 <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 1 }}>
-                  {HANDOFF_CONDITION_PATTERNS.map((pattern) => (
-                    <Paper
-                      key={pattern.id}
-                      variant="outlined"
-                      onClick={() => handlePatternSelect(pattern.id)}
-                      sx={{
-                        p: 1.5,
-                        cursor: 'pointer',
-                        borderRadius: '8px',
-                        borderColor: selectedPattern === pattern.id ? '#6366f1' : '#e5e7eb',
-                        backgroundColor: selectedPattern === pattern.id ? 'rgba(99, 102, 241, 0.08)' : '#fff',
-                        transition: 'all 0.2s',
-                        '&:hover': { borderColor: '#6366f1', boxShadow: '0 2px 8px rgba(99, 102, 241, 0.15)' },
-                      }}
-                    >
-                      <Stack direction="row" spacing={1} alignItems="flex-start">
-                        <Typography sx={{ fontSize: 20 }}>{pattern.icon}</Typography>
-                        <Box sx={{ flex: 1 }}>
-                          <Typography variant="body2" sx={{ fontWeight: 600, fontSize: 12 }}>
-                            {pattern.name.replace(pattern.icon + ' ', '')}
-                          </Typography>
-                          <Typography variant="caption" color="text.secondary" sx={{ fontSize: 10 }}>
-                            {pattern.description}
-                          </Typography>
-                        </Box>
-                        {selectedPattern === pattern.id && (
-                          <CheckIcon sx={{ color: '#6366f1', fontSize: 18 }} />
-                        )}
-                      </Stack>
-                    </Paper>
-                  ))}
+                  {HANDOFF_CONDITION_PATTERNS.map((pattern) => {
+                    const Icon = pattern.IconComponent;
+                    return (
+                      <Paper
+                        key={pattern.id}
+                        variant="outlined"
+                        onClick={() => handlePatternSelect(pattern.id)}
+                        sx={{
+                          p: 1.5,
+                          cursor: 'pointer',
+                          borderRadius: '8px',
+                          borderColor: selectedPattern === pattern.id ? '#6366f1' : '#e5e7eb',
+                          backgroundColor: selectedPattern === pattern.id ? 'rgba(99, 102, 241, 0.08)' : '#fff',
+                          transition: 'all 0.2s',
+                          '&:hover': { borderColor: '#6366f1', boxShadow: '0 2px 8px rgba(99, 102, 241, 0.15)' },
+                        }}
+                      >
+                        <Stack direction="row" spacing={1} alignItems="flex-start">
+                          <Icon sx={{ fontSize: 22, color: selectedPattern === pattern.id ? '#6366f1' : '#64748b' }} />
+                          <Box sx={{ flex: 1 }}>
+                            <Typography variant="body2" sx={{ fontWeight: 600, fontSize: 12 }}>
+                              {pattern.name}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary" sx={{ fontSize: 10 }}>
+                              {pattern.description}
+                            </Typography>
+                          </Box>
+                          {selectedPattern === pattern.id && (
+                            <CheckIcon sx={{ color: '#6366f1', fontSize: 18 }} />
+                          )}
+                        </Stack>
+                      </Paper>
+                    );
+                  })}
                 </Box>
               </Paper>
             </Collapse>
@@ -740,10 +846,11 @@ const HandoffEditorDialog = React.memo(function HandoffEditorDialog({ open, onCl
               placeholder={`Transfer to ${toAgent} when the customer:\n- Asks about [specific topic or service]\n- Expresses [intent or need]\n- Mentions [keywords or phrases]`}
               helperText={
                 <span>
-                  This condition will be injected into <strong>{fromAgent}</strong>'s system prompt to guide when to transfer.
+                  This condition will be injected into <strong>{fromAgent}</strong>'s system prompt to guide when to transfer to{' '}
+                  <strong>{toAgent}</strong>
                   {targetAgent?.description && (
-                    <span style={{ display: 'block', marginTop: 4, color: '#6366f1' }}>
-                      💡 {toAgent}: {targetAgent.description}
+                    <span style={{ color: '#64748b' }}>
+                      {' '}({targetAgent.description})
                     </span>
                   )}
                 </span>
@@ -754,8 +861,19 @@ const HandoffEditorDialog = React.memo(function HandoffEditorDialog({ open, onCl
             {/* Runtime prompt preview */}
             <Paper variant="outlined" sx={{ mt: 1.5, p: 1.5, borderRadius: '12px', bgcolor: '#f8fafc' }}>
               <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
-                <Typography variant="caption" color="text.secondary">
-                  Full runtime system prompt (auto-focused on handoff instructions)
+                <Stack direction="row" alignItems="center" spacing={0.75}>
+                  <Typography variant="caption" color="text.secondary">
+                    <strong style={{ color: '#1976d2' }}>{fromAgent}</strong>'s Runtime System Prompt
+                  </Typography>
+                  <Chip
+                    label="Source Agent"
+                    size="small"
+                    color="primary"
+                    sx={{ height: 18, fontSize: 9, fontWeight: 600 }}
+                  />
+                </Stack>
+                <Typography variant="caption" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+                  (auto-focused on handoff instructions)
                 </Typography>
               </Stack>
               <Box
@@ -1132,34 +1250,6 @@ const ScenarioGraphCanvas = React.memo(function ScenarioGraphCanvas({
       }
     }
   }, [connectingFrom]);
-
-  // Complete connection when clicking on input port
-  const handlePortClick = useCallback((nodeId, portType, e) => {
-    e.stopPropagation();
-    if (portType === 'input' && connectingFrom && connectingFrom !== nodeId) {
-      // Create the connection
-      onConfigChange(prev => {
-        const exists = prev.handoffs?.some(
-          h => h.from_agent === connectingFrom && h.to_agent === nodeId
-        );
-        if (exists) return prev;
-        
-        return {
-          ...prev,
-          handoffs: [...(prev.handoffs || []), {
-            from_agent: connectingFrom,
-            to_agent: nodeId,
-            tool: 'handoff_to_agent',
-            type: prev.handoff_type || 'announced',
-            share_context: true,
-            handoff_condition: '',
-            context_vars: {},
-          }],
-        };
-      });
-      setConnectingFrom(null);
-    }
-  }, [connectingFrom, onConfigChange]);
 
   // Delete handoff
   const handleDeleteHandoff = useCallback((fromAgent, toAgent) => {
@@ -1711,44 +1801,6 @@ const ScenarioGraphCanvas = React.memo(function ScenarioGraphCanvas({
                 </Tooltip>
               )}
 
-              {/* Input Port (top) - visible when not start agent */}
-              {!node.isStart && (
-                <Box
-                  onClick={(e) => handlePortClick(node.id, 'input', e)}
-                  sx={{
-                    position: 'absolute',
-                    top: -8,
-                    left: '50%',
-                    transform: 'translateX(-50%)',
-                    width: 16,
-                    height: 16,
-                    borderRadius: '50%',
-                    backgroundColor: isConnectTarget ? '#3b82f6' : (node.isFloating ? '#fca5a5' : '#e5e7eb'),
-                    border: `2px solid ${isConnectTarget ? '#1d4ed8' : (node.isFloating ? '#ef4444' : '#9ca3af')}`,
-                    cursor: isConnectTarget ? 'pointer' : 'default',
-                    zIndex: 10,
-                    transition: 'all 0.15s ease',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    animation: node.isFloating && !isConnectTarget ? 'pulse 2s infinite' : 'none',
-                    '@keyframes pulse': {
-                      '0%, 100%': { boxShadow: '0 0 0 0 rgba(239, 68, 68, 0.4)' },
-                      '50%': { boxShadow: '0 0 0 6px rgba(239, 68, 68, 0)' },
-                    },
-                    '&:hover': isConnectTarget ? {
-                      transform: 'translateX(-50%) scale(1.3)',
-                      backgroundColor: '#60a5fa',
-                      boxShadow: '0 0 8px rgba(59, 130, 246, 0.5)',
-                    } : {},
-                  }}
-                >
-                  {isConnectTarget && (
-                    <Box sx={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: 'white' }} />
-                  )}
-                </Box>
-              )}
-
               {/* Node Body */}
               <Paper
                 elevation={selectedNode === node.id ? 4 : (isConnectTarget ? 3 : 1)}
@@ -2203,6 +2255,7 @@ const ScenarioGraphCanvas = React.memo(function ScenarioGraphCanvas({
         }}
         handoff={selectedEdge?.handoff}
         agents={agents}
+        scenarioAgents={scenarioAgents}
         handoffs={config.handoffs || []}
         onSave={handleUpdateHandoff}
         onDelete={handleDeleteHandoff}
@@ -2252,6 +2305,8 @@ export default function ScenarioBuilderGraph({
   // UI state
   const [showSettings, setShowSettings] = useState(false);
   const [viewingAgent, setViewingAgent] = useState(null);
+  const [showExportInstructions, setShowExportInstructions] = useState(false);
+  const [exportedYaml, setExportedYaml] = useState('');
 
   // Icon picker state
   const [showIconPicker, setShowIconPicker] = useState(false);
@@ -2450,7 +2505,7 @@ export default function ScenarioBuilderGraph({
         logger.warn('Failed to clear session scenario');
       }
     }
-    
+
     setConfig({
       name: 'Custom Scenario',
       description: '',
@@ -2467,6 +2522,101 @@ export default function ScenarioBuilderGraph({
     setError(null);
     setSuccess('Scenario reset');
     setTimeout(() => setSuccess(null), 2000);
+  };
+
+  const handleExportScenario = () => {
+    // Convert config to YAML format compatible with backend scenariostore
+    const scenarioName = config.name.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+
+    // Get list of agents in the scenario from the canvas
+    const agentsInScenario = new Set();
+    if (config.start_agent) {
+      agentsInScenario.add(config.start_agent);
+    }
+    config.handoffs.forEach((handoff) => {
+      agentsInScenario.add(handoff.from_agent);
+      agentsInScenario.add(handoff.to_agent);
+    });
+
+    // Build YAML content following orchestration.yaml structure
+    const yamlLines = [
+      `# ${config.name}`,
+      config.description ? `# ${config.description}` : null,
+      '',
+      `name: ${scenarioName}`,
+      `description: ${config.description || config.name}`,
+      `icon: "${config.icon}"`,
+      '',
+      '# Starting agent',
+      `start_agent: ${config.start_agent || 'Concierge'}`,
+      '',
+      '# Agents to include in this scenario',
+      'agents:',
+    ];
+
+    // Add agents list
+    if (agentsInScenario.size > 0) {
+      Array.from(agentsInScenario).forEach(agentName => {
+        yamlLines.push(`  - ${agentName}`);
+      });
+    } else {
+      yamlLines.push('  []');
+    }
+
+    yamlLines.push('');
+    yamlLines.push('# Handoff behavior - default for unlisted routes');
+    yamlLines.push(`handoff_type: ${config.handoff_type}`);
+    yamlLines.push('');
+    yamlLines.push('# Handoff Graph - Directed edges between agents');
+    yamlLines.push('handoffs:');
+
+    // Build handoffs array (not dictionary)
+    if (config.handoffs && config.handoffs.length > 0) {
+      config.handoffs.forEach((handoff, index) => {
+        if (index > 0) yamlLines.push('');
+        yamlLines.push(`  - from: ${handoff.from_agent}`);
+        yamlLines.push(`    to: ${handoff.to_agent}`);
+        yamlLines.push(`    tool: ${handoff.tool || `handoff_${handoff.to_agent.toLowerCase().replace(/\s+/g, '_')}`}`);
+        yamlLines.push(`    type: ${handoff.type || config.handoff_type}`);
+        yamlLines.push(`    share_context: ${handoff.share_context !== false}`);
+
+        if (handoff.handoff_condition && handoff.handoff_condition.trim()) {
+          yamlLines.push(`    handoff_condition: |`);
+          handoff.handoff_condition.split('\n').forEach(line => {
+            yamlLines.push(`      ${line}`);
+          });
+        }
+
+        if (handoff.context_vars && Object.keys(handoff.context_vars).length > 0) {
+          yamlLines.push(`    context_vars:`);
+          Object.entries(handoff.context_vars).forEach(([key, value]) => {
+            yamlLines.push(`      ${key}: ${JSON.stringify(value)}`);
+          });
+        }
+      });
+    } else {
+      yamlLines.push('  []');
+    }
+
+    yamlLines.push('');
+    yamlLines.push('# Generic Handoff Configuration');
+    yamlLines.push('# Enables the handoff_to_agent tool for dynamic agent transfers');
+    yamlLines.push('generic_handoff:');
+    yamlLines.push('  enabled: true');
+    yamlLines.push(`  default_type: ${config.handoff_type}`);
+    yamlLines.push('  share_context: true');
+    yamlLines.push('  require_client_id: false');
+    yamlLines.push('');
+    yamlLines.push('# Agent defaults applied to all agents');
+    yamlLines.push('agent_defaults:');
+    Object.entries(config.global_template_vars).forEach(([key, value]) => {
+      yamlLines.push(`  ${key}: "${value}"`);
+    });
+    yamlLines.push('');
+
+    const yamlContent = yamlLines.filter(line => line !== null).join('\n');
+    setExportedYaml(yamlContent);
+    setShowExportInstructions(true);
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -2658,6 +2808,167 @@ export default function ScenarioBuilderGraph({
         agent={viewingAgent}
       />
 
+      {/* Export Instructions Dialog */}
+      <Dialog
+        open={showExportInstructions}
+        onClose={() => setShowExportInstructions(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <FolderOpenIcon color="primary" />
+          <Box sx={{ flex: 1 }}>
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>
+              Export Scenario Configuration
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Follow these steps to persist your scenario in the backend code
+            </Typography>
+          </Box>
+          <IconButton onClick={() => setShowExportInstructions(false)}>
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+
+        <DialogContent dividers>
+          <Stack spacing={3}>
+            {/* Step 1 */}
+            <Box>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Chip label="1" size="small" color="primary" />
+                Copy the YAML configuration
+              </Typography>
+              <Paper variant="outlined" sx={{ p: 2, backgroundColor: '#f8fafc', position: 'relative' }}>
+                <Typography
+                  component="pre"
+                  variant="body2"
+                  sx={{
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    maxHeight: 300,
+                    overflowY: 'auto',
+                    m: 0,
+                  }}
+                >
+                  {exportedYaml}
+                </Typography>
+                <Tooltip title="Copy to clipboard">
+                  <IconButton
+                    size="small"
+                    onClick={() => {
+                      navigator.clipboard.writeText(exportedYaml);
+                      setSuccess('YAML copied to clipboard!');
+                      setTimeout(() => setSuccess(null), 2000);
+                    }}
+                    sx={{ position: 'absolute', top: 8, right: 8, backgroundColor: 'white' }}
+                  >
+                    <ContentCopyIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </Paper>
+            </Box>
+
+            {/* Step 2 */}
+            <Box>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Chip label="2" size="small" color="primary" />
+                Create the scenario directory
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                In your terminal, navigate to the backend registries directory and create a new folder:
+              </Typography>
+              <Paper variant="outlined" sx={{ p: 1.5, backgroundColor: '#1e1e1e', borderRadius: 1 }}>
+                <Typography
+                  component="code"
+                  variant="body2"
+                  sx={{ fontFamily: 'monospace', color: '#a5d6ff', fontSize: 13 }}
+                >
+                  mkdir -p apps/artagent/backend/registries/scenariostore/{config.name.toLowerCase().replace(/[^a-z0-9_-]/g, '_')}
+                </Typography>
+              </Paper>
+            </Box>
+
+            {/* Step 3 */}
+            <Box>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Chip label="3" size="small" color="primary" />
+                Save the YAML file
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                Create a file named <code style={{ backgroundColor: '#f1f5f9', padding: '2px 6px', borderRadius: 4 }}>orchestration.yaml</code> (or <code style={{ backgroundColor: '#f1f5f9', padding: '2px 6px', borderRadius: 4 }}>scenario.yaml</code>) in the new directory and paste the YAML content:
+              </Typography>
+              <Paper variant="outlined" sx={{ p: 1.5, backgroundColor: '#1e1e1e', borderRadius: 1 }}>
+                <Typography
+                  component="code"
+                  variant="body2"
+                  sx={{ fontFamily: 'monospace', color: '#a5d6ff', fontSize: 13 }}
+                >
+                  # Save the copied YAML to this file:<br/>
+                  apps/artagent/backend/registries/scenariostore/{config.name.toLowerCase().replace(/[^a-z0-9_-]/g, '_')}/orchestration.yaml
+                </Typography>
+              </Paper>
+            </Box>
+
+            {/* Step 4 */}
+            <Box>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Chip label="4" size="small" color="primary" />
+                Restart the backend
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                The backend will automatically discover the new scenario on restart:
+              </Typography>
+              <Paper variant="outlined" sx={{ p: 1.5, backgroundColor: '#1e1e1e', borderRadius: 1 }}>
+                <Typography
+                  component="code"
+                  variant="body2"
+                  sx={{ fontFamily: 'monospace', color: '#a5d6ff', fontSize: 13 }}
+                >
+                  # Restart your backend service<br/>
+                  # The scenario will appear in the templates list
+                </Typography>
+              </Paper>
+            </Box>
+
+            {/* Info Box */}
+            <Paper sx={{ p: 2, backgroundColor: '#eff6ff', border: '1px solid #bfdbfe' }}>
+              <Typography variant="body2" sx={{ fontWeight: 600, color: '#1e40af', mb: 1 }}>
+                📝 Note about Agent Exports
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                To export agent configurations, use the Agent Builder interface. Each agent's YAML should be saved to:<br/>
+                <code style={{ backgroundColor: '#dbeafe', padding: '2px 6px', borderRadius: 4, fontSize: 12 }}>
+                  apps/artagent/backend/registries/agentstore/&lt;agent_name&gt;/agent.yaml
+                </code>
+              </Typography>
+            </Paper>
+          </Stack>
+        </DialogContent>
+
+        <DialogActions sx={{ p: 2 }}>
+          <Button onClick={() => setShowExportInstructions(false)}>
+            Close
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<DownloadIcon />}
+            onClick={() => {
+              const blob = new Blob([exportedYaml], { type: 'text/yaml' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `${config.name.toLowerCase().replace(/[^a-z0-9_-]/g, '_')}_orchestration.yaml`;
+              a.click();
+              URL.revokeObjectURL(url);
+            }}
+          >
+            Download YAML File
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       {/* Footer */}
       <Box
         sx={{
@@ -2671,6 +2982,14 @@ export default function ScenarioBuilderGraph({
       >
         <Button onClick={handleReset} startIcon={<RefreshIcon />} disabled={saving}>
           Reset
+        </Button>
+        <Button
+          onClick={handleExportScenario}
+          startIcon={<DownloadIcon />}
+          disabled={!config.name.trim() || !config.start_agent}
+          variant="outlined"
+        >
+          Export YAML
         </Button>
         <Button
           variant="contained"

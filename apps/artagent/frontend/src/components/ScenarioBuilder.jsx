@@ -927,7 +927,7 @@ const HANDOFF_CONDITION_PATTERNS = [
 // HANDOFF EDITOR DIALOG
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function HandoffEditorDialog({ open, onClose, handoff, agents, handoffs, onSave, onDelete }) {
+function HandoffEditorDialog({ open, onClose, handoff, agents, scenarioAgents = [], handoffs, onSave, onDelete }) {
   const [type, setType] = useState(handoff?.type || 'announced');
   const [shareContext, setShareContext] = useState(handoff?.share_context !== false);
   const [handoffCondition, setHandoffCondition] = useState(handoff?.handoff_condition || '');
@@ -3604,6 +3604,7 @@ export default function ScenarioBuilder({
         onClose={() => setEditingHandoff(null)}
         handoff={editingHandoff}
         agents={availableAgents}
+        scenarioAgents={graphLayout.agentsInGraph}
         handoffs={config.handoffs}
         onSave={handleUpdateHandoff}
         onDelete={() => editingHandoff && handleDeleteHandoff(editingHandoff)}
