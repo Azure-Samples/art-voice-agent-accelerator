@@ -9,11 +9,12 @@ description: Insurance customer service with claims processing, policy managemen
 start_agent: AuthAgent
 
 # Agents to include in this scenario
-# Flow: AuthAgent (entry) → PolicyAdvisor OR FNOLAgent (Customer)
+# Flow: AuthAgent (entry) → PolicyAdvisor OR ClaimsSpecialist/FNOLAgent (Customer)
 #                         → SubroAgent (B2B Claimant Carriers)
 agents:
   - AuthAgent
   - PolicyAdvisor
+  - ClaimsSpecialist
   - FNOLAgent
   - SubroAgent
 
@@ -59,6 +60,12 @@ handoffs:
     type: announced           # New agent greets the customer
     share_context: true
 
+  - from: AuthAgent
+    to: ClaimsSpecialist
+    tool: handoff_claims_specialist
+    type: announced           # New agent greets the customer
+    share_context: true
+
   # B2B path (authenticated via verify_cc_caller)
   - from: AuthAgent
     to: SubroAgent
@@ -83,6 +90,20 @@ handoffs:
 
   # Note: SubroAgent has NO cross-handoffs - it's B2B only
   # Subro callers cannot be transferred to PolicyAdvisor or FNOLAgent
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Generic Handoff Configuration
+# ═══════════════════════════════════════════════════════════════════════════════
+# Enables the handoff_to_agent tool for dynamic agent transfers without
+# requiring explicit handoff tool definitions for every agent pair.
+
+generic_handoff:
+  enabled: true
+  # allowed_targets: []       # Empty = all scenario agents allowed
+  default_type: announced     # Default handoff type (discrete/announced)
+  share_context: true         # Pass conversation context to target
+  require_client_id: false    # Whether client_id is required
 
 # Agent defaults applied to all agents
 agent_defaults:

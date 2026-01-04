@@ -78,7 +78,7 @@ from apps.artagent.backend.voice import (  # Browser barge-in controller; Speech
 )
 
 # Unified TTS Playback - single source of truth for voice synthesis
-from apps.artagent.backend.voice.speech_cascade.tts import TTSPlayback
+from apps.artagent.backend.voice.tts import TTSPlayback
 from config import ACS_STREAMING_MODE, GREETING, STOP_WORDS
 from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
@@ -101,6 +101,8 @@ SILENCE_GAP_MS: int = 500
 BROWSER_PCM_SAMPLE_RATE: int = 24000
 BROWSER_SPEECH_RMS_THRESHOLD: int = 200
 BROWSER_SILENCE_GAP_SECONDS: float = 0.5
+INACTIVITY_TIMEOUT_S: float = 300.0
+INACTIVITY_CHECK_INTERVAL_S: float = 5.0
 
 # Legacy aliases
 VOICE_LIVE_PCM_SAMPLE_RATE = BROWSER_PCM_SAMPLE_RATE
@@ -247,6 +249,9 @@ class MediaHandler:
         self._running = False
         self._stopped = False
         self._metadata_received = False  # ACS only
+        self._last_activity_ts = time.monotonic()
+        self._idle_task: asyncio.Task | None = None
+        self._idle_disconnect_in_progress = False
 
     # =========================================================================
     # Factory
@@ -374,9 +379,10 @@ class MediaHandler:
         handler._greeting_text = await handler._derive_greeting()
 
         # Initialize TTS Playback (unified handler for voice synthesis)
+        # Pass websocket as first positional arg (context) for backward compatibility
         handler._tts_playback = TTSPlayback(
-            websocket=config.websocket,
-            app_state=app_state,
+            config.websocket,  # context param accepts WebSocket for backward compat
+            app_state,
             session_id=config.session_id,
             cancel_event=handler._tts_cancel_event,
         )
@@ -1061,6 +1067,7 @@ class MediaHandler:
             try:
                 logger.info("[%s] Starting (%s)", self._session_short, self._transport.value)
                 self._running = True
+                self._start_idle_monitor()
                 await self.speech_cascade.start()
 
                 # Queue greeting (browser queues immediately, ACS waits for metadata)
@@ -1102,6 +1109,7 @@ class MediaHandler:
                     # Text input
                     text = msg.get("text")
                     if text and text.strip():
+                        self._touch_activity()
                         # Check for exit keywords (inline stopwords check)
                         if any(stop in text.strip().lower() for stop in STOP_WORDS):
                             await self._handle_goodbye()
@@ -1111,6 +1119,8 @@ class MediaHandler:
                     # Audio input
                     audio = msg.get("bytes")
                     if audio:
+                        if pcm16le_rms(audio) >= BROWSER_SPEECH_RMS_THRESHOLD:
+                            self._touch_activity()
                         self.speech_cascade.write_audio(audio)
 
                 span.set_attribute("messages", count)
@@ -1172,6 +1182,7 @@ class MediaHandler:
         b64 = section.get("data")
         if not b64:
             return
+        self._touch_activity()
 
         try:
             self.speech_cascade.write_audio(base64.b64decode(b64))
@@ -1183,6 +1194,7 @@ class MediaHandler:
         section = data.get("dtmfData") or data.get("DtmfData") or {}
         tone = section.get("data")
         if tone:
+            self._touch_activity()
             logger.info("[%s] DTMF: %s", self._session_short, tone)
 
     async def _handle_goodbye(self) -> None:
@@ -1200,6 +1212,84 @@ class MediaHandler:
         # Use TTSPlayback for goodbye (gets voice from agent)
         await self._tts_playback.play_to_browser(goodbye)
 
+    def _touch_activity(self) -> None:
+        """Record recent user activity for idle timeout tracking."""
+        self._last_activity_ts = time.monotonic()
+
+    def _start_idle_monitor(self) -> None:
+        """Start background inactivity monitor."""
+        if self._idle_task and not self._idle_task.done():
+            return
+        self._last_activity_ts = time.monotonic()
+        self._idle_disconnect_in_progress = False
+        self._idle_task = asyncio.create_task(self._monitor_inactivity())
+
+    async def _cancel_idle_monitor(self) -> None:
+        """Stop background inactivity monitor."""
+        task = self._idle_task
+        if not task or task.done():
+            self._idle_task = None
+            return
+        task.cancel()
+        if task is asyncio.current_task():
+            self._idle_task = None
+            return
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        self._idle_task = None
+
+    async def _monitor_inactivity(self) -> None:
+        """Watch for idle timeout and terminate session when exceeded."""
+        try:
+            while self._running and not self._stopped:
+                await asyncio.sleep(INACTIVITY_CHECK_INTERVAL_S)
+                if not self._running or self._stopped:
+                    break
+                idle_for = time.monotonic() - self._last_activity_ts
+                if idle_for >= INACTIVITY_TIMEOUT_S:
+                    if self._idle_disconnect_in_progress:
+                        break
+                    self._idle_disconnect_in_progress = True
+                    logger.info(
+                        "[%s] Idle timeout reached (%.1fs), terminating session",
+                        self._session_short,
+                        idle_for,
+                    )
+                    await self._terminate_for_inactivity()
+                    break
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.warning("[%s] Idle monitor error: %s", self._session_short, exc)
+
+    async def _terminate_for_inactivity(self) -> None:
+        """Terminate session after inactivity timeout."""
+        self._running = False
+        ws = self._websocket
+        if not ws:
+            return
+        try:
+            from apps.artagent.backend.src.services.acs.session_terminator import (
+                TerminationReason,
+                terminate_session,
+            )
+
+            await terminate_session(
+                ws,
+                is_acs=self._transport == TransportType.ACS,
+                call_connection_id=self._call_connection_id,
+                reason=TerminationReason.IDLE_TIMEOUT,
+            )
+        except Exception as exc:
+            logger.warning("[%s] Idle termination failed: %s", self._session_short, exc)
+            try:
+                if ws.application_state == WebSocketState.CONNECTED:
+                    await ws.close(code=1000, reason="idle_timeout")
+            except Exception as close_exc:
+                logger.debug("[%s] Idle close failed: %s", self._session_short, close_exc)
+
     async def stop(self) -> None:
         """Stop handler and release resources."""
         if self._stopped:
@@ -1210,6 +1300,7 @@ class MediaHandler:
                 logger.info("[%s] Stopping", self._session_short)
                 self._stopped = True
                 self._running = False
+                await self._cancel_idle_monitor()
 
                 if self.speech_cascade:
                     try:

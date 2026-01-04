@@ -511,8 +511,10 @@ async def terminate_call(request: Request, payload: CallTerminateRequest) -> Cal
 
     try:
         call_conn = acs_client.get_call_connection(payload.call_id)
+        # hang_up is a synchronous SDK method - run in executor to avoid blocking
+        loop = asyncio.get_running_loop()
         await asyncio.wait_for(
-            call_conn.hang_up(is_for_everyone=True),
+            loop.run_in_executor(None, lambda: call_conn.hang_up(is_for_everyone=True)),
             timeout=5.0,
         )
     except TimeoutError:
@@ -732,12 +734,22 @@ async def handle_acs_callbacks(
     :rtype: JSONResponse
     :raises Exception: When event processing fails or dependencies are unavailable
     """
+    # Log every callback attempt
+    logger.info("=" * 80)
+    logger.info("🔔 ACS CALLBACK RECEIVED!")
+    logger.info(f"   Method: {http_request.method}")
+    logger.info(f"   URL: {http_request.url}")
+    logger.info(f"   Headers: {dict(http_request.headers)}")
+    logger.info("=" * 80)
+
     # Validate dependencies
     if not http_request.app.state.acs_caller:
+        logger.error("ACS caller not initialized - cannot process callback")
         return JSONResponse({"error": "ACS not initialised"}, status_code=503)
 
     try:
         events_data = await http_request.json()
+        logger.info(f"📦 Callback payload: {events_data}")
 
         # Extract call connection ID for tracing
         call_connection_id = None
