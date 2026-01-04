@@ -35,7 +35,10 @@ from apps.artagent.backend.src.services.acs.session_terminator import (
 )
 from apps.artagent.backend.src.utils.tracing import log_with_context
 from apps.artagent.backend.src.ws_helpers.barge_in import BargeInController
-from apps.artagent.backend.src.ws_helpers.envelopes import make_status_envelope
+from apps.artagent.backend.src.ws_helpers.envelopes import (
+    make_event_envelope,
+    make_status_envelope,
+)
 from apps.artagent.backend.src.ws_helpers.shared_ws import (
     _get_connection_metadata,
     _set_connection_metadata,
@@ -456,17 +459,21 @@ async def _process_voice_live_messages(
                     conn_meta.handler = {}
                 conn_meta.handler["voice_live_handler"] = handler
 
-            # Send readiness status
+            # Send readiness event (matches speech_cascade_connected format)
             try:
-                ready_envelope = make_status_envelope(
-                    "Voice Live orchestration connected",
+                ready_envelope = make_event_envelope(
+                    event_type="voice_live_connected",
+                    event_data={
+                        "message": "Voice Live orchestration connected",
+                        "streaming_type": "voice_live",
+                    },
                     sender="System",
                     topic="session",
                     session_id=session_id,
                 )
                 await websocket.app.state.conn_manager.send_to_connection(conn_id, ready_envelope)
             except Exception:
-                logger.debug("[%s] Unable to send Voice Live readiness status", session_id)
+                logger.debug("[%s] Unable to send Voice Live readiness event", session_id)
 
             # Message processing loop
             while _is_connected(websocket):
