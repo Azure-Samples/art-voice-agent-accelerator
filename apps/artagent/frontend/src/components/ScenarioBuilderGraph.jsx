@@ -996,6 +996,11 @@ const ScenarioGraphCanvas = React.memo(function ScenarioGraphCanvas({
   const [draggingAgent, setDraggingAgent] = useState(null);
   const [showHandoffEditor, setShowHandoffEditor] = useState(false);
 
+  // Canvas panning state
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [panStart, setPanStart] = useState({ x: 0, y: 0 });
+
   // Handle Escape key to cancel connection mode
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -1232,6 +1237,20 @@ const ScenarioGraphCanvas = React.memo(function ScenarioGraphCanvas({
     setConnectingFrom(null);
   }, []);
 
+  // Handle canvas mouse down for panning
+  const handleCanvasMouseDown = useCallback((e) => {
+    // Only start panning if clicking on canvas background (not a node)
+    if (e.target === e.currentTarget || e.target.tagName === 'svg') {
+      setIsPanning(true);
+      setPanStart({ x: e.clientX - panOffset.x, y: e.clientY - panOffset.y });
+    }
+  }, [panOffset]);
+
+  // Reset pan to center
+  const handleResetPan = useCallback(() => {
+    setPanOffset({ x: 0, y: 0 });
+  }, []);
+
   // Start connecting from a node's output port (bottom) - now uses click for easier interaction
   const handleOutputPortClick = useCallback((nodeId, e) => {
     e.stopPropagation();
@@ -1367,13 +1386,13 @@ const ScenarioGraphCanvas = React.memo(function ScenarioGraphCanvas({
     if (!agentName || !containerRef.current) return;
     
     const rect = containerRef.current.getBoundingClientRect();
-    const dropX = e.clientX - rect.left - 70; // Center the node
-    const dropY = e.clientY - rect.top - 30;
+    const dropX = e.clientX - rect.left - 70 - panOffset.x; // Center the node, account for pan
+    const dropY = e.clientY - rect.top - 30 - panOffset.y;
     
     // Save the drop position
     setNodePositions(prev => ({
       ...prev,
-      [agentName]: { x: Math.max(0, dropX), y: Math.max(0, dropY) },
+      [agentName]: { x: dropX, y: dropY },
     }));
     
     // Add agent to scenario
@@ -1427,7 +1446,7 @@ const ScenarioGraphCanvas = React.memo(function ScenarioGraphCanvas({
     
     setDraggingAgent(null);
     setSelectedNode(agentName);
-  }, [scenarioAgents, selectedNode, onConfigChange]);
+  }, [scenarioAgents, selectedNode, onConfigChange, panOffset]);
 
   const handleCanvasDragOver = useCallback((e) => {
     e.preventDefault();
@@ -1444,35 +1463,43 @@ const ScenarioGraphCanvas = React.memo(function ScenarioGraphCanvas({
       const rect = containerRef.current.getBoundingClientRect();
       setDragging(nodeId);
       setDragOffset({
-        x: e.clientX - rect.left - node.x,
-        y: e.clientY - rect.top - node.y,
+        x: e.clientX - rect.left - panOffset.x - node.x,
+        y: e.clientY - rect.top - panOffset.y - node.y,
       });
     }
-  }, [nodes, connectingFrom]);
+  }, [nodes, connectingFrom, panOffset]);
 
   const handleMouseMove = useCallback((e) => {
+    // Handle canvas panning
+    if (isPanning && !dragging && !connectingFrom) {
+      const newX = e.clientX - panStart.x;
+      const newY = e.clientY - panStart.y;
+      setPanOffset({ x: newX, y: newY });
+      return;
+    }
     // Update mouse position for connection line preview
     if (connectingFrom && containerRef.current) {
       const rect = containerRef.current.getBoundingClientRect();
       setMousePos({
-        x: e.clientX - rect.left,
-        y: e.clientY - rect.top,
+        x: e.clientX - rect.left - panOffset.x,
+        y: e.clientY - rect.top - panOffset.y,
       });
     }
     // Handle node dragging
     if (dragging && containerRef.current) {
       const rect = containerRef.current.getBoundingClientRect();
-      const newX = e.clientX - rect.left - dragOffset.x;
-      const newY = e.clientY - rect.top - dragOffset.y;
+      const newX = e.clientX - rect.left - dragOffset.x - panOffset.x;
+      const newY = e.clientY - rect.top - dragOffset.y - panOffset.y;
       setNodePositions(prev => ({
         ...prev,
-        [dragging]: { x: Math.max(0, newX), y: Math.max(0, newY) },
+        [dragging]: { x: newX, y: newY },
       }));
     }
-  }, [connectingFrom, dragging, dragOffset]);
+  }, [connectingFrom, dragging, dragOffset, isPanning, panStart, panOffset]);
 
   const handleMouseUp = useCallback(() => {
     setDragging(null);
+    setIsPanning(false);
     // Don't clear connectingFrom here - let node click or canvas click handle it
   }, []);
 
@@ -1502,8 +1529,8 @@ const ScenarioGraphCanvas = React.memo(function ScenarioGraphCanvas({
       {/* Sidebar - Available Agents */}
       <Box
         sx={{
-          width: 240,
-          minWidth: 240,
+          width: 200,
+          minWidth: 200,
           borderRight: '1px solid #e5e7eb',
           backgroundColor: '#fafbfc',
           overflowY: 'auto',
@@ -1642,6 +1669,7 @@ const ScenarioGraphCanvas = React.memo(function ScenarioGraphCanvas({
       <Box
         ref={containerRef}
         onClick={handleCanvasClick}
+        onMouseDown={handleCanvasMouseDown}
         onDrop={handleCanvasDrop}
         onDragOver={handleCanvasDragOver}
         onMouseMove={handleMouseMove}
@@ -1653,15 +1681,36 @@ const ScenarioGraphCanvas = React.memo(function ScenarioGraphCanvas({
           backgroundColor: '#f8fafc',
           backgroundImage: 'radial-gradient(circle, #d1d5db 1px, transparent 1px)',
           backgroundSize: '20px 20px',
+          backgroundPosition: `${panOffset.x}px ${panOffset.y}px`,
           overflow: 'hidden',
-          cursor: dragging ? 'grabbing' : 'default',
+          cursor: isPanning ? 'grabbing' : (dragging ? 'grabbing' : 'grab'),
         }}
       >
-        <svg
-          width="100%"
-          height="100%"
-          style={{ position: 'absolute', top: 0, left: 0 }}
+        {/* Pannable content container - oversized to prevent edge clipping */}
+        <Box
+          sx={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+            transform: `translate(${panOffset.x}px, ${panOffset.y}px)`,
+            pointerEvents: 'none',
+          }}
         >
+        <svg
+          style={{ 
+            position: 'absolute', 
+            // Large negative margins create space for edges that extend beyond nodes
+            top: '-1000px', 
+            left: '-1000px', 
+            width: 'calc(100% + 2000px)', 
+            height: 'calc(100% + 2000px)', 
+            pointerEvents: 'none', 
+          }}
+        >
+          {/* Translate SVG content to match the offset */}
+          <g transform="translate(1000, 1000)">
           <defs>
             {/* Forward edge arrows */}
             <marker id="arrowhead-announced" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
@@ -1700,7 +1749,7 @@ const ScenarioGraphCanvas = React.memo(function ScenarioGraphCanvas({
             const labelWidth = isBidirectional ? 90 : 80;
             
             return (
-              <g key={edge.id} style={{ cursor: 'pointer' }} onClick={(e) => handleEdgeClick(edge, e)}>
+              <g key={edge.id} style={{ cursor: 'pointer', pointerEvents: 'auto' }} onClick={(e) => handleEdgeClick(edge, e)}>
                 {/* Invisible wider path for easier clicking */}
                 <path
                   d={`M ${edge.fromX} ${edge.fromY} C ${edge.fromX} ${midY}, ${edge.toX} ${midY}, ${edge.toX} ${edge.toY}`}
@@ -1756,6 +1805,7 @@ const ScenarioGraphCanvas = React.memo(function ScenarioGraphCanvas({
               />
             );
           })()}
+          </g>
         </svg>
 
         {/* Nodes */}
@@ -1771,6 +1821,7 @@ const ScenarioGraphCanvas = React.memo(function ScenarioGraphCanvas({
                 top: node.y,
                 width: node.width,
                 zIndex: dragging === node.id ? 100 : 1,
+                pointerEvents: 'auto',
               }}
             >
               {/* Floating/Invalid warning */}
@@ -1970,6 +2021,7 @@ const ScenarioGraphCanvas = React.memo(function ScenarioGraphCanvas({
             </Box>
           );
         })}
+        </Box>{/* End of pannable content container */}
 
         {/* Connection Mode Banner */}
         {connectingFrom && (
@@ -2049,6 +2101,22 @@ const ScenarioGraphCanvas = React.memo(function ScenarioGraphCanvas({
             gap: 1,
           }}
         >
+          {/* Reset pan button - always visible when panned */}
+          {(panOffset.x !== 0 || panOffset.y !== 0) && (
+            <Tooltip title="Reset pan (center view)">
+              <IconButton
+                onClick={handleResetPan}
+                size="small"
+                sx={{
+                  backgroundColor: 'white',
+                  border: '1px solid #e5e7eb',
+                  '&:hover': { backgroundColor: '#f0f9ff' },
+                }}
+              >
+                <GpsFixedIcon fontSize="small" sx={{ color: '#3b82f6' }} />
+              </IconButton>
+            </Tooltip>
+          )}
           {selectedNode && !connectingFrom && (
             <>
               {!nodes.find(n => n.id === selectedNode)?.isStart && (
@@ -2129,22 +2197,20 @@ const ScenarioGraphCanvas = React.memo(function ScenarioGraphCanvas({
               bottom: 16,
               left: '50%',
               transform: 'translateX(-50%)',
-              backgroundColor: 'rgba(100, 116, 139, 0.85)',
+              backgroundColor: 'rgba(100, 116, 139, 0.9)',
               color: 'white',
               px: 2,
-              py: 1,
-              borderRadius: '12px',
-              fontSize: 11,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 1,
+              py: 0.75,
+              borderRadius: '20px',
+              fontSize: 12,
+              fontWeight: 500,
+              whiteSpace: 'nowrap',
             }}
           >
-            <Box sx={{ 
-              width: 10, height: 10, borderRadius: '50%', 
-              backgroundColor: '#6366f1', border: '1px solid white' 
-            }} />
-            Click "+" to connect agents
+            <span style={{ marginRight: 6 }}>⊕</span>
+            Click "+" to connect
+            <span style={{ margin: '0 8px', opacity: 0.5 }}>•</span>
+            Drag to pan
           </Box>
         )}
       </Box>
@@ -2152,10 +2218,11 @@ const ScenarioGraphCanvas = React.memo(function ScenarioGraphCanvas({
       {/* Right sidebar - Stats & Handoffs */}
       <Box
         sx={{
-          width: 220,
+          width: 180,
+          minWidth: 180,
           borderLeft: '1px solid #e5e7eb',
           backgroundColor: '#fff',
-          p: 2,
+          p: 1.5,
           overflowY: 'auto',
         }}
       >
