@@ -33,7 +33,7 @@ import HubIcon from '@mui/icons-material/Hub';
 import EditIcon from '@mui/icons-material/Edit';
 
 import AgentBuilderContent from './AgentBuilderContent.jsx';
-import ScenarioBuilder from './ScenarioBuilder.jsx';
+import ScenarioBuilderGraph from './ScenarioBuilderGraph.jsx';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STYLES
@@ -179,13 +179,6 @@ export default function AgentScenarioBuilder({
   const isAgentEditMode = agentEditMode || editingAgentFromScenario !== null;
   const effectiveAgentSessionId = editingAgentSessionId || sessionId;
 
-  const getModeTitle = () => {
-    if (mode === 'agents') {
-      return agentEditMode ? 'Editing Session Agent' : 'Create Custom Agent';
-    }
-    return scenarioEditMode ? 'Editing Session Scenario' : 'Create Custom Scenario';
-  };
-
   const getModeDescription = () => {
     if (mode === 'agents') {
       return 'Configure AI agents with custom prompts, tools, and voice settings';
@@ -304,7 +297,7 @@ export default function AgentScenarioBuilder({
             editMode={isAgentEditMode}
           />
         ) : (
-          <ScenarioBuilder
+          <ScenarioBuilderGraph
             key={`scenario-builder-${sessionId}-${refreshKey}`}
             sessionId={sessionId}
             onScenarioCreated={onScenarioCreated}

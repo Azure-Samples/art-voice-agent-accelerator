@@ -291,10 +291,6 @@ class LiveOrchestrator:
         # Initialize HandoffService for unified handoff resolution
         self._handoff_service: HandoffService | None = None
 
-        # Track TTS TTFB (Time To First Byte) - flag for first audio delta
-        self._tts_ttfb_recorded: bool = False
-        self._turn_start_time: float | None = None
-
         # Sync state from MemoManager if available
         if self._memo_manager:
             self._sync_from_memo_manager()
@@ -956,15 +952,6 @@ class LiveOrchestrator:
             await self._handle_transcription_delta(event)
 
         elif et == ServerEventType.RESPONSE_AUDIO_DELTA:
-            # Track TTS TTFB (Time To First Byte) when we receive the first audio delta
-            if not self._tts_ttfb_recorded and self._turn_start_time:
-                tts_ttfb_ms = (time.time() - self._turn_start_time) * 1000
-                self._tts_ttfb_recorded = True
-
-                logger.info(
-                    f"📊 TTS TTFB recorded: {tts_ttfb_ms:.2f}ms | session={getattr(self.messenger, 'session_id', 'unknown')} turn={self._metrics.turn_count}"
-                )
-
             if self.audio:
                 await self.audio.queue_audio(event.delta)
 
@@ -1078,23 +1065,19 @@ class LiveOrchestrator:
             self._last_user_message = user_text
             # Add to bounded history for better handoff context
             self._user_message_history.append(user_text)
-
-            # Reset TTS TTFB tracking for new turn and mark turn start
-            self._tts_ttfb_recorded = False
-            self._turn_start_time = time.time()
-
+            
             # Persist user turn to MemoManager for session continuity (fast, local)
             if self._memo_manager:
                 try:
                     self._memo_manager.append_to_history(self.active, "user", user_text)
                 except Exception:
                     logger.debug("Failed to persist user turn to history", exc_info=True)
-
+            
             # Mark that we need a session update (will be done in throttled fashion)
             # Don't call _update_session_context here - it's too slow for the hot path
             # The response_done handler will do a throttled update
             self._pending_session_update = True
-
+            
             await self._maybe_trigger_call_center_transfer(user_transcript)
 
     async def _handle_transcription_delta(self, event) -> None:
@@ -1132,7 +1115,6 @@ class LiveOrchestrator:
                     ttft_ms,
                     self.active,
                 )
-
 
         if transcript_delta and self.messenger:
             response_id = self._response_id_from_event(event)
@@ -1189,7 +1171,6 @@ class LiveOrchestrator:
             self._active_response_id = None
 
         self._emit_model_metrics(event)
-
 
         # Sync state to MemoManager in background to avoid hot path latency
         self._schedule_background_sync()

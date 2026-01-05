@@ -380,6 +380,28 @@ handoff_fnol_agent_schema: dict[str, Any] = {
     },
 }
 
+handoff_claims_specialist_schema: dict[str, Any] = {
+    "name": "handoff_claims_specialist",
+    "description": (
+        "Transfer to Claims Specialist for claims processing and management. "
+        "Use when customer needs help with filing, tracking, or managing insurance claims. "
+        "For new claims, existing claim status, or claims-related questions."
+        + SILENT_HANDOFF_NOTE
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "client_id": {"type": "string", "description": "Customer identifier from verify_client_identity"},
+            "caller_name": {"type": "string", "description": "Customer name from verify_client_identity"},
+            "reason": {
+                "type": "string",
+                "description": "Reason for transfer (new_claim, claim_status, claim_question)",
+            },
+            "incident_summary": {"type": "string", "description": "Brief summary of the incident or claim inquiry"},
+        },
+        "required": ["client_id", "caller_name"],
+    },
+}
 
 
 handoff_subro_agent_schema: dict[str, Any] = {
@@ -977,6 +999,14 @@ register_tool(
     "handoff_fnol_agent",
     handoff_fnol_agent_schema,
     handoff_fnol_agent,
+    is_handoff=True,
+    tags={"handoff", "insurance", "claims"},
+)
+
+register_tool(
+    "handoff_claims_specialist",
+    handoff_claims_specialist_schema,
+    handoff_claims_specialist,
     is_handoff=True,
     tags={"handoff", "insurance", "claims"},
 )

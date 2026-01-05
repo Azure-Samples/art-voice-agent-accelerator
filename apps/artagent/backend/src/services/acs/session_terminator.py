@@ -60,9 +60,15 @@ async def _hangup_acs_call(
         try:
             logger.debug(f"Attempting ACS hangup for call {call_connection_id}, attempt {i}")
 
-            # Try to hangup the call with timeout
+            # hang_up is a synchronous SDK method - run in executor to avoid blocking
+            loop = asyncio.get_running_loop()
             await asyncio.wait_for(
-                acs_client.get_call_connection(call_connection_id).hang_up(is_for_everyone=True),
+                loop.run_in_executor(
+                    None,
+                    lambda: acs_client.get_call_connection(call_connection_id).hang_up(
+                        is_for_everyone=True
+                    ),
+                ),
                 timeout=timeout_s,
             )
             logger.info(

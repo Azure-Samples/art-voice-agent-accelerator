@@ -105,13 +105,55 @@ class VoiceConfig:
 
 @dataclass
 class ModelConfig:
-    """Model configuration for LLM."""
+    """Model configuration for LLM with support for both /chat/completions and /responses endpoints."""
 
+    # Core identification
     deployment_id: str = "gpt-4o"
     name: str = "gpt-4o"  # Alias for deployment_id
-    temperature: float = 0.7
-    top_p: float = 0.9
-    max_tokens: int = 4096
+
+    # Legacy parameters (chat.completions) - can be None for models that don't support them
+    temperature: float | None = 0.7
+    top_p: float | None = 0.9
+    max_tokens: int | None = 4096
+
+    # New sampling parameters (responses endpoint)
+    min_p: float | None = None  # Minimum probability threshold
+    typical_p: float | None = None  # Typical sampling parameter
+
+    # Reasoning/thinking parameters (o1/o3/o4 models)
+    reasoning_effort: str | None = None  # "low", "medium", "high"
+    include_reasoning: bool = False  # Include reasoning tokens in response
+    max_completion_tokens: int | None = None  # For reasoning models (replaces max_tokens)
+
+    # Verbosity and output control
+    verbosity: int = 0  # Output verbosity level (0=minimal/realtime, 1=standard, 2=detailed)
+    store: bool | None = None  # Whether to store the response for later retrieval
+    metadata: dict[str, Any] | None = None  # Custom metadata for the request
+
+    # Response format enhancements
+    response_format: dict[str, Any] | None = None  # Enhanced JSON schema support
+
+    # Endpoint selection
+    endpoint_preference: str = "auto"  # "auto", "chat", "responses"
+    api_version: str | None = "v1"  # Responses API version (optional override)
+
+    # Model metadata (auto-detected)
+    model_family: str | None = None  # Auto-detect from deployment_id
+
+    def _detect_model_family(self) -> str:
+        """Auto-detect model family from deployment_id."""
+        deployment = self.deployment_id.lower()
+        if "o1" in deployment:
+            return "o1"
+        if "o3" in deployment:
+            return "o3"
+        if "o4" in deployment:
+            return "o4"
+        if "gpt-4" in deployment:
+            return "gpt-4"
+        if "gpt-5" in deployment:
+            return "gpt-5"
+        return "unknown"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ModelConfig:
@@ -119,23 +161,113 @@ class ModelConfig:
         if not data:
             return cls()
         deployment_id = data.get("deployment_id", data.get("name", cls.deployment_id))
-        return cls(
+
+        # Parse legacy parameters (allow None)
+        temperature = data.get("temperature")
+        if temperature is not None:
+            temperature = float(temperature)
+        else:
+            temperature = cls.temperature
+
+        top_p = data.get("top_p")
+        if top_p is not None:
+            top_p = float(top_p)
+        else:
+            top_p = cls.top_p
+
+        max_tokens = data.get("max_tokens")
+        if max_tokens is not None:
+            max_tokens = int(max_tokens)
+        else:
+            max_tokens = cls.max_tokens
+
+        # Parse new parameters (default to None if not present)
+        min_p = data.get("min_p")
+        if min_p is not None:
+            min_p = float(min_p)
+
+        typical_p = data.get("typical_p")
+        if typical_p is not None:
+            typical_p = float(typical_p)
+
+        max_completion_tokens = data.get("max_completion_tokens")
+        if max_completion_tokens is not None:
+            max_completion_tokens = int(max_completion_tokens)
+
+        # Parse verbosity parameter (default to 0 for real-time performance)
+        verbosity = data.get("verbosity", 0)
+        if verbosity is not None:
+            verbosity = int(verbosity)
+
+        # Parse store parameter
+        store = data.get("store")
+        if store is not None:
+            store = bool(store)
+
+        # Create instance
+        instance = cls(
             deployment_id=deployment_id,
             name=data.get("name", deployment_id),
-            temperature=float(data.get("temperature", cls.temperature)),
-            top_p=float(data.get("top_p", cls.top_p)),
-            max_tokens=int(data.get("max_tokens", cls.max_tokens)),
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            min_p=min_p,
+            typical_p=typical_p,
+            reasoning_effort=data.get("reasoning_effort"),
+            include_reasoning=bool(data.get("include_reasoning", False)),
+            max_completion_tokens=max_completion_tokens,
+            verbosity=verbosity,
+            store=store,
+            metadata=data.get("metadata"),
+            response_format=data.get("response_format"),
+            endpoint_preference=data.get("endpoint_preference", "auto"),
+            api_version=data.get("api_version", "v1"),
+            model_family=data.get("model_family"),
         )
+
+        # Auto-detect model family if not provided
+        if not instance.model_family:
+            instance.model_family = instance._detect_model_family()
+
+        return instance
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dict for serialization."""
-        return {
+        result = {
             "deployment_id": self.deployment_id,
             "name": self.name,
             "temperature": self.temperature,
             "top_p": self.top_p,
             "max_tokens": self.max_tokens,
         }
+
+        # Add new parameters only if they're set
+        if self.min_p is not None:
+            result["min_p"] = self.min_p
+        if self.typical_p is not None:
+            result["typical_p"] = self.typical_p
+        if self.reasoning_effort is not None:
+            result["reasoning_effort"] = self.reasoning_effort
+        if self.include_reasoning:
+            result["include_reasoning"] = self.include_reasoning
+        if self.max_completion_tokens is not None:
+            result["max_completion_tokens"] = self.max_completion_tokens
+        if self.verbosity != 0:  # Only serialize if non-default
+            result["verbosity"] = self.verbosity
+        if self.store is not None:
+            result["store"] = self.store
+        if self.metadata is not None:
+            result["metadata"] = self.metadata
+        if self.response_format is not None:
+            result["response_format"] = self.response_format
+        if self.endpoint_preference != "auto":
+            result["endpoint_preference"] = self.endpoint_preference
+        if self.api_version:
+            result["api_version"] = self.api_version
+        if self.model_family:
+            result["model_family"] = self.model_family
+
+        return result
 
 
 @dataclass
@@ -529,15 +661,20 @@ class UnifiedAgent:
         Get the appropriate model config for the given orchestration mode.
         
         Args:
-            mode: "cascade" or "voicelive"
+            mode: "cascade", "media" (alias for cascade), "voicelive", or "realtime" (alias for voicelive)
             
         Returns:
             The mode-specific model if defined, otherwise falls back to self.model
         """
-        if mode == "cascade" and self.cascade_model is not None:
-            return self.cascade_model
-        if mode == "voicelive" and self.voicelive_model is not None:
-            return self.voicelive_model
+        # Normalize mode aliases
+        if mode in ("cascade", "media"):
+            if self.cascade_model is not None:
+                return self.cascade_model
+        elif mode in ("voicelive", "realtime"):
+            if self.voicelive_model is not None:
+                return self.voicelive_model
+        
+        # Fall back to default model
         return self.model
 
     # ═══════════════════════════════════════════════════════════════════

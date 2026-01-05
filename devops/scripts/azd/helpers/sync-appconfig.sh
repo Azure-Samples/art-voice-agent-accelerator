@@ -18,11 +18,21 @@ readonly DEFAULT_CONFIG="$SYNC_SCRIPT_DIR/../../../../config/appconfig.json"
 # Logging
 # ============================================================================
 
-log()     { echo "│ $*"; }
-info()    { echo "│ ℹ️  $*"; }
-success() { echo "│ ✅ $*"; }
-warn()    { echo "│ ⚠️  $*"; }
-fail()    { echo "│ ❌ $*" >&2; }
+if [[ -z "${BLUE+x}" ]]; then BLUE=$'\033[0;34m'; fi
+if [[ -z "${GREEN+x}" ]]; then GREEN=$'\033[0;32m'; fi
+if [[ -z "${GREEN_BOLD+x}" ]]; then GREEN_BOLD=$'\033[1;32m'; fi
+if [[ -z "${YELLOW+x}" ]]; then YELLOW=$'\033[1;33m'; fi
+if [[ -z "${RED+x}" ]]; then RED=$'\033[0;31m'; fi
+if [[ -z "${DIM+x}" ]]; then DIM=$'\033[2m'; fi
+if [[ -z "${NC+x}" ]]; then NC=$'\033[0m'; fi
+readonly BLUE GREEN GREEN_BOLD YELLOW RED DIM NC
+
+log()          { printf '│ %s%s%s\n' "$DIM" "$*" "$NC"; }
+info()         { printf '│ %s%s%s\n' "$BLUE" "$*" "$NC"; }
+success()      { printf '│ %s✔%s %s\n' "$GREEN" "$NC" "$*"; }
+phase_success(){ printf '│ %s✔ %s%s\n' "$GREEN_BOLD" "$*" "$NC"; }
+warn()         { printf '│ %s⚠%s  %s\n' "$YELLOW" "$NC" "$*"; }
+fail()         { printf '│ %s✖%s %s\n' "$RED" "$NC" "$*" >&2; }
 
 # ============================================================================
 # Parse Arguments

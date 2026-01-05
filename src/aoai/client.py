@@ -288,10 +288,58 @@ async def warm_openai_connection(
         return False
 
 
+def test_responses_endpoint(deployment: str, prompt: str = "test") -> bool:
+    """
+    Test if the /responses endpoint is available for a deployment.
+
+    This function attempts to call the /responses endpoint with a minimal
+    prompt to verify availability. Useful for checking if a model supports
+    the new responses API before attempting to use it.
+
+    Args:
+        deployment: Azure OpenAI deployment name to test
+        prompt: Test prompt to send (default: "test")
+
+    Returns:
+        True if /responses endpoint is available and working, False otherwise
+
+    Example:
+        >>> if test_responses_endpoint("gpt-4o"):
+        ...     logger.info("Responses endpoint available")
+        ... else:
+        ...     logger.warning("Falling back to chat completions")
+    """
+    try:
+        aoai_client = get_client()
+        response = aoai_client.responses.create(
+            model=deployment,
+            input=prompt,
+        )
+        logger.info(
+            "Responses endpoint test succeeded",
+            extra={"deployment": deployment, "response_id": getattr(response, "id", "unknown")},
+        )
+        return True
+    except AttributeError as e:
+        # responses.create doesn't exist in this SDK version
+        logger.warning(
+            "Responses endpoint not available (SDK AttributeError)",
+            extra={"deployment": deployment, "error": str(e)},
+        )
+        return False
+    except Exception as e:
+        logger.warning(
+            "Responses endpoint test failed",
+            extra={"deployment": deployment, "error_type": type(e).__name__, "error": str(e)},
+        )
+        return False
+
+
 __all__ = [
     "client",
     "get_client",
     "create_azure_openai_client",
     "_init_client",
     "warm_openai_connection",
+    "test_responses_endpoint",
 ]

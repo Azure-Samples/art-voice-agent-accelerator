@@ -346,7 +346,7 @@ await mgr.persist()
 ```
 
 !!! note "Future Use"
-    `SessionAgentManager` is not yet integrated into production orchestrators.
+    `SessionAgentManager` is not yet integrated into Custom Cascade Orchestrators.
     It's designed for A/B testing and admin UI prompt tuning.
 
 ---

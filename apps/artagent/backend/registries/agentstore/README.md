@@ -123,7 +123,7 @@ agents = discover_agents()
 
 ## 🔮 Session Manager (Future Use)
 
-> **Note:** The `SessionAgentManager` is designed for future use and is **not currently integrated** into the production orchestrators. It provides infrastructure for runtime agent modification.
+> **Note:** The `SessionAgentManager` is designed for future use and is **not currently integrated** into the Custom Cascade Orchestrators. It provides infrastructure for runtime agent modification.
 
 ### Purpose
 

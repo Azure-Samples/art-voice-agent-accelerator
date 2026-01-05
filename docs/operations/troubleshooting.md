@@ -185,6 +185,18 @@
     2.  **Check CORS Configuration:** Ensure your frontend's origin is allowed in the backend's CORS settings, especially for WebSocket upgrade headers.
     3.  **Monitor Connection Lifecycle:** Review backend logs for WebSocket connection and disconnection events to identify patterns.
 
+!!! question "Problem: ACS audio sounds slow, distorted, or underwater"
+    **Symptoms:**
+    - Agent voice plays at half speed or sounds distorted during phone calls.
+    - Audio quality is fine in browser but poor on telephone.
+    - Logs show chunk size mismatches.
+
+    **Solutions:**
+    1.  **Verify Audio Chunk Size:** Check logs for `chunk_size=1280` for ACS calls (16kHz). If you see `chunk_size=640`, the chunk size is incorrect.
+    2.  **Check TTS Implementation:** Ensure you're using the current TTS module from `apps.artagent.backend.voice.tts` (not deprecated modules).
+    3.  **Review Audio Pacing:** ACS requires 40ms pacing between chunks. Verify in `voice/tts/playback.py` that blocking mode uses `await asyncio.sleep(0.04)`.
+    4.  **Test with Simple Phrase:** Make a test call and have the agent speak a short phrase. If it sounds slow, the chunk size is likely incorrect.
+
 ---
 
 ## :material-api: Backend & API Issues

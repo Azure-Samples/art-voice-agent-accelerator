@@ -68,9 +68,12 @@ from apps.artagent.backend.voice.speech_cascade.handler import (
 )
 from apps.artagent.backend.voice.messaging import (
     BrowserBargeInController,
+    make_event_envelope,
     send_user_partial_transcript,
     send_user_transcript,
     make_assistant_envelope,
+    make_assistant_streaming_envelope,
+    send_session_envelope,
 )
 
 # Orchestration imports - session_agents OK, route_turn imported lazily to avoid circular
@@ -80,7 +83,6 @@ from apps.artagent.backend.voice.shared.config_resolver import resolve_orchestra
 # Pool management
 from src.pools.session_manager import SessionContext
 from src.stateful.state_managment import MemoManager
-from src.tools.latency_tool import LatencyTool
 from src.speech.speech_recognizer import StreamingSpeechRecognizerFromBytes
 from src.enums.stream_modes import StreamMode
 from config import ACS_STREAMING_MODE, GREETING, STOP_WORDS
@@ -100,9 +102,23 @@ tracer = trace.get_tracer(__name__)
 
 RMS_SILENCE_THRESHOLD: int = 300
 SILENCE_GAP_MS: int = 500
+
+# Browser transport constants
 BROWSER_PCM_SAMPLE_RATE: int = 24000
 BROWSER_SPEECH_RMS_THRESHOLD: int = 200
 BROWSER_SILENCE_GAP_SECONDS: float = 0.5
+INACTIVITY_TIMEOUT_S: float = 300.0
+INACTIVITY_CHECK_INTERVAL_S: float = 5.0
+
+# Aliases for backward compatibility with MediaHandler imports
+VOICE_LIVE_PCM_SAMPLE_RATE = BROWSER_PCM_SAMPLE_RATE
+VOICE_LIVE_SPEECH_RMS_THRESHOLD = BROWSER_SPEECH_RMS_THRESHOLD
+VOICE_LIVE_SILENCE_GAP_SECONDS = BROWSER_SILENCE_GAP_SECONDS
+
+# VoiceLive SDK transport constants
+VOICE_LIVE_PCM_SAMPLE_RATE: int = 24000
+VOICE_LIVE_SPEECH_RMS_THRESHOLD: int = 200
+VOICE_LIVE_SILENCE_GAP_SECONDS: float = 0.5
 
 
 class ACSMessageKind:
@@ -221,6 +237,9 @@ class VoiceHandler:
         self._running = False
         self._stopped = False
         self._metadata_received = False  # ACS only
+        self._last_activity_ts = time.monotonic()
+        self._idle_task: asyncio.Task | None = None
+        self._idle_disconnect_in_progress = False
 
         # Task tracking
         self._orchestration_tasks: set = set()
@@ -300,9 +319,6 @@ class VoiceHandler:
             config.transport.value,
         )
 
-        # Create latency tool
-        latency_tool = LatencyTool(memory_manager)
-
         # Get event loop
         try:
             event_loop = asyncio.get_running_loop()
@@ -323,7 +339,6 @@ class VoiceHandler:
             tts_tier=tts_tier,
             stt_tier=stt_tier,
             memo_manager=memory_manager,
-            latency_tool=latency_tool,
             session_context=SessionContext(
                 session_id=config.session_id,
                 memory_manager=memory_manager,
@@ -352,7 +367,7 @@ class VoiceHandler:
         handler._greeting_text = await handler._derive_greeting()
 
         # Create TTS Playback
-        handler._tts = TTSPlayback(context, app_state, latency_tool=latency_tool)
+        handler._tts = TTSPlayback(context, app_state)
         context.tts_playback = handler._tts
 
         # Set active agent on TTS playback to ensure greetings use the correct voice
@@ -386,15 +401,15 @@ class VoiceHandler:
             recognizer=stt_client,
             speech_queue=handler._speech_queue,
             thread_bridge=handler._thread_bridge,
-            barge_in_controller=handler._barge_in_controller,
-            latency_tool=latency_tool,
+            barge_in_handler=handler._barge_in_controller.handle_barge_in,
         )
 
         # Store reference in context for external access
         context.speech_cascade = handler  # Handler IS the speech cascade now
 
-        # Backward compatibility - expose on websocket.state
+        # Backward compatibility - expose on websocket.state for orchestrator
         config.websocket.state.speech_cascade = handler
+        config.websocket.state.tts_playback = handler._tts
 
         # Persist memory
         await memory_manager.persist_to_redis_async(redis_mgr)
@@ -424,13 +439,28 @@ class VoiceHandler:
             return
 
         self._running = True
+        self._start_idle_monitor()
 
-        # Start threads
+        # Start STT thread (follows SpeechCascadeHandler pattern)
         if self._stt_thread:
-            self._stt_thread.start()
+            # Prepare and start the background thread
+            self._stt_thread.prepare_thread()
+
+            # Wait for thread to be ready
+            for _ in range(10):
+                if self._stt_thread.thread_running:
+                    break
+                await asyncio.sleep(0.05)
+
+            # Start recognizer in executor
+            await asyncio.get_running_loop().run_in_executor(
+                None, self._stt_thread.start_recognizer
+            )
 
         if self._route_turn_thread:
-            self._route_turn_thread.start()
+            await self._route_turn_thread.start()
+
+        await self._emit_cascade_connected()
 
         # Queue greeting
         if self._greeting_text and not self._greeting_queued:
@@ -485,6 +515,118 @@ class VoiceHandler:
         finally:
             await self.stop()
 
+    def _touch_activity(self) -> None:
+        """Record recent user activity for idle timeout tracking."""
+        self._last_activity_ts = time.monotonic()
+
+    async def _emit_cascade_connected(self) -> None:
+        """Emit a cascade readiness event to session listeners."""
+        if self._transport != TransportType.BROWSER:
+            return
+        ws = self._context.websocket
+        if not ws:
+            return
+        try:
+            envelope = make_event_envelope(
+                event_type="speech_cascade_connected",
+                event_data={
+                    "message": "Custom cascade orchestration connected",
+                    "streaming_type": "speech_cascade",
+                },
+                sender="System",
+                topic="session",
+                session_id=self._session_id,
+                call_id=self._context.call_connection_id,
+            )
+            await send_session_envelope(
+                ws,
+                envelope,
+                session_id=self._session_id,
+                conn_id=self._context.conn_id,
+                event_label="speech_cascade_connected",
+                broadcast_only=False,
+            )
+        except Exception as exc:
+            logger.debug(
+                "[%s] Unable to emit cascade ready event: %s",
+                self._session_short,
+                exc,
+            )
+
+    def _start_idle_monitor(self) -> None:
+        """Start background inactivity monitor."""
+        if self._idle_task and not self._idle_task.done():
+            return
+        self._last_activity_ts = time.monotonic()
+        self._idle_disconnect_in_progress = False
+        self._idle_task = asyncio.create_task(self._monitor_inactivity())
+
+    async def _cancel_idle_monitor(self) -> None:
+        """Stop background inactivity monitor."""
+        task = self._idle_task
+        if not task or task.done():
+            self._idle_task = None
+            return
+        task.cancel()
+        if task is asyncio.current_task():
+            self._idle_task = None
+            return
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        self._idle_task = None
+
+    async def _monitor_inactivity(self) -> None:
+        """Watch for idle timeout and terminate session when exceeded."""
+        try:
+            while self._running and not self._stopped:
+                await asyncio.sleep(INACTIVITY_CHECK_INTERVAL_S)
+                if not self._running or self._stopped:
+                    break
+                idle_for = time.monotonic() - self._last_activity_ts
+                if idle_for >= INACTIVITY_TIMEOUT_S:
+                    if self._idle_disconnect_in_progress:
+                        break
+                    self._idle_disconnect_in_progress = True
+                    logger.info(
+                        "[%s] Idle timeout reached (%.1fs), terminating session",
+                        self._session_short,
+                        idle_for,
+                    )
+                    await self._terminate_for_inactivity()
+                    break
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.warning("[%s] Idle monitor error: %s", self._session_short, exc)
+
+    async def _terminate_for_inactivity(self) -> None:
+        """Terminate session after inactivity timeout."""
+        self._running = False
+        ws = self._context.websocket
+        if not ws:
+            return
+        try:
+            from apps.artagent.backend.src.services.acs.session_terminator import (
+                TerminationReason,
+                terminate_session,
+            )
+
+            await terminate_session(
+                ws,
+                is_acs=self._transport == TransportType.ACS,
+                call_connection_id=self._context.call_connection_id,
+                reason=TerminationReason.IDLE_TIMEOUT,
+            )
+        except Exception as exc:
+            logger.warning("[%s] Idle termination failed: %s", self._session_short, exc)
+            try:
+                if ws.application_state == WebSocketState.CONNECTED:
+                    await ws.close(code=1000, reason="idle_timeout")
+            except Exception as close_exc:
+                logger.debug("[%s] Idle close failed: %s", self._session_short, close_exc)
+
     async def stop(self) -> None:
         """Stop speech processing and release resources."""
         if self._stopped:
@@ -492,6 +634,7 @@ class VoiceHandler:
 
         self._stopped = True
         self._running = False
+        await self._cancel_idle_monitor()
 
         logger.info("[%s] Stopping VoiceHandler", self._session_short)
 
@@ -513,15 +656,17 @@ class VoiceHandler:
 
         if self._route_turn_thread:
             try:
-                self._route_turn_thread.stop()
+                await self._route_turn_thread.stop()
             except Exception as e:
                 logger.error("[%s] Route turn thread stop error: %s", self._session_short, e)
 
         # Release pools
         session_key = self._context.call_connection_id
         try:
-            await self._app_state.tts_pool.release(session_key)
-            await self._app_state.stt_pool.release(session_key)
+            tts_client = self._context.tts_client
+            stt_client = self._context.stt_client
+            await self._app_state.tts_pool.release_for_session(session_key, tts_client)
+            await self._app_state.stt_pool.release_for_session(session_key, stt_client)
             logger.info("[%s] Released TTS/STT pools", self._session_short)
         except Exception as e:
             logger.error("[%s] Pool release error: %s", self._session_short, e)
@@ -549,6 +694,7 @@ class VoiceHandler:
         # Check for barge-in (RMS-based)
         rms = pcm16le_rms(audio_bytes)
         if rms > BROWSER_SPEECH_RMS_THRESHOLD:
+            self._touch_activity()
             if self._browser_barge_in:
                 await self._browser_barge_in.on_speech_detected()
 
@@ -556,7 +702,15 @@ class VoiceHandler:
         self.write_audio(audio_bytes)
 
     async def _handle_browser_message(self, text: str) -> None:
-        """Process JSON control message from browser."""
+        """Process text message from browser.
+        
+        Handles:
+        - JSON control messages (e.g., {"type": "stop"})
+        - Plain text as user input (sent to orchestrator)
+        """
+        if text and text.strip():
+            self._touch_activity()
+        
         try:
             msg = json.loads(text)
             msg_type = msg.get("type")
@@ -566,7 +720,47 @@ class VoiceHandler:
                 self._running = False
 
         except json.JSONDecodeError:
-            logger.warning("[%s] Invalid JSON: %s", self._session_short, text[:100])
+            # Plain text = user input, route to orchestrator
+            if text and text.strip():
+                await self.send_text_message(text.strip())
+
+    async def send_text_message(self, text: str) -> None:
+        """Send a text message from the user to the orchestrator.
+        
+        This is the text input equivalent of speech recognition.
+        Implements barge-in: cancels any ongoing TTS playback or orchestration.
+        
+        Note: route_turn's on_tts_chunk callback handles:
+        - Emitting assistant_streaming envelopes to UI
+        - Playing TTS via play_tts_immediate
+        So we don't need to call those here.
+        
+        Args:
+            text: User's text message.
+        """
+        if not text or not text.strip():
+            return
+        
+        text = text.strip()
+        logger.info("[%s] User text input: %s", self._session_short, text[:100])
+        
+        # Always trigger barge-in for text input - cancel any pending TTS or orchestration
+        logger.info("[%s] Text barge-in triggered", self._session_short)
+        await self.handle_barge_in()
+        
+        # Send user transcript envelope to UI
+        await self._on_user_transcript(text)
+        
+        # Route to orchestrator
+        # Note: route_turn's on_tts_chunk callback handles UI envelopes and TTS playback
+        try:
+            orchestrator = self._create_orchestrator_wrapper()
+            memo_manager = self._context.memo_manager
+            
+            await orchestrator(memo_manager, text)
+            # Response is handled by route_turn's on_tts_chunk callback
+        except Exception as e:
+            logger.error("[%s] Text message orchestration error: %s", self._session_short, e, exc_info=True)
 
     async def handle_media_message(self, message: dict) -> None:
         """
@@ -582,8 +776,11 @@ class VoiceHandler:
             logger.info("[%s] ACS metadata received", self._session_short)
 
         elif kind == ACSMessageKind.AUDIO_DATA:
-            audio_b64 = message.get("audioData", {}).get("data")
+            audio_section = message.get("audioData", {}) or {}
+            audio_b64 = audio_section.get("data")
             if audio_b64:
+                if not audio_section.get("silent", False):
+                    self._touch_activity()
                 audio_bytes = base64.b64decode(audio_b64)
                 self.write_audio(audio_bytes)
 
@@ -592,6 +789,8 @@ class VoiceHandler:
 
         elif kind == ACSMessageKind.DTMF_DATA:
             tone = message.get("dtmfData", {}).get("tone")
+            if tone:
+                self._touch_activity()
             logger.info("[%s] DTMF tone: %s", self._session_short, tone)
 
     # =========================================================================
@@ -604,14 +803,44 @@ class VoiceHandler:
 
         Single implementation that:
         1. Signals TTS cancellation
-        2. Cancels pending orchestration tasks
-        3. Notifies thread bridge
+        2. Sends audio_stop to frontend (clears browser audio queue)
+        3. Cancels pending orchestration tasks
+        4. Notifies thread bridge
         """
         logger.info("[%s] Barge-in triggered", self._session_short)
 
         # Signal TTS cancellation
         if self._context.cancel_event:
             self._context.cancel_event.set()
+            logger.debug("[%s] Cancel event set", self._session_short)
+
+        # Stop TTS playback
+        if self._tts:
+            self._tts.cancel()
+            logger.debug("[%s] TTS cancel() called", self._session_short)
+
+        # Send audio_stop to frontend to clear audio queue
+        ws = self._context.websocket
+        transport = self._context.transport
+        logger.debug("[%s] Barge-in: ws=%s, transport=%s", self._session_short, ws is not None, transport)
+        if ws and transport == TransportType.BROWSER:
+            stop_audio_msg = {
+                "type": "control",
+                "action": "audio_stop",
+                "reason": "barge_in",
+                "session_id": self._context.session_id,
+            }
+            try:
+                await send_session_envelope(
+                    ws,
+                    stop_audio_msg,
+                    session_id=self._context.session_id,
+                    conn_id=self._context.conn_id,
+                    event_label="barge_in_audio_stop",
+                )
+                logger.info("[%s] Sent audio_stop to browser", self._session_short)
+            except Exception as e:
+                logger.warning("[%s] Failed to send audio_stop: %s", self._session_short, e)
 
         # Cancel current TTS task
         if self._current_tts_task and not self._current_tts_task.done():
@@ -624,8 +853,8 @@ class VoiceHandler:
                 task.cancel()
         self._orchestration_tasks.clear()
 
-        # Reset cancel event for next turn
-        await asyncio.sleep(0.05)  # Brief delay for cleanup
+        # Reset cancel event for next turn (after longer delay for TTS to see it)
+        await asyncio.sleep(0.2)
         if self._context.cancel_event:
             self._context.cancel_event.clear()
 
@@ -638,14 +867,23 @@ class VoiceHandler:
     # =========================================================================
 
     async def _on_greeting(self, event: SpeechEvent) -> None:
-        """Play greeting via TTS."""
+        """Play greeting via TTS and emit to UI."""
         if self._tts and event.text:
             # Suppress barge-in during greeting
             if self._thread_bridge:
                 self._thread_bridge.suppress_barge_in()
 
             try:
-                await self._tts.speak(event.text, is_greeting=True)
+                # Emit greeting envelope to UI
+                await self._emit_to_ui(event.text, is_greeting=True)
+                # Play audio
+                await self._tts.speak(
+                    event.text,
+                    is_greeting=True,
+                    voice_name=event.voice_name,
+                    voice_style=event.voice_style,
+                    voice_rate=event.voice_rate,
+                )
             finally:
                 if self._thread_bridge:
                     self._thread_bridge.allow_barge_in()
@@ -653,13 +891,26 @@ class VoiceHandler:
     async def _on_announcement(self, event: SpeechEvent) -> None:
         """Play announcement via TTS."""
         if self._tts and event.text:
+            await self._emit_to_ui(event.text, is_greeting=False)
             await self._tts.speak(event.text)
 
     async def _on_user_transcript(self, text: str) -> None:
         """Handle final user transcript."""
         ws = self._context.websocket
-        if ws:
-            await send_user_transcript(ws, text)
+        if not ws:
+            return
+
+        logger.info("[%s] Sending user transcript envelope: %s", self._session_short, text[:50] if text else "")
+        try:
+            # Use send_user_transcript with broadcast_only - broadcasts to session
+            await send_user_transcript(
+                ws,
+                text,
+                session_id=self._session_id,
+                broadcast_only=True,
+            )
+        except Exception as e:
+            logger.warning("[%s] Transcript emit failed: %s", self._session_short, e)
 
     async def _on_partial_transcript(self, text: str, language: str, speaker: str | None) -> None:
         """Handle partial (interim) transcript."""
@@ -667,10 +918,127 @@ class VoiceHandler:
         if ws:
             await send_user_partial_transcript(ws, text)
 
-    async def _on_tts_request(self, text: str, event_type: SpeechEventType) -> None:
+    async def _on_tts_request(
+        self,
+        text: str,
+        event_type: SpeechEventType,
+        *,
+        voice_name: str | None = None,
+        voice_style: str | None = None,
+        voice_rate: str | None = None,
+    ) -> None:
         """Handle TTS request from orchestrator."""
         if self._tts and text:
-            await self._tts.speak(text)
+            await self._tts.speak(
+                text,
+                voice_name=voice_name,
+                voice_style=voice_style,
+                voice_rate=voice_rate,
+            )
+
+    async def play_tts_immediate(
+        self,
+        text: str,
+        *,
+        voice_name: str | None = None,
+        voice_style: str | None = None,
+        voice_rate: str | None = None,
+    ) -> None:
+        """
+        Play TTS immediately without queueing.
+
+        Use this during LLM streaming to get immediate audio playback.
+        Bypasses the speech_queue which may be blocked during orchestrator execution.
+
+        Args:
+            text: Text to synthesize and play.
+            voice_name: Optional Azure TTS voice name override.
+            voice_style: Optional voice style (e.g., "cheerful").
+            voice_rate: Optional speech rate (e.g., "1.1").
+        """
+        if not text or not text.strip():
+            return
+
+        logger.info("[%s] play_tts_immediate called: %s", self._session_short, text[:50] if text else "")
+        await self._on_tts_request(
+            text,
+            SpeechEventType.TTS_RESPONSE,
+            voice_name=voice_name,
+            voice_style=voice_style,
+            voice_rate=voice_rate,
+        )
+
+    async def _emit_to_ui(self, text: str, *, is_greeting: bool = False) -> None:
+        """Emit message to UI with proper agent labeling.
+
+        Args:
+            text: Message text to emit
+            is_greeting: If True, use non-streaming envelope and don't dedupe
+        """
+        ws = self._context.websocket
+        if not ws:
+            logger.debug("[%s] _emit_to_ui: no websocket", self._session_short)
+            return
+
+        logger.info("[%s] _emit_to_ui: text=%s is_greeting=%s", self._session_short, text[:50] if text else "", is_greeting)
+
+        try:
+            normalized = (text or "").strip()
+
+            # For greetings, always emit (don't check stream cache)
+            # For streaming responses, skip if already broadcast by orchestrator
+            if not is_greeting:
+                cache = getattr(ws.state, "_assistant_stream_cache", None)
+                if normalized and cache:
+                    try:
+                        cache.remove(normalized)
+                        # Skip emitting because route_turn already broadcast this chunk
+                        return
+                    except ValueError:
+                        pass
+
+            # Get active agent name from memory manager
+            agent_name = "Assistant"
+            if self.memory_manager:
+                agent_name = (
+                    self.memory_manager.get_value_from_corememory("active_agent", "Assistant")
+                    or "Assistant"
+                )
+
+            # Use non-streaming envelope for greetings, streaming for other messages
+            if is_greeting:
+                envelope = make_assistant_envelope(
+                    content=text,
+                    sender=agent_name,
+                    session_id=self._session_id,
+                )
+            else:
+                envelope = make_assistant_streaming_envelope(
+                    content=text,
+                    sender=agent_name,
+                    session_id=self._session_id,
+                )
+            envelope["speaker"] = agent_name
+            envelope["message"] = text  # Legacy compatibility
+
+            if self._transport == TransportType.ACS:
+                await send_session_envelope(
+                    ws,
+                    envelope,
+                    session_id=self._session_id,
+                    conn_id=None,
+                    event_label="assistant_streaming",
+                    broadcast_only=True,
+                )
+            else:
+                # Browser mode - send to specific connection
+                conn_id = self._context.conn_id
+                if conn_id:
+                    await self._app_state.conn_manager.send_to_connection(conn_id, envelope)
+                else:
+                    logger.debug("[%s] No conn_id for browser emit", self._session_short)
+        except Exception as e:
+            logger.debug("[%s] UI emit failed: %s", self._session_short, e)
 
     # =========================================================================
     # Orchestrator
@@ -712,7 +1080,6 @@ class VoiceHandler:
         ws.state.stt_tier = ctx.stt_tier
         ws.state.memo_manager = ctx.memo_manager
         ws.state.memory_manager = ctx.memo_manager  # Alias
-        ws.state.latency_tool = ctx.latency_tool
         ws.state.session_context = ctx.session_context
         ws.state.cancel_event = ctx.cancel_event
         ws.state.orchestration_tasks = ctx.orchestration_tasks
@@ -884,3 +1251,63 @@ class VoiceHandler:
 
 # MediaHandler can be imported from here for gradual migration
 # In future, MediaHandler in api/v1/handlers/media_handler.py will become a thin shim
+
+    # =========================================================================
+    # Properties (MediaHandler compatibility)
+    # =========================================================================
+
+    @property
+    def session_id(self) -> str:
+        """Get session ID."""
+        return self._session_id
+
+    @property
+    def call_connection_id(self) -> str:
+        """Get call connection ID (ACS)."""
+        return self._context.call_connection_id or self._session_id
+
+    @property
+    def stream_mode(self) -> StreamMode:
+        """Get stream mode."""
+        return self._context.stream_mode
+
+    @property
+    def is_running(self) -> bool:
+        """Check if handler is running."""
+        return self._running
+
+    @property
+    def websocket(self) -> WebSocket | None:
+        """Get the WebSocket connection."""
+        return self._context.websocket
+
+    @property
+    def metadata(self) -> dict:
+        """Get handler metadata (MediaHandler compatibility)."""
+        return {
+            "cm": self._context.memo_manager,
+            "session_id": self._session_id,
+            "stream_mode": self._context.stream_mode,
+            "transport": self._transport.value,
+            "tts_client": self._context.tts_client,
+            "stt_client": self._context.stt_client,
+        }
+
+    @property
+    def speech_cascade(self) -> VoiceHandler:
+        """Return self for backward compatibility (VoiceHandler IS the cascade)."""
+        return self
+
+    # =========================================================================
+    # Helper Methods (MediaHandler compatibility)
+    # =========================================================================
+
+    def _is_connected(self) -> bool:
+        """Check if WebSocket is connected."""
+        ws = self._context.websocket
+        if not ws:
+            return False
+        return (
+            ws.client_state == WebSocketState.CONNECTED
+            and ws.application_state == WebSocketState.CONNECTED
+        )

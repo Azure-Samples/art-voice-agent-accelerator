@@ -3,6 +3,15 @@
 !!! tip "One-Time Setup"
     Complete these prerequisites **once** before starting any guide in this documentation.
 
+!!! warning "Windows Users: Use Bash"
+    This project's scripts and Makefile targets are designed for **Bash**. On Windows:
+    
+    - **Recommended:** Use [Git Bash](https://git-scm.com/downloads) (comes with Git for Windows)
+    - **Alternative:** Use [WSL 2](https://learn.microsoft.com/en-us/windows/wsl/install) with Ubuntu
+    - **Not recommended:** PowerShell or Command Prompt may encounter issues with shell scripts
+    
+    All commands in this documentation assume a Bash-compatible shell.
+
 ---
 
 ## :material-tools: Required Tools

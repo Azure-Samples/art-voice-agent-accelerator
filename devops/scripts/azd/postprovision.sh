@@ -24,21 +24,34 @@ is_ci() {
     [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" || "${AZD_SKIP_INTERACTIVE:-}" == "true" ]]
 }
 
-log()     { echo "│ $*"; }
-info()    { echo "│ ℹ️  $*"; }
-success() { echo "│ ✅ $*"; }
-warn()    { echo "│ ⚠️  $*"; }
-fail()    { echo "│ ❌ $*" >&2; }
+if [[ -z "${BLUE+x}" ]]; then BLUE=$'\033[0;34m'; fi
+if [[ -z "${GREEN+x}" ]]; then GREEN=$'\033[0;32m'; fi
+if [[ -z "${GREEN_BOLD+x}" ]]; then GREEN_BOLD=$'\033[1;32m'; fi
+if [[ -z "${YELLOW+x}" ]]; then YELLOW=$'\033[1;33m'; fi
+if [[ -z "${RED+x}" ]]; then RED=$'\033[0;31m'; fi
+if [[ -z "${CYAN+x}" ]]; then CYAN=$'\033[0;36m'; fi
+if [[ -z "${DIM+x}" ]]; then DIM=$'\033[2m'; fi
+if [[ -z "${NC+x}" ]]; then NC=$'\033[0m'; fi
+readonly BLUE GREEN GREEN_BOLD YELLOW RED CYAN DIM NC
+
+log()          { printf '│ %s%s%s\n' "$DIM" "$*" "$NC"; }
+info()         { printf '│ %s%s%s\n' "$BLUE" "$*" "$NC"; }
+success()      { printf '│ %s✔%s %s\n' "$GREEN" "$NC" "$*"; }
+phase_success(){ printf '│ %s✔ %s%s\n' "$GREEN_BOLD" "$*" "$NC"; }
+pending()      { printf '│ %s⏳%s %s\n' "$YELLOW" "$NC" "$*"; }
+warn()         { printf '│ %s⚠%s  %s\n' "$YELLOW" "$NC" "$*"; }
+fail()         { printf '│ %s✖%s %s\n' "$RED" "$NC" "$*" >&2; }
 
 header() {
     echo ""
     echo "╭─────────────────────────────────────────────────────────────"
-    echo "│ $*"
+    echo "│ ${CYAN}$*${NC}"
     echo "├─────────────────────────────────────────────────────────────"
 }
 
 footer() {
     echo "╰─────────────────────────────────────────────────────────────"
+    echo ""
 }
 
 # ============================================================================
@@ -54,6 +67,25 @@ azd_get() {
 
 azd_set() {
     azd env set "$1" "$2" 2>/dev/null || warn "Failed to set $1"
+}
+
+# Update or append a single KEY=VALUE in an env file without clobbering other settings.
+upsert_env_var() {
+    local file="$1" key="$2" value="$3"
+    local escaped="$value"
+    escaped=${escaped//\\/\\\\}
+    escaped=${escaped//&/\\&}
+    escaped=${escaped//\//\\/}
+
+    if grep -q "^${key}=" "$file"; then
+        if [[ "$(uname)" == "Darwin" ]]; then
+            sed -i '' "s/^${key}=.*/${key}=${escaped}/" "$file"
+        else
+            sed -i "s/^${key}=.*/${key}=${escaped}/" "$file"
+        fi
+    else
+        printf '\n%s=%s\n' "$key" "$value" >> "$file"
+    fi
 }
 
 # ============================================================================
@@ -295,11 +327,11 @@ show_summary() {
     easyauth_enabled=$(azd_get "EASYAUTH_ENABLED" "false")
     env_file=".env.local"
     
-    [[ "$db_init" == "true" ]] && log "  ✅ Cosmos DB: initialized" || log "  ⏳ Cosmos DB: pending"
-    [[ -n "$phone" ]] && log "  ✅ Phone: $phone" || log "  ⏳ Phone: not configured"
-    [[ -n "$endpoint" ]] && log "  ✅ App Config: $endpoint" || log "  ⏳ App Config: pending"
-    [[ -f "$env_file" ]] && log "  ✅ Local env: $env_file" || log "  ⏳ Local env: not generated"
-    [[ "$easyauth_enabled" == "true" ]] && log "  ✅ EasyAuth: enabled" || log "  ⏳ EasyAuth: not enabled"
+    [[ "$db_init" == "true" ]] && success "Cosmos DB: initialized" || pending "Cosmos DB: pending"
+    [[ -n "$phone" ]] && success "Phone: $phone" || pending "Phone: not configured"
+    [[ -n "$endpoint" ]] && success "App Config: $endpoint" || pending "App Config: pending"
+    [[ -f "$env_file" ]] && success "Local env: $env_file" || pending "Local env: not generated"
+    [[ "$easyauth_enabled" == "true" ]] && success "EasyAuth: enabled" || pending "EasyAuth: not enabled"
     
     if ! is_ci; then
         log ""
@@ -311,7 +343,7 @@ show_summary() {
     fi
     
     footer
-    success "Post-provisioning complete!"
+    phase_success "Post-provisioning complete!"
 }
 
 # ============================================================================
@@ -347,7 +379,7 @@ task_sync_appconfig() {
     fi
     
     log "Syncing app settings from config/appconfig.json..."
-    if bash "$sync_script" --endpoint "$endpoint" --label "$label" --config "$config_file"; then
+    if AZD_LOG_IN_BOX=true bash "$sync_script" --endpoint "$endpoint" --label "$label" --config "$config_file"; then
         success "App settings synced"
     else
         warn "Some settings may have failed"
@@ -364,6 +396,7 @@ task_generate_env_local() {
     header "🧑‍💻 Task 5: Local Development Environment"
     
     local setup_script="$HELPERS_DIR/local-dev-setup.sh"
+    local env_file=".env.local"
     
     if [[ ! -f "$setup_script" ]]; then
         warn "local-dev-setup.sh not found, skipping"
@@ -374,8 +407,9 @@ task_generate_env_local() {
     # Source the helper to use its functions
     source "$setup_script"
     
-    local appconfig_endpoint
+    local appconfig_endpoint env_label
     appconfig_endpoint=$(azd_get "AZURE_APPCONFIG_ENDPOINT")
+    env_label=$(azd_get "AZURE_ENV_NAME")
     
     if [[ -z "$appconfig_endpoint" ]]; then
         warn "App Config endpoint not available, cannot generate .env.local"
@@ -383,11 +417,37 @@ task_generate_env_local() {
         return 1
     fi
     
-    log "Generating .env.local for local development..."
-    if generate_minimal_env ".env.local"; then
-        success ".env.local created"
+    if [[ -f "$env_file" ]]; then
+        if is_ci; then
+            info "Existing .env.local found (CI mode) - updating App Config settings only"
+            upsert_env_var "$env_file" "AZURE_APPCONFIG_ENDPOINT" "$appconfig_endpoint"
+            [[ -n "$env_label" ]] && upsert_env_var "$env_file" "AZURE_APPCONFIG_LABEL" "$env_label"
+            success "Updated App Config settings in .env.local"
+        else
+            log "Existing .env.local found. Update App Config settings only?"
+            if read -r -p "│ Update AZURE_APPCONFIG_* in .env.local? [Y/n]: " choice; then
+                : # Got input
+            else
+                choice="n"
+            fi
+            if [[ -z "$choice" || "$choice" =~ ^[Yy]$ ]]; then
+                upsert_env_var "$env_file" "AZURE_APPCONFIG_ENDPOINT" "$appconfig_endpoint"
+                [[ -n "$env_label" ]] && upsert_env_var "$env_file" "AZURE_APPCONFIG_LABEL" "$env_label"
+                success "Updated App Config settings in .env.local"
+            else
+                info "Skipped .env.local update"
+            fi
+        fi
     else
-        warn "Failed to generate .env.local"
+        log "Generating .env.local for local development..."
+        local prior_log_in_box="${AZD_LOG_IN_BOX:-false}"
+        AZD_LOG_IN_BOX=true
+        if generate_minimal_env "$env_file"; then
+            success ".env.local created"
+        else
+            warn "Failed to generate .env.local"
+        fi
+        AZD_LOG_IN_BOX="$prior_log_in_box"
     fi
     
     footer
@@ -435,7 +495,7 @@ task_enable_easyauth() {
     if is_ci; then
         # In CI mode, automatically enable EasyAuth if not already enabled
         log "Enabling EasyAuth (CI mode)…"
-        if bash "$easyauth_script" -g "$resource_group" -a "$container_app" -i "$uami_client_id"; then
+        if AZD_LOG_IN_BOX=true bash "$easyauth_script" -g "$resource_group" -a "$container_app" -i "$uami_client_id"; then
             success "EasyAuth enabled"
             # Set azd env variable to prevent re-running
             azd_set "EASYAUTH_ENABLED" "true"
@@ -479,7 +539,7 @@ task_enable_easyauth() {
         1)
             log ""
             log "Enabling EasyAuth..."
-            if bash "$easyauth_script" -g "$resource_group" -a "$container_app" -i "$uami_client_id"; then
+            if AZD_LOG_IN_BOX=true bash "$easyauth_script" -g "$resource_group" -a "$container_app" -i "$uami_client_id"; then
                 success "EasyAuth enabled successfully"
                 # Set azd env variable to prevent re-running
                 azd_set "EASYAUTH_ENABLED" "true"

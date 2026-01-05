@@ -79,6 +79,9 @@ def _parse_scenario_data(scenario_data: dict) -> ScenarioConfig:
     # Parse handoffs
     handoffs = []
     for h in scenario_data.get("handoffs", []):
+        context_vars = h.get("context_vars", h.get("handoff_context", {}))
+        if not isinstance(context_vars, dict):
+            context_vars = {}
         handoffs.append(HandoffConfig(
             from_agent=h.get("from_agent", ""),
             to_agent=h.get("to_agent", ""),
@@ -86,6 +89,7 @@ def _parse_scenario_data(scenario_data: dict) -> ScenarioConfig:
             type=h.get("type", "announced"),
             share_context=h.get("share_context", True),
             handoff_condition=h.get("handoff_condition", ""),
+            context_vars=context_vars,
         ))
     
     # Parse agent_defaults
@@ -332,6 +336,7 @@ def _serialize_scenario(scenario: ScenarioConfig) -> dict:
                 "type": h.type,
                 "share_context": h.share_context,
                 "handoff_condition": h.handoff_condition,
+                "context_vars": h.context_vars or {},
             }
             for h in (scenario.handoffs or [])
         ],

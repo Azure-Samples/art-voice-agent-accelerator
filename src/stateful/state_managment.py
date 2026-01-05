@@ -41,6 +41,7 @@ Example:
 
 import asyncio
 import json
+import time
 import uuid
 from collections import deque
 from typing import Any
@@ -152,6 +153,13 @@ class MemoManager:
         self.latency = LatencyTracker()
         self._redis_manager: AzureRedisManager | None = redis_mgr
         self._pending_persist_task: asyncio.Task | None = None
+        now = time.time()
+        self.corememory.set("created_at", now)
+        self.corememory.set("last_activity", now)
+        self.corememory.set(
+            "session_info",
+            {"created_at": now, "last_activity": now},
+        )
 
     # ------------------------------------------------------------------
     # Compatibility aliases
@@ -947,6 +955,18 @@ class MemoManager:
             within the same session.
         """
         self.history.append(role, content, agent)
+        now = time.time()
+        history = self.history.get_agent(agent)
+        if history:
+            history[-1].setdefault("timestamp", now)
+        session_info = self.corememory.get("session_info", {})
+        if not isinstance(session_info, dict):
+            session_info = {}
+        session_info.setdefault("created_at", now)
+        session_info["last_activity"] = now
+        self.corememory.set("session_info", session_info)
+        self.corememory.set("created_at", session_info["created_at"])
+        self.corememory.set("last_activity", now)
 
     def get_history(self, agent_name: str) -> list[dict[str, str]]:
         """

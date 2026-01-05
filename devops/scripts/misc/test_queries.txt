@@ -1,0 +1,27 @@
+# Sample Test Queries for Orchestrator Testing
+# Each line is a separate query to test
+
+# Simple queries (good for verbosity=0 minimal testing)
+What is 2+2?
+Hello!
+What's your name?
+
+# Medium complexity (good for verbosity=1 standard)
+What is machine learning?
+Explain quantum computing in simple terms
+What are the benefits of Python programming?
+
+# Complex queries (good for verbosity=2 detailed)
+Explain the theory of general relativity and its implications for modern physics
+How does the human brain process visual information?
+What are the key differences between supervised and unsupervised learning in AI?
+
+# Reasoning-heavy queries (good for o1/o3 models with reasoning_effort)
+Solve this riddle: A farmer has 17 sheep. All but 9 die. How many are left?
+What is the trolley problem and what are the main ethical considerations?
+Explain step-by-step how to prove that the square root of 2 is irrational
+
+# Edge cases
+[Empty query - test handling]
+!@#$%^&*()
+This is a very long query that continues for multiple sentences to test token limits and see how the model handles extended context and whether verbosity levels affect the comprehensiveness of responses when dealing with longer input text

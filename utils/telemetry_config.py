@@ -357,6 +357,9 @@ def setup_azure_monitor(logger_name: str = None) -> bool:
         # Install filtering span processor for noise reduction
         _install_filtering_processor()
 
+        # Install session context span processor for automatic correlation
+        _install_session_context_processor()
+
         status_msg = "✅ Azure Monitor configured successfully"
         if not enable_live_metrics:
             status_msg += " (live metrics disabled)"
@@ -434,6 +437,9 @@ def _retry_without_live_metrics(
         # Install filtering span processor
         _install_filtering_processor()
 
+        # Install session context span processor
+        _install_session_context_processor()
+
         logger.info(
             "✅ Azure Monitor configured successfully (live metrics disabled due to permissions)"
         )
@@ -481,6 +487,24 @@ def _install_filtering_processor(enable_pii_scrubbing: bool = True) -> None:
             logger.debug("FilteringSpanProcessor installed")
     except Exception as e:
         logger.warning(f"Could not install FilteringSpanProcessor: {e}")
+
+
+def _install_session_context_processor() -> None:
+    """Install SessionContextSpanProcessor for automatic session correlation."""
+    try:
+        from opentelemetry import trace as otel_trace
+        from utils.session_context import SessionContextSpanProcessor
+
+        provider = otel_trace.get_tracer_provider()
+        if hasattr(provider, "add_span_processor"):
+            provider.add_span_processor(SessionContextSpanProcessor())
+            logger.debug("SessionContextSpanProcessor installed for automatic session correlation")
+        else:
+            logger.warning("TracerProvider does not support add_span_processor")
+    except ImportError:
+        logger.debug("SessionContextSpanProcessor not available (session_context module not found)")
+    except Exception as e:
+        logger.warning(f"Could not install SessionContextSpanProcessor: {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

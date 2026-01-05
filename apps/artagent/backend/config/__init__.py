@@ -143,11 +143,13 @@ from .settings import (  # Azure Communication Services; Security; Azure Identit
     VAD_SEMANTIC_SEGMENTATION,
     WARM_POOL_BACKGROUND_REFRESH,
     WARM_POOL_ENABLED,
+    WARM_POOL_MAX_RETRIES,
     WARM_POOL_REFRESH_INTERVAL,
     WARM_POOL_RESTART_ON_FAILURE,
     WARM_POOL_SESSION_MAX_AGE,
     WARM_POOL_STT_SIZE,
     WARM_POOL_TTS_SIZE,
+    WARM_POOL_WARMUP_TIMEOUT,
     validate_app_settings,  # Backward compat alias
     validate_settings,
 )
@@ -241,5 +243,7 @@ __all__ = [
     "WARM_POOL_TTS_SIZE",
     "WARM_POOL_STT_SIZE",
     "WARM_POOL_RESTART_ON_FAILURE",
+    "WARM_POOL_WARMUP_TIMEOUT",
+    "WARM_POOL_MAX_RETRIES",
     "SESSION_TTL_SECONDS",
 ]

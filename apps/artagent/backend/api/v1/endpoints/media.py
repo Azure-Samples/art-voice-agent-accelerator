@@ -7,16 +7,22 @@ WebSocket endpoint for ACS media streaming.
 WebSocket Flow:
 1. Accept connection and extract call_connection_id
 2. Resolve session ID (browser session or ACS-only)
-3. Create ACSMediaHandler (handles STT/TTS pool acquisition)
+3. Create VoiceHandler (handles STT/TTS pool acquisition)
 4. Process streaming messages
 5. Clean up resources on disconnect (handler releases pools)
 """
 
 import asyncio
+import json
 import uuid
 
 from apps.artagent.backend.src.ws_helpers.shared_ws import send_agent_inventory
-from apps.artagent.backend.voice import VoiceLiveSDKHandler
+from apps.artagent.backend.voice import (
+    TransportType,
+    VoiceHandler,
+    VoiceHandlerConfig,
+    VoiceLiveSDKHandler,
+)
 from config import ACS_STREAMING_MODE
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
@@ -27,8 +33,6 @@ from src.pools.session_manager import SessionContext
 from src.stateful.state_managment import MemoManager
 from utils.ml_logging import get_logger
 from utils.session_context import session_context
-
-from ..handlers.media_handler import MediaHandler, MediaHandlerConfig, TransportType
 
 logger = get_logger("api.v1.endpoints.media")
 tracer = trace.get_tracer(__name__)
@@ -251,14 +255,14 @@ async def _create_media_handler(
 ):
     """Create appropriate media handler based on streaming mode."""
     if stream_mode == StreamMode.MEDIA:
-        config = MediaHandlerConfig(
+        config = VoiceHandlerConfig(
             websocket=websocket,
             session_id=session_id,
             transport=TransportType.ACS,
             call_connection_id=call_connection_id,
             stream_mode=stream_mode,
         )
-        return await MediaHandler.create(config, websocket.app.state)
+        return await VoiceHandler.create(config, websocket.app.state)
     elif stream_mode == StreamMode.VOICE_LIVE:
         # Initialize MemoManager with session context for VoiceLive
         # This ensures greeting can access caller_name, session_profile, etc.
@@ -310,7 +314,7 @@ async def _process_media_stream(
 
     Args:
         websocket: WebSocket connection for message processing.
-        handler: Media handler instance (ACSMediaHandler or VoiceLiveHandler).
+        handler: Media handler instance (VoiceHandler or VoiceLiveSDKHandler).
         call_connection_id: Call connection identifier for logging and tracing.
 
     Raises:
@@ -369,7 +373,14 @@ async def _process_media_stream(
 
                 # Handle message based on streaming mode
                 if stream_mode == StreamMode.MEDIA:
-                    await handler.handle_media_message(msg_text)
+                    try:
+                        parsed_msg = json.loads(msg_text)
+                    except json.JSONDecodeError:
+                        logger.warning(
+                            f"[{call_connection_id}] Failed to parse message as JSON"
+                        )
+                        continue
+                    await handler.handle_media_message(parsed_msg)
                 elif stream_mode == StreamMode.TRANSCRIPTION:
                     await handler.handle_transcription_message(msg_text)
                 elif stream_mode == StreamMode.VOICE_LIVE:

@@ -50,7 +50,6 @@ from opentelemetry import trace
 from opentelemetry.trace import SpanKind
 from src.speech.speech_recognizer import StreamingSpeechRecognizerFromBytes
 from src.stateful.state_managment import MemoManager
-from src.tools.latency_tool import LatencyTool
 from utils.ml_logging import get_logger
 from utils.telemetry_decorators import ConversationTurnSpan
 
@@ -318,8 +317,6 @@ class SpeechSDKThread:
         speech_queue: asyncio.Queue,
         *,
         on_partial_transcript: Callable[[str, str, str | None], None] | None = None,
-        latency_tool: LatencyTool | None = None,
-        redis_mgr: Any | None = None,
     ):
         """
         Initialize Speech SDK Thread.
@@ -331,8 +328,6 @@ class SpeechSDKThread:
             barge_in_handler: Handler to call on barge-in detection.
             speech_queue: Queue for final speech results.
             on_partial_transcript: Optional callback for partial transcripts.
-            latency_tool: Optional latency tool for STT timing.
-            redis_mgr: Optional redis manager for latency persistence.
         """
         self.connection_id = connection_id
         self._conn_short = connection_id[-8:] if connection_id else "unknown"
@@ -341,17 +336,12 @@ class SpeechSDKThread:
         self.barge_in_handler = barge_in_handler
         self.speech_queue = speech_queue
         self.on_partial_transcript = on_partial_transcript
-        self._latency_tool = latency_tool
-        self._redis_mgr = redis_mgr
 
         self.thread_obj: threading.Thread | None = None
         self.thread_running = False
         self.recognizer_started = False
         self.stop_event = threading.Event()
         self._stopped = False
-
-        # Track if STT recognition timer is running for current utterance
-        self._stt_timer_started = False
 
         self._setup_callbacks()
         self._pre_initialize_recognizer()
@@ -384,15 +374,6 @@ class SpeechSDKThread:
                 f"[{self._conn_short}] Partial speech: '{text}' ({lang}) len={len(text.strip())}"
             )
             if len(text.strip()) > 3:
-                # Start STT recognition timer on first meaningful partial (if not already started)
-                if not self._stt_timer_started and self._latency_tool:
-                    try:
-                        self._latency_tool.start("stt:recognition")
-                        self._stt_timer_started = True
-                        logger.debug(f"[{self._conn_short}] STT recognition timer started")
-                    except Exception as e:
-                        logger.debug(f"[{self._conn_short}] Failed to start STT timer: {e}")
-
                 try:
                     self.thread_bridge.schedule_barge_in(self.barge_in_handler)
                 except Exception as e:
@@ -408,8 +389,6 @@ class SpeechSDKThread:
             logger.debug(
                 f"[{self._conn_short}] Final speech: '{text}' ({lang}) len={len(text.strip())}"
             )
-            # Stop STT recognition timer on final result
-            self._stop_stt_timer(reason="final")
 
             if len(text.strip()) > 1:
                 logger.info(f"[{self._conn_short}] Speech: '{text}' ({lang})")
@@ -423,8 +402,6 @@ class SpeechSDKThread:
 
         def on_error(error: str):
             logger.error(f"[{self._conn_short}] Speech error: {error}")
-            # Stop STT timer on error
-            self._stop_stt_timer(reason="error")
             error_event = SpeechEvent(event_type=SpeechEventType.ERROR, text=error)
             self.thread_bridge.queue_speech_result(self.speech_queue, error_event)
 
@@ -436,23 +413,6 @@ class SpeechSDKThread:
         except Exception as e:
             logger.error(f"[{self._conn_short}] Failed to setup callbacks: {e}")
             raise
-
-    def _stop_stt_timer(self, reason: str = "unknown") -> None:
-        """Stop STT recognition timer if running."""
-        if self._stt_timer_started and self._latency_tool:
-            try:
-                self._latency_tool.stop("stt:recognition", self._redis_mgr, meta={"reason": reason})
-                logger.debug(
-                    f"[{self._conn_short}] STT recognition timer stopped (reason={reason})"
-                )
-            except Exception as e:
-                logger.debug(f"[{self._conn_short}] Failed to stop STT timer: {e}")
-            finally:
-                self._stt_timer_started = False
-
-    def stop_stt_timer_for_barge_in(self) -> None:
-        """Public method to stop STT timer during barge-in."""
-        self._stop_stt_timer(reason="barge_in")
 
     def prepare_thread(self) -> None:
         """Prepare the speech recognition thread."""
@@ -979,7 +939,6 @@ class SpeechCascadeHandler:
         on_tts_request: Callable[[str, SpeechEventType], Awaitable[None]] | None = None,
         transcript_emitter: TranscriptEmitter | None = None,
         response_sender: ResponseSender | None = None,
-        latency_tool: LatencyTool | None = None,
         redis_mgr: Any | None = None,
     ):
         """
@@ -998,14 +957,12 @@ class SpeechCascadeHandler:
             on_tts_request: Callback for TTS playback requests (emitted to transport).
             transcript_emitter: Protocol implementation for emitting transcripts.
             response_sender: Protocol implementation for sending TTS responses.
-            latency_tool: Optional latency tool for STT timing.
-            redis_mgr: Optional redis manager for latency persistence.
+            redis_mgr: Optional redis manager for session persistence.
         """
         self.connection_id = connection_id
         self._conn_short = connection_id[-8:] if connection_id else "unknown"
         self.orchestrator_func = orchestrator_func
         self.memory_manager = memory_manager
-        self._latency_tool = latency_tool
         self._redis_mgr = redis_mgr
 
         # Store callbacks for transport layer coordination
@@ -1050,8 +1007,6 @@ class SpeechCascadeHandler:
             barge_in_handler=self._handle_barge_in_with_stt_stop,
             speech_queue=self.speech_queue,
             on_partial_transcript=on_partial_transcript,
-            latency_tool=latency_tool,
-            redis_mgr=redis_mgr,
         )
 
         self.thread_bridge.set_route_turn_thread(self.route_turn_thread)

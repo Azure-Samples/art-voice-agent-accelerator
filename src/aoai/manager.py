@@ -9,14 +9,16 @@ import mimetypes
 import os
 import time
 import traceback
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import openai
+from azure.identity import get_bearer_token_provider
 from dotenv import load_dotenv
 from openai import AzureOpenAI
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
-from utils.azure_auth import get_bearer_token_provider, get_credential
+from utils.azure_auth import get_credential
 from utils.ml_logging import get_logger
 from utils.trace_context import TraceContext
 
@@ -93,6 +95,36 @@ def _create_aoai_trace_context(
         )
     else:
         return NoOpTraceContext()
+
+
+@dataclass
+class UnifiedResponse:
+    """
+    Unified response object for both /chat/completions and /responses endpoints.
+
+    This class provides a consistent interface for handling responses from either
+    the legacy /chat/completions endpoint or the new /responses endpoint, abstracting
+    away the differences in response formats.
+    """
+
+    # Common fields (present in both endpoints)
+    id: str
+    model: str
+    content: str | None
+    finish_reason: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+    # New /responses endpoint fields
+    reasoning_tokens: int | None = None  # Number of reasoning tokens used (o1/o3/o4)
+    system_fingerprint: str | None = None  # System configuration fingerprint
+    model_version: str | None = None  # Specific model version used
+    reasoning_content: str | None = None  # Reasoning/thinking process content
+
+    # Metadata
+    endpoint_used: str = "chat"  # "chat" or "responses"
+    raw_response: Any = None  # Raw response object for advanced use
 
 
 class AzureOpenAIManager:
@@ -208,6 +240,11 @@ class AzureOpenAIManager:
         temperature: float | None = None,
         top_p: float | None = None,
         seed: int | None = None,
+        endpoint_type: str | None = None,
+        min_p: float | None = None,
+        typical_p: float | None = None,
+        reasoning_effort: str | None = None,
+        verbosity: int | None = None,
     ) -> None:
         """
         Set standardized GenAI semantic convention attributes on a span.
@@ -220,6 +257,11 @@ class AzureOpenAIManager:
             temperature: Temperature setting.
             top_p: Top-p sampling parameter.
             seed: Random seed.
+            endpoint_type: "chat" or "responses"
+            min_p: Minimum probability threshold (responses API).
+            typical_p: Typical sampling parameter (responses API).
+            reasoning_effort: Reasoning effort level (responses API).
+            verbosity: Verbosity level (responses API).
         """
         endpoint_host = self._get_endpoint_host()
 
@@ -233,6 +275,10 @@ class AzureOpenAIManager:
         span.set_attribute(SpanAttr.GENAI_OPERATION_NAME.value, operation)
         span.set_attribute(SpanAttr.GENAI_REQUEST_MODEL.value, model)
 
+        # Endpoint type (chat vs responses)
+        if endpoint_type:
+            span.set_attribute(SpanAttr.GENAI_ENDPOINT_TYPE.value, endpoint_type)
+
         # Request parameters
         if max_tokens is not None:
             span.set_attribute(SpanAttr.GENAI_REQUEST_MAX_TOKENS.value, max_tokens)
@@ -242,6 +288,16 @@ class AzureOpenAIManager:
             span.set_attribute(SpanAttr.GENAI_REQUEST_TOP_P.value, top_p)
         if seed is not None:
             span.set_attribute(SpanAttr.GENAI_REQUEST_SEED.value, seed)
+
+        # Responses API specific parameters
+        if min_p is not None:
+            span.set_attribute(SpanAttr.GENAI_MIN_P.value, min_p)
+        if typical_p is not None:
+            span.set_attribute(SpanAttr.GENAI_TYPICAL_P.value, typical_p)
+        if reasoning_effort is not None:
+            span.set_attribute(SpanAttr.GENAI_REASONING_EFFORT.value, reasoning_effort)
+        if verbosity is not None:
+            span.set_attribute(SpanAttr.GENAI_VERBOSITY.value, verbosity)
 
         # Correlation attributes
         if self.call_connection_id:
@@ -260,40 +316,74 @@ class AzureOpenAIManager:
 
         Args:
             span: The OpenTelemetry span to add attributes to.
-            response: The API response object with usage information.
+            response: The API response object (raw or UnifiedResponse) with usage information.
             start_time: The start time (from time.perf_counter()) for duration calculation.
         """
         duration_ms = (time.perf_counter() - start_time) * 1000
         span.set_attribute(SpanAttr.GENAI_CLIENT_OPERATION_DURATION.value, duration_ms)
 
-        # Response model
-        if hasattr(response, "model"):
+        # Handle UnifiedResponse vs raw API response
+        if isinstance(response, UnifiedResponse):
+            # UnifiedResponse object (from generate_response method)
             span.set_attribute(SpanAttr.GENAI_RESPONSE_MODEL.value, response.model)
-
-        # Response ID
-        if hasattr(response, "id"):
             span.set_attribute(SpanAttr.GENAI_RESPONSE_ID.value, response.id)
 
-        # Token usage
-        if hasattr(response, "usage") and response.usage:
-            if hasattr(response.usage, "prompt_tokens"):
-                span.set_attribute(
-                    SpanAttr.GENAI_USAGE_INPUT_TOKENS.value, response.usage.prompt_tokens
-                )
-            if hasattr(response.usage, "completion_tokens"):
-                span.set_attribute(
-                    SpanAttr.GENAI_USAGE_OUTPUT_TOKENS.value, response.usage.completion_tokens
-                )
+            # Token usage
+            span.set_attribute(SpanAttr.GENAI_USAGE_INPUT_TOKENS.value, response.prompt_tokens)
+            span.set_attribute(SpanAttr.GENAI_USAGE_OUTPUT_TOKENS.value, response.completion_tokens)
 
-        # Finish reasons
-        if hasattr(response, "choices") and response.choices:
-            finish_reasons = [
-                c.finish_reason
-                for c in response.choices
-                if hasattr(c, "finish_reason") and c.finish_reason
-            ]
-            if finish_reasons:
-                span.set_attribute(SpanAttr.GENAI_RESPONSE_FINISH_REASONS.value, finish_reasons)
+            # Responses API specific fields
+            if response.reasoning_tokens is not None:
+                span.set_attribute(SpanAttr.GENAI_REASONING_TOKENS.value, response.reasoning_tokens)
+            if response.system_fingerprint:
+                span.set_attribute(SpanAttr.GENAI_SYSTEM_FINGERPRINT.value, response.system_fingerprint)
+            if response.model_version:
+                span.set_attribute(SpanAttr.GENAI_MODEL_VERSION.value, response.model_version)
+
+            # Finish reason
+            if response.finish_reason:
+                span.set_attribute(SpanAttr.GENAI_RESPONSE_FINISH_REASONS.value, [response.finish_reason])
+        else:
+            # Raw API response (from legacy methods)
+            # Response model
+            if hasattr(response, "model"):
+                span.set_attribute(SpanAttr.GENAI_RESPONSE_MODEL.value, response.model)
+
+            # Response ID
+            if hasattr(response, "id"):
+                span.set_attribute(SpanAttr.GENAI_RESPONSE_ID.value, response.id)
+
+            # Token usage
+            if hasattr(response, "usage") and response.usage:
+                if hasattr(response.usage, "prompt_tokens"):
+                    span.set_attribute(
+                        SpanAttr.GENAI_USAGE_INPUT_TOKENS.value, response.usage.prompt_tokens
+                    )
+                if hasattr(response.usage, "completion_tokens"):
+                    span.set_attribute(
+                        SpanAttr.GENAI_USAGE_OUTPUT_TOKENS.value, response.usage.completion_tokens
+                    )
+                # Check for reasoning tokens in raw response
+                if hasattr(response.usage, "reasoning_tokens"):
+                    span.set_attribute(
+                        SpanAttr.GENAI_REASONING_TOKENS.value, response.usage.reasoning_tokens
+                    )
+
+            # System fingerprint and model version from raw response
+            if hasattr(response, "system_fingerprint"):
+                span.set_attribute(SpanAttr.GENAI_SYSTEM_FINGERPRINT.value, response.system_fingerprint)
+            if hasattr(response, "model_version"):
+                span.set_attribute(SpanAttr.GENAI_MODEL_VERSION.value, response.model_version)
+
+            # Finish reasons
+            if hasattr(response, "choices") and response.choices:
+                finish_reasons = [
+                    c.finish_reason
+                    for c in response.choices
+                    if hasattr(c, "finish_reason") and c.finish_reason
+                ]
+                if finish_reasons:
+                    span.set_attribute(SpanAttr.GENAI_RESPONSE_FINISH_REASONS.value, finish_reasons)
 
         span.set_status(Status(StatusCode.OK))
 
@@ -444,7 +534,7 @@ class AzureOpenAIManager:
                 "Azure.OpenAI.WhisperTranscription",
                 kind=SpanKind.CLIENT,
                 attributes={
-                    "peer.service": "azure-openai",
+                    "peer.service": "azure.ai.openai",
                     "net.peer.name": endpoint_host,
                     "rt.call.connection_id": self.call_connection_id or "unknown",
                 },
@@ -1096,3 +1186,625 @@ class AzureOpenAIManager:
                 logger.error(f"Error details: {e}")
                 logger.error(f"Traceback: {traceback.format_exc()}")
                 return None, None
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # RESPONSES API SUPPORT - Dual Endpoint Methods
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def _should_use_responses_endpoint(
+        self, model_config: Any, **kwargs
+    ) -> bool:
+        """
+        Determine which endpoint to use based on model configuration and parameters.
+
+        IMPORTANT: For real-time voice scenarios, this method prioritizes /chat/completions
+        for streaming to ensure optimal latency and compatibility.
+
+        Args:
+            model_config: ModelConfig instance with endpoint preferences
+            **kwargs: Runtime parameters that may indicate endpoint preference
+
+        Returns:
+            True if /responses endpoint should be used, False for /chat/completions
+        """
+        # CRITICAL: Current responses API doesn't properly support streaming with conversation history
+        # Disable responses endpoint for streaming until SDK is updated
+        # This ensures optimal performance for real-time voice scenarios
+        if kwargs.get("stream", False):
+            logger.debug("Using /chat/completions endpoint (streaming not well-supported by responses API - optimal for real-time)")
+            return False
+
+        # Handle case where model_config might not have the new attributes
+        if not hasattr(model_config, "endpoint_preference"):
+            return False
+
+        # Explicit override
+        if model_config.endpoint_preference == "responses":
+            logger.debug("Using /responses endpoint (explicit preference)")
+            return True
+        if model_config.endpoint_preference == "chat":
+            logger.debug("Using /chat/completions endpoint (explicit preference)")
+            return False
+
+        # Auto-detection (endpoint_preference == "auto")
+        if model_config.endpoint_preference == "auto":
+            # Check for new parameters in model_config
+            if any(
+                [
+                    getattr(model_config, "min_p", None) is not None,
+                    getattr(model_config, "typical_p", None) is not None,
+                    getattr(model_config, "reasoning_effort", None) is not None,
+                    getattr(model_config, "include_reasoning", False),
+                ]
+            ):
+                logger.debug("Using /responses endpoint (new parameters detected in config)")
+                return True
+
+            # Check model family - GPT-5 and reasoning models prefer responses endpoint
+            # However, for real-time scenarios, /chat/completions may still be preferred
+            model_family = getattr(model_config, "model_family", None)
+            if model_family in ["o1", "o3", "o4", "gpt-5"]:
+                logger.debug(f"Using /responses endpoint (model family: {model_family})")
+                return True
+
+            # Check runtime kwargs
+            if any(k in kwargs for k in ["min_p", "typical_p", "reasoning_effort"]):
+                logger.debug("Using /responses endpoint (new parameters in kwargs)")
+                return True
+
+        # Default to chat/completions for safety and optimal real-time performance
+        logger.debug("Using /chat/completions endpoint (default - optimal for real-time)")
+        return False
+
+    def _prepare_chat_params(
+        self, model_config: Any, messages: list[dict], **kwargs
+    ) -> dict[str, Any]:
+        """
+        Build parameters for /chat/completions endpoint.
+
+        Parameter Rules for Chat Completions:
+        - Standard models (gpt-4, gpt-4o): temperature, top_p, max_tokens
+        - Reasoning models (o1, o3): max_completion_tokens (NO temperature/top_p)
+        - NEVER use: min_p, typical_p, reasoning_effort, verbosity (responses API only)
+
+        Args:
+            model_config: ModelConfig instance
+            messages: List of message dicts for the conversation
+            **kwargs: Additional parameters
+
+        Returns:
+            Dict of parameters for chat.completions.create()
+        """
+        params = {
+            "model": model_config.deployment_id,
+            "messages": messages,
+        }
+
+        # Get model family for special handling - auto-detect from deployment_id if not set
+        model_family = getattr(model_config, "model_family", None)
+        deployment_id = getattr(model_config, "deployment_id", "").lower()
+        
+        if not model_family:
+            # Auto-detect model family from deployment_id
+            if "o1" in deployment_id:
+                model_family = "o1"
+            elif "o3" in deployment_id:
+                model_family = "o3"
+            elif "o4" in deployment_id:
+                model_family = "o4"
+            elif "gpt-5" in deployment_id or "gpt5" in deployment_id:
+                model_family = "gpt-5"
+            elif "gpt-4.1" in deployment_id or "gpt4.1" in deployment_id:
+                model_family = "gpt-4.1"
+            else:
+                model_family = "gpt-4"  # Default to gpt-4 for legacy models
+
+        # New-generation models use max_completion_tokens (o1/o3/o4, gpt-5, gpt-4.1)
+        uses_max_completion_tokens = model_family in ["o1", "o3", "o4", "gpt-5", "gpt-4.1"]
+        
+        # Models that don't support custom temperature/top_p values
+        # o-series: reasoning models, temperature not supported
+        # gpt-5: only supports default temperature (1)
+        no_custom_temperature = model_family in ["o1", "o3", "o4", "gpt-5"]
+
+        if uses_max_completion_tokens:
+            # For new-gen models, use max_completion_tokens (NEVER max_tokens)
+            max_completion_tokens = getattr(model_config, "max_completion_tokens", None)
+            if max_completion_tokens:
+                params["max_completion_tokens"] = max_completion_tokens
+            else:
+                # Fallback: convert max_tokens to max_completion_tokens
+                max_tokens = getattr(model_config, "max_tokens", None)
+                if max_tokens:
+                    params["max_completion_tokens"] = max_tokens
+                    
+            # Add temperature/top_p only for models that support custom values (gpt-4.1)
+            if not no_custom_temperature:
+                temperature = getattr(model_config, "temperature", None)
+                if temperature is not None:
+                    params["temperature"] = temperature
+
+                top_p = getattr(model_config, "top_p", None)
+                if top_p is not None:
+                    params["top_p"] = top_p
+        else:
+            # Legacy models (gpt-4o, etc.) support temperature, top_p, max_tokens
+            temperature = getattr(model_config, "temperature", None)
+            if temperature is not None:
+                params["temperature"] = temperature
+
+            top_p = getattr(model_config, "top_p", None)
+            if top_p is not None:
+                params["top_p"] = top_p
+
+            max_tokens = getattr(model_config, "max_tokens", None)
+            if max_tokens:
+                params["max_tokens"] = max_tokens
+
+        # Merge runtime overrides (only if not None)
+        # Filter out responses-API-only parameters
+        responses_only_params = {"min_p", "typical_p", "reasoning_effort", "verbosity", "include_reasoning"}
+        for key, value in kwargs.items():
+            if value is not None and key not in responses_only_params:
+                params[key] = value
+
+        # Add stream_options for usage tracking when streaming is enabled
+        # This ensures token consumption is properly reported in telemetry
+        if kwargs.get("stream"):
+            params["stream_options"] = {"include_usage": True}
+
+        return params
+
+    def _prepare_responses_params(
+        self, model_config: Any, messages: list[dict], **kwargs
+    ) -> dict[str, Any]:
+        """
+        Build parameters for /responses endpoint optimized for real-time scenarios.
+
+        Parameter Rules for Responses API:
+        - Supports: temperature, top_p, min_p, typical_p
+        - Supports: reasoning_effort, include_reasoning, verbosity
+        - Token limit: max_completion_tokens (NEVER use max_tokens)
+        - Enhanced: response_format, store, metadata
+
+        Real-Time Optimizations:
+        - Verbosity defaults to 0 (minimal) for lowest latency
+        - Reasoning effort defaults to "low" for reasoning models
+        - Token limits capped for faster responses
+        - Efficient conversation history formatting
+
+        Note: The responses API signature varies by SDK version:
+        - Newer versions (>=1.50.0): Support 'messages' parameter (chat-like)
+        - Older versions: Only support 'input' parameter (single string)
+
+        Args:
+            model_config: ModelConfig instance
+            messages: List of message dicts for the conversation
+            **kwargs: Additional parameters
+
+        Returns:
+            Dict of parameters for responses.create()
+        """
+        # Responses API currently only supports 'input' parameter (single string)
+        # not 'messages' array. Convert messages to input format.
+        #
+        # For streaming conversations with history, we need to format the conversation
+        # context into a single input string that includes the conversation.
+        #
+        # Future SDK versions may support 'messages' directly.
+
+        # Build input from messages - optimized for real-time (minimal formatting)
+        if len(messages) == 1 and messages[0].get("role") == "user":
+            # Simple case: single user message
+            input_text = messages[0].get("content", "")
+        else:
+            # Complex case: format conversation history into input
+            # OPTIMIZATION: Use compact formatting to reduce token usage
+            input_parts = []
+            for msg in messages:
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                # Skip empty messages to reduce tokens
+                if not content or not content.strip():
+                    continue
+                # Use compact role prefixes
+                if role == "system":
+                    input_parts.append(f"System: {content}")
+                elif role == "user":
+                    input_parts.append(f"User: {content}")
+                elif role == "assistant":
+                    input_parts.append(f"Assistant: {content}")
+            input_text = "\n\n".join(input_parts)  # Double newline for better separation
+
+        params = {
+            "model": model_config.deployment_id,
+            "input": input_text or "Hello",
+        }
+
+        # All sampling parameters (responses endpoint supports more than chat)
+        temperature = getattr(model_config, "temperature", None)
+        if temperature is not None:
+            params["temperature"] = temperature
+
+        top_p = getattr(model_config, "top_p", None)
+        if top_p is not None:
+            params["top_p"] = top_p
+
+        min_p = getattr(model_config, "min_p", None)
+        if min_p is not None:
+            params["min_p"] = min_p
+
+        typical_p = getattr(model_config, "typical_p", None)
+        if typical_p is not None:
+            params["typical_p"] = typical_p
+
+        # Reasoning parameters - OPTIMIZED FOR REAL-TIME
+        reasoning_effort = getattr(model_config, "reasoning_effort", None)
+        if reasoning_effort:
+            params["reasoning_effort"] = reasoning_effort
+        else:
+            # Real-time optimization: Default to "low" reasoning for reasoning models
+            model_family = getattr(model_config, "model_family", None)
+            deployment_id = getattr(model_config, "deployment_id", "").lower()
+            is_reasoning_model = (
+                model_family in ["o1", "o3", "o4"] or
+                any(x in deployment_id for x in ["o1", "o3", "o4"])
+            )
+            if is_reasoning_model:
+                params["reasoning_effort"] = "low"
+                logger.debug("Real-time optimization: Setting reasoning_effort=low for reasoning model")
+
+        include_reasoning = getattr(model_config, "include_reasoning", False)
+        if include_reasoning:
+            params["include_reasoning"] = True
+
+        # Verbosity and output control - OPTIMIZED FOR REAL-TIME
+        # ALWAYS send verbosity explicitly for real-time scenarios
+        verbosity = getattr(model_config, "verbosity", 0)
+        params["verbosity"] = verbosity  # Explicitly set (0=minimal for real-time)
+
+        # Log if using non-optimal verbosity for real-time
+        if verbosity > 0:
+            logger.debug(f"Non-optimal real-time verbosity: {verbosity} (recommend 0 for minimal latency)")
+
+        store = getattr(model_config, "store", None)
+        if store is not None:
+            params["store"] = store
+
+        metadata = getattr(model_config, "metadata", None)
+        if metadata:
+            params["metadata"] = metadata
+
+        # Token limits - Responses API ONLY supports max_completion_tokens
+        # REAL-TIME OPTIMIZATION: Cap tokens for faster responses
+        max_completion_tokens = getattr(model_config, "max_completion_tokens", None)
+        if max_completion_tokens:
+            # Cap at reasonable limit for real-time (reduce latency)
+            params["max_completion_tokens"] = min(max_completion_tokens, 4096)
+            if max_completion_tokens > 4096:
+                logger.debug(f"Real-time optimization: Capping max_completion_tokens from {max_completion_tokens} to 4096")
+        else:
+            # Fallback: convert max_tokens to max_completion_tokens for responses API
+            max_tokens = getattr(model_config, "max_tokens", None)
+            if max_tokens:
+                # Cap for real-time
+                capped_tokens = min(max_tokens, 4096)
+                params["max_completion_tokens"] = capped_tokens
+                logger.debug(f"Converting max_tokens={max_tokens} to max_completion_tokens={capped_tokens} for responses API")
+
+        # Enhanced response format
+        response_format = getattr(model_config, "response_format", None)
+        if response_format:
+            params["response_format"] = response_format
+
+        # Merge runtime overrides (only if not None)
+        # Filter out max_tokens since responses API only accepts max_completion_tokens
+        for key, value in kwargs.items():
+            if value is not None and key != "max_tokens":
+                params[key] = value
+            elif key == "max_tokens" and value is not None:
+                # Convert max_tokens to max_completion_tokens if provided in kwargs
+                if "max_completion_tokens" not in params:
+                    # Cap for real-time
+                    capped_value = min(value, 4096)
+                    params["max_completion_tokens"] = capped_value
+                    logger.debug(f"Converting kwargs max_tokens={value} to max_completion_tokens={capped_value} for responses API")
+
+        # NOTE: stream_options is NOT supported by responses API
+        # The responses API provides usage data differently (in the response object)
+        # Only chat completions API supports stream_options={"include_usage": True}
+
+        return params
+
+    def _parse_response(
+        self, response: Any, endpoint: str
+    ) -> UnifiedResponse:
+        """
+        Parse response from either endpoint into unified format.
+
+        Args:
+            response: Raw response from OpenAI API
+            endpoint: "chat" or "responses"
+
+        Returns:
+            UnifiedResponse object with normalized fields
+        """
+        if endpoint == "chat":
+            # Parse chat.completions response
+            return UnifiedResponse(
+                id=response.id,
+                model=response.model,
+                content=response.choices[0].message.content if response.choices else None,
+                finish_reason=response.choices[0].finish_reason if response.choices else "unknown",
+                prompt_tokens=response.usage.prompt_tokens if hasattr(response, "usage") and response.usage else 0,
+                completion_tokens=response.usage.completion_tokens if hasattr(response, "usage") and response.usage else 0,
+                total_tokens=response.usage.total_tokens if hasattr(response, "usage") and response.usage else 0,
+                endpoint_used="chat",
+                raw_response=response,
+            )
+        else:  # responses endpoint
+            # Parse responses.create response
+            # Extract content from responses format
+            content = None
+            reasoning_content = None
+
+            # The responses endpoint may have different structure
+            # This is a best-effort extraction - adjust based on actual API response format
+            if hasattr(response, "output_text"):
+                content = response.output_text
+            elif hasattr(response, "output"):
+                # Extract text from output array
+                output_segments = []
+                for item in response.output:
+                    if hasattr(item, "content"):
+                        for segment in item.content:
+                            if hasattr(segment, "text") and segment.text:
+                                output_segments.append(segment.text)
+                content = " ".join(output_segments) if output_segments else None
+            elif hasattr(response, "choices") and response.choices:
+                content = response.choices[0].message.content if hasattr(response.choices[0], "message") else None
+
+            # Extract reasoning content if available
+            if hasattr(response, "reasoning"):
+                reasoning_content = response.reasoning
+
+            # Extract finish reason
+            finish_reason = "unknown"
+            if hasattr(response, "finish_reason"):
+                finish_reason = response.finish_reason
+            elif hasattr(response, "choices") and response.choices and hasattr(response.choices[0], "finish_reason"):
+                finish_reason = response.choices[0].finish_reason
+
+            # Extract token usage
+            prompt_tokens = 0
+            completion_tokens = 0
+            total_tokens = 0
+            reasoning_tokens = None
+
+            if hasattr(response, "usage") and response.usage:
+                prompt_tokens = getattr(response.usage, "prompt_tokens", 0)
+                completion_tokens = getattr(response.usage, "completion_tokens", 0)
+                total_tokens = getattr(response.usage, "total_tokens", 0)
+                reasoning_tokens = getattr(response.usage, "reasoning_tokens", None)
+
+            return UnifiedResponse(
+                id=response.id if hasattr(response, "id") else "unknown",
+                model=response.model if hasattr(response, "model") else "unknown",
+                content=content,
+                finish_reason=finish_reason,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                reasoning_tokens=reasoning_tokens,
+                system_fingerprint=getattr(response, "system_fingerprint", None),
+                model_version=getattr(response, "model_version", None),
+                reasoning_content=reasoning_content,
+                endpoint_used="responses",
+                raw_response=response,
+            )
+
+    async def generate_response(
+        self,
+        query: str,
+        model_config: Any,
+        conversation_history: list[dict[str, str]] | None = None,
+        system_message: str | None = None,
+        stream: bool = False,
+        **kwargs,
+    ) -> UnifiedResponse | None:
+        """
+        Unified method that routes to appropriate endpoint (/chat/completions or /responses).
+
+        This is the new primary method for generating chat responses. It automatically
+        detects which endpoint to use based on model configuration and parameters,
+        then routes the request appropriately.
+
+        Args:
+            query: The user's query/message
+            model_config: ModelConfig instance with model settings
+            conversation_history: Optional list of previous messages
+            system_message: Optional system message content
+            stream: Whether to stream the response (default: False)
+            **kwargs: Additional parameters to pass to the API
+
+        Returns:
+            UnifiedResponse object with the response data, or None if error occurs
+
+        Example:
+            >>> from apps.artagent.backend.registries.agentstore.base import ModelConfig
+            >>> model_config = ModelConfig(
+            ...     deployment_id="gpt-4o",
+            ...     endpoint_preference="auto",
+            ...     temperature=0.7
+            ... )
+            >>> response = await manager.generate_response(
+            ...     query="What is the capital of France?",
+            ...     model_config=model_config
+            ... )
+            >>> print(response.content)
+        """
+        start_time = time.time()
+        logger.info(
+            f"generate_response started at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time))}"
+        )
+
+        with self._create_trace_context(
+            name="aoai.generate_response",
+            metadata={
+                "operation_type": "unified_chat_completion",
+                "model": model_config.deployment_id,
+                "endpoint_preference": getattr(model_config, "endpoint_preference", "auto"),
+                "stream_mode": stream,
+            },
+        ) as trace:
+            try:
+                if hasattr(trace, "set_attribute"):
+                    trace.set_attribute(SpanAttr.OPERATION_NAME.value, "aoai.generate_response")
+                    trace.set_attribute("aoai.model", model_config.deployment_id)
+                    trace.set_attribute("aoai.stream", stream)
+
+                # 1. Determine which endpoint to use
+                use_responses = self._should_use_responses_endpoint(model_config, **kwargs)
+                endpoint_type = "responses" if use_responses else "chat"
+
+                logger.info(f"Using endpoint: {endpoint_type} for model: {model_config.deployment_id}")
+
+                # 2. Prepare messages
+                conversation_history = conversation_history or []
+                system_msg = system_message or "You are an AI assistant that helps people find information. Please be precise, polite, and concise."
+
+                # Add system message if not present
+                system_message_obj = {"role": "system", "content": system_msg}
+                if not conversation_history or conversation_history[0] != system_message_obj:
+                    conversation_history.insert(0, system_message_obj)
+
+                # Add user message
+                user_message = {"role": "user", "content": query}
+                messages = conversation_history + [user_message]
+
+                # 3. Prepare parameters for the selected endpoint
+                if use_responses:
+                    params = self._prepare_responses_params(model_config, messages, stream=stream, **kwargs)
+                else:
+                    params = self._prepare_chat_params(model_config, messages, stream=stream, **kwargs)
+
+                log_config = {
+                    "deployment_id": getattr(model_config, "deployment_id", None),
+                    "endpoint_preference": getattr(model_config, "endpoint_preference", None),
+                    "api_version": getattr(model_config, "api_version", None),
+                    "temperature": getattr(model_config, "temperature", None),
+                    "top_p": getattr(model_config, "top_p", None),
+                    "max_tokens": getattr(model_config, "max_tokens", None),
+                    "max_completion_tokens": getattr(model_config, "max_completion_tokens", None),
+                    "min_p": getattr(model_config, "min_p", None),
+                    "typical_p": getattr(model_config, "typical_p", None),
+                    "reasoning_effort": getattr(model_config, "reasoning_effort", None),
+                    "include_reasoning": getattr(model_config, "include_reasoning", False),
+                    "verbosity": getattr(model_config, "verbosity", None),
+                    "model_family": getattr(model_config, "model_family", None),
+                    "endpoint_type": endpoint_type,
+                    "stream": stream,
+                }
+                log_params = {}
+                for key, value in params.items():
+                    if key in {"messages"}:
+                        continue
+                    if key == "tools" and isinstance(value, list):
+                        log_params["tools"] = f"{len(value)} tools"
+                        continue
+                    if key == "metadata" and isinstance(value, dict):
+                        log_params["metadata_keys"] = list(value.keys())
+                        continue
+                    if key == "response_format" and isinstance(value, dict):
+                        log_params["response_format_keys"] = list(value.keys())
+                        continue
+                    log_params[key] = value
+
+                logger.info("AOAI invoke config=%s params=%s", log_config, log_params)
+
+                # 4. Call the appropriate endpoint with CLIENT span
+                with tracer.start_as_current_span(
+                    f"{PeerService.AZURE_OPENAI}.{GenAIOperation.CHAT}",
+                    kind=SpanKind.CLIENT,
+                ) as llm_span:
+                    api_start_time = time.perf_counter()
+
+                    # Set span attributes
+                    self._set_genai_span_attributes(
+                        llm_span,
+                        operation=GenAIOperation.CHAT,
+                        model=model_config.deployment_id,
+                        max_tokens=params.get("max_tokens"),
+                        temperature=params.get("temperature"),
+                        top_p=params.get("top_p"),
+                        endpoint_type=endpoint_type,
+                        min_p=params.get("min_p"),
+                        typical_p=params.get("typical_p"),
+                        reasoning_effort=params.get("reasoning_effort"),
+                        verbosity=params.get("verbosity"),
+                    )
+
+                    # Make the API call
+                    if use_responses:
+                        try:
+                            raw_response = self.openai_client.responses.create(**params)
+                        except AttributeError:
+                            # Fallback if responses endpoint not available
+                            logger.warning(
+                                "Responses endpoint not available in SDK, falling back to chat/completions"
+                            )
+                            params_chat = self._prepare_chat_params(model_config, messages, stream=stream, **kwargs)
+                            raw_response = self.openai_client.chat.completions.create(**params_chat)
+                            endpoint_type = "chat"
+                    else:
+                        raw_response = self.openai_client.chat.completions.create(**params)
+
+                    # 5. Parse response into UnifiedResponse
+                    if not stream:
+                        unified_response = self._parse_response(raw_response, endpoint_type)
+
+                        # Set response attributes on CLIENT span
+                        self._set_genai_response_attributes(llm_span, unified_response, api_start_time)
+
+                        # Log response metrics to trace
+                        if hasattr(trace, "set_attribute"):
+                            trace.set_attribute("aoai.endpoint_used", endpoint_type)
+                            trace.set_attribute("aoai.response_length", len(unified_response.content or ""))
+                            trace.set_attribute("aoai.prompt_tokens", unified_response.prompt_tokens)
+                            trace.set_attribute("aoai.completion_tokens", unified_response.completion_tokens)
+                            trace.set_attribute("aoai.total_tokens", unified_response.total_tokens)
+                            if unified_response.reasoning_tokens:
+                                trace.set_attribute("aoai.reasoning_tokens", unified_response.reasoning_tokens)
+
+                        end_time = time.time()
+                        duration = end_time - start_time
+                        logger.info(
+                            f"generate_response finished at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end_time))} "
+                            f"(Duration: {duration:.2f}s, Endpoint: {endpoint_type}, Tokens: {unified_response.total_tokens})"
+                        )
+
+                        return unified_response
+                    else:
+                        # Streaming not yet implemented
+                        logger.warning("Streaming mode not yet implemented in generate_response, returning None")
+                        return None
+
+            except openai.APIConnectionError as e:
+                if hasattr(trace, "set_attribute"):
+                    trace.set_attribute(SpanAttr.ERROR_TYPE.value, "api_connection_error")
+                    trace.set_attribute(SpanAttr.ERROR_MESSAGE.value, str(e))
+                logger.error("API Connection Error: The server could not be reached.")
+                logger.error(f"Error details: {e}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                return None
+            except Exception as e:
+                if hasattr(trace, "set_attribute"):
+                    trace.set_attribute(SpanAttr.ERROR_TYPE.value, "unexpected_error")
+                    trace.set_attribute(SpanAttr.ERROR_MESSAGE.value, str(e))
+                error_message = str(e)
+                if "maximum context length" in error_message:
+                    logger.warning("Context length exceeded. Consider reducing conversation history.")
+                logger.error("Unexpected error occurred during response generation.")
+                logger.error(f"Error details: {e}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                return None

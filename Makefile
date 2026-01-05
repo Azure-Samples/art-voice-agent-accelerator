@@ -146,10 +146,11 @@ generate_audio:
 	$(UV_BIN) run python $(SCRIPTS_LOAD_DIR)/utils/audio_generator.py --max-turns 5
 
 # WebSocket endpoint load testing (current approach)
-# DEPLOYED_URL = 
+# PIPELINE: cascade (default) or voicelive
 HOST = localhost:8010
+PIPELINE = cascade
 run_load_test_acs_media:
-	@echo "Running load test (override with e.g. make run_load_test URL=ws://host USERS=10 SPAWN_RATE=2 TIME=30s EXTRA_ARGS='--headless')"
+	@echo "Running ACS media load test (PIPELINE=$(PIPELINE))"
 	$(eval WS_URL ?= ws://$(HOST)/api/v1/media/stream)
 	$(eval USERS ?= 15)
 	$(eval SPAWN_RATE ?= 2)
@@ -163,11 +164,12 @@ run_load_test_acs_media:
 	fi
 	@echo "🚀 Starting Locust load test..."
 	@echo "   Host: $(WS_URL)"
+	@echo "   Pipeline: $(PIPELINE)"
 	@echo "   Users: $(USERS)"
 	@echo "   Spawn Rate: $(SPAWN_RATE) users/sec"
 	@echo "   Duration: $(TIME)"
 	@echo ""
-	locust -f $(SCRIPTS_LOAD_DIR)/locustfile.acs_media.py \
+	PIPELINE=$(PIPELINE) locust -f $(SCRIPTS_LOAD_DIR)/locustfile.acs_media.py \
 		--host=$(WS_URL) \
 		--users $(USERS) \
 		--spawn-rate $(SPAWN_RATE) \
@@ -175,8 +177,8 @@ run_load_test_acs_media:
 		--headless \
 		$(EXTRA_ARGS)
 
-run_load_test_realtime_conversation:
-	@echo "Running load test (override with e.g. make run_load_test URL=ws://host USERS=10 SPAWN_RATE=2 TIME=30s EXTRA_ARGS='--headless')"
+run_load_test_browser_conversation:
+	@echo "Running browser conversation load test (PIPELINE=$(PIPELINE))"
 	$(eval WS_URL ?= ws://$(HOST)/api/v1/realtime/conversation)
 	$(eval USERS ?= 15)
 	$(eval SPAWN_RATE ?= 2)
@@ -190,11 +192,12 @@ run_load_test_realtime_conversation:
 	fi
 	@echo "🚀 Starting Locust load test..."
 	@echo "   Host: $(WS_URL)"
+	@echo "   Pipeline: $(PIPELINE)"
 	@echo "   Users: $(USERS)"
 	@echo "   Spawn Rate: $(SPAWN_RATE) users/sec"
 	@echo "   Duration: $(TIME)"
 	@echo ""
-	locust -f $(SCRIPTS_LOAD_DIR)/locustfile.realtime_conversation.py \
+	PIPELINE=$(PIPELINE) locust -f $(SCRIPTS_LOAD_DIR)/locustfile.browser_conversation.py \
 		--host=$(WS_URL) \
 		--users $(USERS) \
 		--spawn-rate $(SPAWN_RATE) \
@@ -568,8 +571,8 @@ help:
 	@echo ""
 	@echo "⚡ Load Testing:"
 	@echo "  generate_audio                   Generate PCM audio files for load testing"
-	@echo "  run_load_test_acs_media          Run ACS media WebSocket load test (HOST=$(HOST))"
-	@echo "  run_load_test_realtime_conversation  Run realtime conversation WebSocket load test"
+	@echo "  run_load_test_acs_media          Run ACS media WebSocket load test (PIPELINE=$(PIPELINE))"
+	@echo "  run_load_test_browser_conversation  Run browser conversation WebSocket load test"
 	@echo ""
 	@echo "📞 Azure Communication Services:"
 	@echo "  purchase_acs_phone_number        Purchase ACS phone number and store in env file"
@@ -591,7 +594,8 @@ help:
 	@echo "  PHONE                            Phone number for testing (default: +18165019907)"
 	@echo ""
 	@echo "💡 Load Testing Parameters:"
-	@echo "  Override with: make run_load_test_acs_media HOST=your-host USERS=10 SPAWN_RATE=2 TIME=30s"
+	@echo "  Override with: make run_load_test_acs_media HOST=your-host USERS=10 PIPELINE=voicelive"
+	@echo "  • PIPELINE: Orchestration mode - cascade (default) or voicelive"
 	@echo "  • WS_URL: WebSocket URL (derived from HOST)"
 	@echo "  • USERS: Number of concurrent users (default: 15)"
 	@echo "  • SPAWN_RATE: Users spawned per second (default: 2)"

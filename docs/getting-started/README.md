@@ -61,10 +61,73 @@ flowchart TD
     | **Monitoring** | Application Insights, Log Analytics |
 
 ??? question "Which Azure regions are supported?"
-    Most Azure regions with OpenAI availability work. Recommended: **East US**, **West US 2**, **Sweden Central**.
+    The accelerator requires several Azure services to be available in the same region. Here's a breakdown:
+
+    === "Recommended Regions"
     
-    !!! note "VoiceLive API"
-        Currently in preview with limited regions. Check [Speech Services regions](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/regions).
+        For the best experience, deploy to regions with full service coverage:
+        
+        | Region | OpenAI | Speech | ACS | Redis | Cosmos DB |
+        |--------|:------:|:------:|:---:|:-----:|:---------:|
+        | **East US** | ✅ | ✅ | ✅ | ✅ | ✅ |
+        | **East US 2** | ✅ | ✅ | ✅ | ✅ | ✅ |
+        | **West US 2** | ✅ | ✅ | ✅ | ✅ | ✅ |
+        | **West US 3** | ✅ | ✅ | ✅ | ✅ | ✅ |
+        | **Sweden Central** | ✅ | ✅ | ✅ | ✅ | ✅ |
+        | **UK South** | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+    === "Azure OpenAI"
+    
+        Required models: `gpt-4o`, `gpt-4o-realtime-preview`
+        
+        | Model | Regions |
+        |-------|---------|
+        | **gpt-4o** | East US, East US 2, West US, West US 3, Sweden Central, UK South, France Central, Japan East, Australia East |
+        | **gpt-4o-realtime** | East US 2, Sweden Central, West US 2 |
+        
+        :material-link: [Azure OpenAI Model Availability](https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models#model-summary-table-and-region-availability)
+
+    === "Azure Speech Services"
+    
+        Required for STT/TTS in Custom Cascade mode.
+        
+        Available in 40+ regions including all recommended regions above.
+        
+        :material-link: [Speech Services Regions](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/regions)
+        
+        !!! warning "VoiceLive SDK (Preview)"
+            Currently limited to: **East US 2**, **Sweden Central**, **West US 2**
+            
+            :material-link: [VoiceLive Preview Regions](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/regions#speech-service)
+
+    === "Azure Communication Services"
+    
+        ACS is a **global service** (not region-specific), but resources are created in a data location.
+        
+        | Data Location | Regions |
+        |---------------|---------|
+        | United States | East US, West US 2 |
+        | Europe | UK South, France Central, Sweden Central |
+        | Asia Pacific | Australia East, Japan East, Southeast Asia |
+        
+        :material-link: [ACS Data Residency](https://learn.microsoft.com/en-us/azure/communication-services/concepts/privacy#data-residency)
+
+    === "Azure Managed Redis"
+    
+        Available in 30+ regions. All recommended regions above are supported.
+        
+        :material-link: [Azure Cache for Redis Regions](https://azure.microsoft.com/en-us/explore/global-infrastructure/products-by-region/?products=redis-cache)
+
+    === "Azure Cosmos DB"
+    
+        Cosmos DB is available in **all Azure regions** with multi-region write support.
+        
+        :material-link: [Cosmos DB Regions](https://learn.microsoft.com/en-us/azure/cosmos-db/distribute-data-globally#azure-regions)
+
+    !!! tip "Region Selection Strategy"
+        1. **Start with East US 2** or **Sweden Central** for full feature support including VoiceLive
+        2. **Use paired regions** for disaster recovery (East US ↔ West US)
+        3. **Check quotas** in your subscription before deploying
 
 ??? question "Can I use existing Azure resources?"
     Yes! Skip `azd up` and configure `.env` manually. See [Local Development - Legacy Setup](local-development.md#option-b-legacy-full-env-file-manual-setup).

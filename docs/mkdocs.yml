@@ -35,7 +35,7 @@ theme:
 
 plugins:
   - search
-  - mermaid2
+  - mermaid-zoom
   - neoteroi.mkdocsoad
   - mkdocstrings:
       handlers:
@@ -72,10 +72,11 @@ nav:
       - Cascade Orchestrator: architecture/orchestration/cascade.md
       - VoiceLive Orchestrator: architecture/orchestration/voicelive.md
       - Handoff Service: architecture/orchestration/handoff-service.md
-    - Speech:
+    - Speech & Voice:
       - Streaming Modes: architecture/speech/README.md
       - Recognition: architecture/speech/recognition.md
       - Synthesis: architecture/speech/synthesis.md
+      - Voice Processing: architecture/voice/README.md
     - Data:
       - Session Management: architecture/data/README.md
       - Data Flows: architecture/data/flows.md
@@ -111,6 +112,10 @@ nav:
     - Utilities & Services: guides/utilities.md
 extra_css:
   - assets/oad-styles.css
+
+extra_javascript:
+  - assets/javascripts/mermaid.min.js
+
 markdown_extensions:
   - pymdownx.emoji:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
@@ -122,11 +127,10 @@ markdown_extensions:
   - pymdownx.inlinehilite
   - pymdownx.snippets
   - pymdownx.superfences:
-        # make exceptions to highlighting of code:
       custom_fences:
         - name: mermaid
           class: mermaid
-          format: !!python/name:mermaid2.fence_mermaid
+          format: !!python/name:pymdownx.superfences.fence_div_format
   - pymdownx.tabbed:
       alternate_style: true
   - admonition

@@ -86,6 +86,18 @@ class SpanAttr(str, Enum):
     GENAI_CLIENT_OPERATION_DURATION = "gen_ai.client.operation.duration"
     GENAI_SERVER_TIME_TO_FIRST_TOKEN = "gen_ai.server.time_to_first_token"
 
+    # ── Responses Endpoint & Advanced Model Support ──────────────────────────
+    # OpenAI /responses endpoint specific attributes (for o-reasoning/gpt-5)
+    GENAI_ENDPOINT_TYPE = "gen_ai.endpoint.type"  # "chat" or "responses"
+    GENAI_REASONING_TOKENS = "gen_ai.usage.reasoning_tokens"  # Reasoning tokens used
+    GENAI_REASONING_EFFORT = "gen_ai.request.reasoning_effort"  # "low", "medium", "high"
+    GENAI_MIN_P = "gen_ai.request.min_p"  # Minimum probability threshold
+    GENAI_TYPICAL_P = "gen_ai.request.typical_p"  # Typical sampling parameter
+    GENAI_VERBOSITY = "gen_ai.request.verbosity"  # Output verbosity level (0-2)
+    GENAI_MODEL_VERSION = "gen_ai.response.model_version"  # Model version string
+    GENAI_SYSTEM_FINGERPRINT = "gen_ai.response.system_fingerprint"  # System config fingerprint
+    GENAI_INCLUDE_REASONING = "gen_ai.request.include_reasoning"  # Whether reasoning is included
+
     # ═══════════════════════════════════════════════════════════════════════════
     # SPEECH SERVICES ATTRIBUTES - Azure Cognitive Services Speech
     # ═══════════════════════════════════════════════════════════════════════════

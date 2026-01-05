@@ -57,6 +57,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from jinja2 import Template
+
 from apps.artagent.backend.registries.scenariostore.loader import (
     HandoffConfig,
     ScenarioConfig,
@@ -487,6 +489,11 @@ class HandoffService:
             share_context=handoff_cfg.share_context,
             greet_on_switch=handoff_cfg.greet_on_switch,
         )
+        system_vars = self._apply_context_vars(
+            system_vars=system_vars,
+            current_system_vars=current_system_vars,
+            context_vars=handoff_cfg.context_vars,
+        )
 
         logger.info(
             "Handoff resolved | %s → %s | tool=%s type=%s share_context=%s generic=%s",
@@ -508,6 +515,65 @@ class HandoffService:
             share_context=handoff_cfg.share_context,
             handoff_type=handoff_cfg.type,
         )
+
+    def _apply_context_vars(
+        self,
+        *,
+        system_vars: dict[str, Any],
+        current_system_vars: dict[str, Any],
+        context_vars: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Merge configured context vars into system_vars, rendering templates if needed."""
+        if not context_vars or not isinstance(context_vars, dict):
+            return system_vars
+
+        render_context = {
+            **self._filter_render_context(current_system_vars),
+            **self._filter_render_context(system_vars),
+        }
+
+        for key, raw_value in context_vars.items():
+            if not key:
+                continue
+            rendered_value = self._render_context_value(raw_value, render_context)
+            if "." in key:
+                self._set_nested_value(system_vars, key.split("."), rendered_value)
+            else:
+                system_vars[key] = rendered_value
+
+        return system_vars
+
+    @staticmethod
+    def _filter_render_context(context: dict[str, Any]) -> dict[str, Any]:
+        """Remove None values so Jinja default filters behave as expected."""
+        if not context:
+            return {}
+        return {k: v for k, v in context.items() if v is not None and v != "None"}
+
+    @staticmethod
+    def _render_context_value(value: Any, render_context: dict[str, Any]) -> Any:
+        """Render string values as Jinja templates, returning raw value on failure."""
+        if not isinstance(value, str):
+            return value
+        if "{{" not in value:
+            return value
+        try:
+            template = Template(value)
+            return template.render(**render_context)
+        except Exception:
+            return value
+
+    @staticmethod
+    def _set_nested_value(target: dict[str, Any], path: list[str], value: Any) -> None:
+        """Set a nested value on a dict using a dot-separated path."""
+        if not path:
+            return
+        cursor = target
+        for part in path[:-1]:
+            if not isinstance(cursor.get(part), dict):
+                cursor[part] = {}
+            cursor = cursor[part]
+        cursor[path[-1]] = value
 
     # ───────────────────────────────────────────────────────────────────────────
     # Generic Handoff Helpers

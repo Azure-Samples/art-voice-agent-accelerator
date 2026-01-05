@@ -1,0 +1,50 @@
+# default
+# Custom Scenario
+
+name: default
+description: General customer service scenario with authentication, knowledge base, and fraud detection
+icon: "🎭"
+
+# Starting agent
+start_agent: Concierge
+
+# Agents to include in this scenario
+agents:
+  - Concierge
+  - AuthAgent
+  - GeneralKBAgent
+  - FraudAgent
+
+# Handoff behavior - default for unlisted routes
+handoff_type: announced
+
+# Handoff Graph - Directed edges between agents
+handoffs:
+  - from: Concierge
+    to: AuthAgent
+    tool: handoff_to_agent
+    type: announced
+    share_context: true
+
+  - from: Concierge
+    to: GeneralKBAgent
+    tool: handoff_to_agent
+    type: announced
+    share_context: true
+
+  - from: AuthAgent
+    to: FraudAgent
+    tool: handoff_to_agent
+    type: announced
+    share_context: true
+
+# Generic Handoff Configuration
+# Enables the handoff_to_agent tool for dynamic agent transfers
+generic_handoff:
+  enabled: true
+  default_type: announced
+  share_context: true
+  require_client_id: false
+
+# Agent defaults applied to all agents
+agent_defaults:

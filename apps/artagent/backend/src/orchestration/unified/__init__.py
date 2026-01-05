@@ -41,6 +41,7 @@ from apps.artagent.backend.src.utils.tracing import (
     create_service_handler_attrs,
 )
 from apps.artagent.backend.voice.shared.config_resolver import resolve_orchestrator_config
+from src.stateful.state_managment import MemoManager
 from apps.artagent.backend.voice import (
     CascadeOrchestratorAdapter,
     OrchestratorContext,
@@ -686,13 +687,16 @@ async def route_turn(
                     "streaming": False,
                     "turn_id": run_id,
                     "response_id": run_id,
-                    "status": "completed",
+                    "status": "error" if result.error else "completed",
                     "sender": final_agent,
                     "speaker": final_agent,
                     "active_agent": final_agent,
                     "active_agent_label": final_label,
                     "run_id": run_id,
                 }
+                # Add error details if present
+                if result.error:
+                    payload["error"] = result.error
                 envelope = make_envelope(
                     etype="event",
                     sender=final_label,

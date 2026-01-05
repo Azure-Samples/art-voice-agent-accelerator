@@ -253,24 +253,46 @@ async def get_session_metrics(
         # Extract latency data if present
         latency_data = corememory.get("latency", {})
         if latency_data:
-            # Parse the latency structure from LatencyTool
-            runs = latency_data.get("runs", {})
-            turn_count = len(runs)
+            # PRIORITY 1: Try core_memory_metrics structure first (recent_turns)
+            recent_turns = latency_data.get("recent_turns", [])
+            if recent_turns:
+                # This is the newer structure from core_memory_metrics
+                turn_count = len(recent_turns)
 
-            # Aggregate samples by stage
-            samples_by_stage: dict[str, list[float]] = {}
-            for run_id, run_data in runs.items():
-                for sample in run_data.get("samples", []):
-                    stage = sample.get("stage", "unknown")
-                    # Duration is in seconds, convert to ms
-                    dur_ms = sample.get("dur", 0) * 1000
-                    if stage not in samples_by_stage:
-                        samples_by_stage[stage] = []
-                    samples_by_stage[stage].append(dur_ms)
+                # Aggregate samples by metric type from recent_turns
+                samples_by_stage: dict[str, list[float]] = {}
+                for turn in recent_turns:
+                    metrics = turn.get("metrics", {})
+                    for metric_type, metric_data in metrics.items():
+                        value_ms = metric_data.get("value_ms")
+                        if value_ms is not None:
+                            if metric_type not in samples_by_stage:
+                                samples_by_stage[metric_type] = []
+                            samples_by_stage[metric_type].append(value_ms)
 
-            # Calculate stats for each stage
-            for stage, samples in samples_by_stage.items():
-                latency_summary[stage] = _get_latency_stats(samples)
+                # Calculate stats for each metric type
+                for stage, samples in samples_by_stage.items():
+                    latency_summary[stage] = _get_latency_stats(samples)
+
+            else:
+                # FALLBACK: Parse legacy latency data structure (pre-OTel migration)
+                runs = latency_data.get("runs", {})
+                turn_count = len(runs)
+
+                # Aggregate samples by stage
+                samples_by_stage: dict[str, list[float]] = {}
+                for run_id, run_data in runs.items():
+                    for sample in run_data.get("samples", []):
+                        stage = sample.get("stage", "unknown")
+                        # Duration is in seconds, convert to ms
+                        dur_ms = sample.get("dur", 0) * 1000
+                        if stage not in samples_by_stage:
+                            samples_by_stage[stage] = []
+                        samples_by_stage[stage].append(dur_ms)
+
+                # Calculate stats for each stage
+                for stage, samples in samples_by_stage.items():
+                    latency_summary[stage] = _get_latency_stats(samples)
 
             if latency_summary:
                 max_avg_ms = max((stats.avg_ms for stats in latency_summary.values()), default=0)

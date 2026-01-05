@@ -1,0 +1,38 @@
+comparison_name: gpt4o_vs_o1_fraud
+scenario_template: fraud_detection_basic
+description: Compare Chat Completions (GPT-4o) vs Responses API (o1) for fraud detection
+
+variants:
+  - variant_id: gpt4o_baseline
+    agent: FraudAgent
+    model_override:
+      deployment_id: gpt-4o
+      endpoint_preference: chat
+      temperature: 0.6
+      top_p: 0.9
+      max_tokens: 200
+
+  - variant_id: o3_mini_responses
+    agent: FraudAgent
+    model_override:
+      deployment_id: o3-mini
+      endpoint_preference: responses
+      max_completion_tokens: 500
+      reasoning_effort: medium
+      include_reasoning: false
+
+# Shared turns across both variants
+turns:
+  - turn_id: turn_1
+    user_input: "I see a $500 charge from Amazon that I didn't make"
+    expectations:
+      tools_called:
+        - analyze_recent_transactions
+        - check_suspicious_activity
+
+comparison_metrics:
+  - latency_p95_ms  # o1 may be slower due to reasoning
+  - tool_precision  # Both should be high
+  - tool_efficiency  # Compare redundant tool calls
+  - grounded_span_ratio  # Response quality
+  - cost_per_turn  # o1 is more expensive

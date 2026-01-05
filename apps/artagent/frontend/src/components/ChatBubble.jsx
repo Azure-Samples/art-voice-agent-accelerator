@@ -81,6 +81,8 @@ const ChatBubble = ({ message }) => {
     streaming,
     cancelled,
     cancelReason,
+    status,
+    error,
   } = message;
   const isUser = speaker === "User";
   const isSystem = speaker === "System" && !isTool;
@@ -88,7 +90,103 @@ const ChatBubble = ({ message }) => {
   const cancellationLabel = cancelReason
     ? cancelReason.replace(/[_-]+/g, " ")
     : "Assistant interrupted";
-  
+
+  // Error message display (when status === "error" or error field is present)
+  if (status === "error" || error) {
+    let errorData = {};
+    try {
+      // Try to parse error as JSON if it's a string
+      errorData = typeof error === "string" ? JSON.parse(error) : error || {};
+    } catch {
+      // Fallback to simple error message
+      errorData = {
+        code: "Error",
+        message: typeof error === "string" ? error : "An error occurred",
+        details: ""
+      };
+    }
+
+    const { code = "Error", message: errorMessage = "An error occurred", details = "" } = errorData;
+
+    return (
+      <Box sx={{ width: "100%", display: "flex", justifyContent: "center", px: 1, py: 1 }}>
+        <Card
+          elevation={6}
+          sx={{
+            width: "100%",
+            maxWidth: 600,
+            borderRadius: 3,
+            background: "linear-gradient(135deg, #fca5a5, #ef4444)",
+            color: "#fff",
+            border: "1px solid rgba(255,255,255,0.16)",
+            boxShadow: "0 18px 40px rgba(239,68,68,0.28)",
+          }}
+        >
+          <CardHeader
+            avatar={<ErrorOutlineRoundedIcon sx={{ color: "#fee2e2", fontSize: 28 }} />}
+            title={
+              <Typography variant="subtitle1" sx={{ fontWeight: 600, letterSpacing: 0.4 }}>
+                {code}
+              </Typography>
+            }
+            subheader="Error occurred during processing"
+            subheaderTypographyProps={{
+              sx: {
+                color: "rgba(254,226,226,0.85)",
+                textTransform: "uppercase",
+                fontSize: "0.7rem",
+                letterSpacing: "0.08em",
+                fontWeight: 600,
+              },
+            }}
+            action={
+              <Chip
+                label="Failed"
+                color="error"
+                variant="outlined"
+                size="small"
+                icon={<ErrorOutlineRoundedIcon fontSize="small" />}
+                sx={{
+                  color: "#7f1d1d",
+                  borderColor: "rgba(248,250,252,0.4)",
+                  backgroundColor: "rgba(248,250,252,0.15)",
+                  '& .MuiChip-icon': {
+                    color: "#dc2626",
+                  },
+                }}
+              />
+            }
+            sx={{
+              '& .MuiCardHeader-action': { alignSelf: "center" },
+              pb: 0,
+            }}
+          />
+          <Divider sx={{ borderColor: "rgba(248,250,252,0.2)" }} />
+          <CardContent sx={{ pt: 2, pb: 2, color: "rgba(248,250,252,0.95)" }}>
+            <Typography variant="body1" sx={{ fontWeight: 500, mb: details ? 1.5 : 0 }}>
+              {errorMessage}
+            </Typography>
+            {details && (
+              <Typography
+                variant="body2"
+                sx={{
+                  color: "rgba(248,250,252,0.75)",
+                  fontSize: "0.85rem",
+                  fontStyle: "italic",
+                  mt: 1,
+                  pl: 1.5,
+                  borderLeft: "2px solid rgba(248,250,252,0.3)"
+                }}
+              >
+                {details}
+              </Typography>
+            )}
+          </CardContent>
+        </Card>
+      </Box>
+    );
+  }
+
   if (isTool) {
     const safeText = text ?? "";
     const [headline = "", ...detailLines] = safeText.split("\n");

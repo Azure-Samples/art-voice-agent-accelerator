@@ -81,7 +81,6 @@ if TYPE_CHECKING:
     from src.pools.session_manager import SessionContext
     from src.speech.speech_recognizer import StreamingSpeechRecognizerFromBytes
     from src.stateful.state_managment import MemoManager
-    from src.tools.latency_tool import LatencyTool
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -132,7 +131,6 @@ class VoiceSessionContext:
         stt_client: STT recognizer from pool (Azure Speech SDK)
 
         memo_manager: Session memory manager (MemoManager)
-        latency_tool: Latency tracking tool (LatencyTool)
 
         cancel_event: Async event for TTS cancellation
         is_synthesizing: Whether TTS synthesis is in progress
@@ -168,7 +166,6 @@ class VoiceSessionContext:
 
     # ─── State Management ───
     memo_manager: MemoManager | None = None
-    latency_tool: LatencyTool | None = None
     session_context: SessionContext | None = None  # Legacy wrapper
     stream_mode: StreamMode | None = None
 
@@ -330,7 +327,6 @@ class VoiceSessionContext:
         ws.state.session_context = self.session_context
         ws.state.tts_client = self.tts_client
         ws.state.stt_client = self.stt_client
-        ws.state.lt = self.latency_tool
         ws.state.cm = self.memo_manager
         ws.state.session_id = self.session_id
         ws.state.stream_mode = self.stream_mode
@@ -401,7 +397,6 @@ class _DeprecatedWebSocketStateWrapper:
         mapping = {
             "session_id": "session_id",
             "cm": "memo_manager",
-            "lt": "latency_tool",
             "tts_client": "tts_client",
             "stt_client": "stt_client",
             "is_synthesizing": "is_synthesizing",

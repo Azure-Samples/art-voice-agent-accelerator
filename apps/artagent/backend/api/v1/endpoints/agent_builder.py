@@ -8,7 +8,8 @@ the frontend without restarting the backend.
 
 Endpoints:
     GET  /api/v1/agent-builder/tools      - List available tools
-    GET  /api/v1/agent-builder/voices     - List available voices
+    GET  /api/v1/agent-builder/voices     - List available voices (from Azure Speech)
+    GET  /api/v1/agent-builder/models     - List available model deployments (from Azure AI Foundry)
     GET  /api/v1/agent-builder/defaults   - Get default agent configuration
     POST /api/v1/agent-builder/create     - Create dynamic agent for session
     GET  /api/v1/agent-builder/session/{session_id} - Get session agent config
@@ -18,6 +19,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any
 
@@ -82,9 +84,35 @@ class ModelConfigSchema(BaseModel):
     """Model configuration schema."""
 
     deployment_id: str = "gpt-4o"
+    name: str | None = None
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=0.9, ge=0.0, le=1.0)
     max_tokens: int = Field(default=4096, ge=1, le=16384)
+
+    # Responses API parameters
+    endpoint_preference: str = Field(
+        default="auto",
+        description="Endpoint selection: 'auto' (smart routing), 'chat' (chat/completions), 'responses' (responses API)"
+    )
+    verbosity: int = Field(default=0, ge=0, le=2, description="Response verbosity: 0=minimal, 1=standard, 2=detailed")
+    min_p: float | None = Field(default=None, ge=0.0, le=1.0, description="Minimum probability threshold")
+    typical_p: float | None = Field(default=None, ge=0.0, le=1.0, description="Typical sampling parameter")
+    reasoning_effort: str | None = Field(
+        default=None,
+        description="Reasoning effort level: 'low', 'medium', 'high' (for o1/o3/o4 models)"
+    )
+    include_reasoning: bool = Field(default=False, description="Include reasoning tokens in response")
+    max_completion_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        le=32768,
+        description="Max completion tokens (for reasoning models and responses API)"
+    )
+
+    # Enhanced parameters
+    store: bool | None = Field(default=None, description="Store conversation for training")
+    metadata: dict[str, Any] | None = Field(default=None, description="Custom metadata")
+    response_format: dict[str, Any] | None = Field(default=None, description="Structured output format")
 
 
 class VoiceConfigSchema(BaseModel):
@@ -330,19 +358,65 @@ async def list_available_tools(
     "/voices",
     response_model=dict[str, Any],
     summary="List Available Voices",
-    description="Get list of all available TTS voices for agent configuration.",
+    description="Get list of all available TTS voices for agent configuration from Azure Speech Service.",
     tags=["Agent Builder"],
 )
 async def list_available_voices(
     category: str | None = None,
+    use_cache: bool = True,
 ) -> dict[str, Any]:
     """
-    List all available TTS voices.
+    List all available TTS voices from Azure Speech Service.
 
     Args:
         category: Filter by category (turbo, standard, hd)
+        use_cache: Whether to use static cache (default: True for faster response)
     """
-    voices = AVAILABLE_VOICES
+    start = time.time()
+
+    # For now, use static list for reliability (Azure Speech SDK requires speech key)
+    # TODO: Implement live fetching when speech SDK is available
+    if not use_cache:
+        try:
+            # Attempt to fetch from Azure Speech Service
+            from src.tts.client import get_speech_config
+
+            speech_config = get_speech_config()
+            if speech_config:
+                # Use Azure Speech SDK to list voices
+                import azure.cognitiveservices.speech as speechsdk
+
+                synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=None)
+                result = synthesizer.get_voices_async().get()
+
+                if result.voices:
+                    voices = []
+                    for voice in result.voices:
+                        # Categorize voice
+                        category_name = "standard"
+                        if "Turbo" in voice.short_name:
+                            category_name = "turbo"
+                        elif "HD" in voice.short_name or "Dragon" in voice.short_name:
+                            category_name = "hd"
+
+                        # Only include English voices
+                        if voice.locale.startswith("en-"):
+                            voices.append(VoiceInfo(
+                                name=voice.short_name,
+                                display_name=voice.local_name,
+                                category=category_name,
+                                language=voice.locale,
+                            ))
+
+                    logger.info(f"Fetched {len(voices)} voices from Azure Speech Service")
+                else:
+                    # Fallback to static list
+                    voices = AVAILABLE_VOICES
+        except Exception as e:
+            logger.warning(f"Failed to fetch voices from Azure: {e}. Using static list.")
+            voices = AVAILABLE_VOICES
+    else:
+        voices = AVAILABLE_VOICES
 
     if category:
         voices = [v for v in voices if v.category == category]
@@ -352,15 +426,153 @@ async def list_available_voices(
     for voice in voices:
         if voice.category not in by_category:
             by_category[voice.category] = []
-        by_category[voice.category].append(voice.model_dump())
+        by_category[voice.category].append(voice.model_dump() if hasattr(voice, 'model_dump') else {
+            "name": voice.name,
+            "display_name": voice.display_name,
+            "category": voice.category,
+            "language": voice.language,
+        })
 
     return {
         "status": "success",
         "total": len(voices),
-        "voices": [v.model_dump() for v in voices],
+        "voices": [v.model_dump() if hasattr(v, 'model_dump') else {
+            "name": v.name,
+            "display_name": v.display_name,
+            "category": v.category,
+            "language": v.language,
+        } for v in voices],
         "by_category": by_category,
         "default_voice": DEFAULT_TTS_VOICE,
+        "source": "cached" if use_cache else "live",
+        "response_time_ms": round((time.time() - start) * 1000, 2),
     }
+
+
+@router.get(
+    "/models",
+    response_model=dict[str, Any],
+    summary="List Available Models",
+    description="Get list of all available OpenAI model deployments from Azure AI Foundry.",
+    tags=["Agent Builder"],
+)
+async def list_available_models() -> dict[str, Any]:
+    """
+    List all available OpenAI model deployments from Azure AI Foundry.
+
+    Fetches real-time deployment information from Azure OpenAI service.
+    """
+    start = time.time()
+
+    try:
+        # Import Azure OpenAI client
+        from src.aoai.client import get_client as get_aoai_client
+
+        client = get_aoai_client()
+        if not client:
+            raise HTTPException(
+                status_code=503,
+                detail="Azure OpenAI client not initialized. Check configuration.",
+            )
+
+        # Fetch deployments from Azure
+        models = []
+        try:
+            # List all deployments
+            deployments = client.models.list()
+
+            for deployment in deployments:
+                # Extract deployment info
+                deployment_id = deployment.id
+                model_name = getattr(deployment, "model", deployment_id)
+                created_at = getattr(deployment, "created", None)
+
+                # Categorize model type
+                category = "chat"
+                if "realtime" in deployment_id.lower():
+                    category = "realtime"
+                elif any(x in deployment_id.lower() for x in ["o1", "o3", "o4"]):
+                    category = "reasoning"
+                elif "gpt-5" in deployment_id.lower():
+                    category = "gpt-5"
+                elif "gpt-4" in deployment_id.lower():
+                    category = "gpt-4"
+                elif "gpt-3" in deployment_id.lower():
+                    category = "gpt-3"
+                elif "embedding" in deployment_id.lower():
+                    category = "embedding"
+                elif "whisper" in deployment_id.lower():
+                    category = "transcription"
+
+                models.append({
+                    "deployment_id": deployment_id,
+                    "model_name": model_name,
+                    "category": category,
+                    "created_at": created_at,
+                    "supports_chat": category in ["chat", "gpt-4", "gpt-5", "reasoning", "realtime"],
+                    "supports_streaming": category not in ["embedding", "transcription"],
+                    "endpoint_type": "responses" if category in ["gpt-5", "reasoning"] else "chat",
+                })
+
+            # Group by category
+            by_category: dict[str, list[dict[str, Any]]] = {}
+            for model in models:
+                cat = model["category"]
+                if cat not in by_category:
+                    by_category[cat] = []
+                by_category[cat].append(model)
+
+            # Get recommended default
+            default_model = "gpt-4o"
+            for model in models:
+                if "gpt-4o" in model["deployment_id"].lower():
+                    default_model = model["deployment_id"]
+                    break
+
+            return {
+                "status": "success",
+                "total": len(models),
+                "models": models,
+                "by_category": by_category,
+                "default_model": default_model,
+                "source": "azure_openai",
+                "response_time_ms": round((time.time() - start) * 1000, 2),
+            }
+
+        except AttributeError:
+            # Fallback: client might not support .models.list()
+            # Use environment variables as fallback
+            logger.warning("client.models.list() not supported, using environment fallback")
+
+            # Get deployment from environment
+            deployment_id = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o")
+
+            models = [{
+                "deployment_id": deployment_id,
+                "model_name": deployment_id,
+                "category": "chat",
+                "created_at": None,
+                "supports_chat": True,
+                "supports_streaming": True,
+                "endpoint_type": "chat",
+            }]
+
+            return {
+                "status": "success",
+                "total": len(models),
+                "models": models,
+                "by_category": {"chat": models},
+                "default_model": deployment_id,
+                "source": "environment",
+                "response_time_ms": round((time.time() - start) * 1000, 2),
+            }
+
+    except Exception as e:
+        logger.error(f"Failed to fetch models from Azure: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch models from Azure OpenAI: {str(e)}",
+        )
 
 
 @router.get(
@@ -659,18 +871,41 @@ async def create_dynamic_agent(
     if config.cascade_model:
         cascade_model = ModelConfig(
             deployment_id=config.cascade_model.deployment_id,
+            name=config.cascade_model.name,
             temperature=config.cascade_model.temperature,
             top_p=config.cascade_model.top_p,
             max_tokens=config.cascade_model.max_tokens,
+            # Responses API parameters
+            endpoint_preference=config.cascade_model.endpoint_preference,
+            verbosity=config.cascade_model.verbosity,
+            min_p=config.cascade_model.min_p,
+            typical_p=config.cascade_model.typical_p,
+            reasoning_effort=config.cascade_model.reasoning_effort,
+            include_reasoning=config.cascade_model.include_reasoning,
+            max_completion_tokens=config.cascade_model.max_completion_tokens,
+            store=config.cascade_model.store,
+            metadata=config.cascade_model.metadata,
+            response_format=config.cascade_model.response_format,
         )
     elif config.model:
         # Fallback: use legacy model, but swap realtime for gpt-4o
         base_id = config.model.deployment_id
         cascade_model = ModelConfig(
             deployment_id="gpt-4o" if "realtime" in base_id.lower() else base_id,
+            name=config.model.name,
             temperature=config.model.temperature,
             top_p=config.model.top_p,
             max_tokens=config.model.max_tokens,
+            endpoint_preference=config.model.endpoint_preference,
+            verbosity=config.model.verbosity,
+            min_p=config.model.min_p,
+            typical_p=config.model.typical_p,
+            reasoning_effort=config.model.reasoning_effort,
+            include_reasoning=config.model.include_reasoning,
+            max_completion_tokens=config.model.max_completion_tokens,
+            store=config.model.store,
+            metadata=config.model.metadata,
+            response_format=config.model.response_format,
         )
     else:
         cascade_model = ModelConfig(
@@ -679,23 +914,45 @@ async def create_dynamic_agent(
             top_p=0.9,
             max_tokens=4096,
         )
-    
+
     # VoiceLive model (for realtime API mode)
     if config.voicelive_model:
         voicelive_model = ModelConfig(
             deployment_id=config.voicelive_model.deployment_id,
+            name=config.voicelive_model.name,
             temperature=config.voicelive_model.temperature,
             top_p=config.voicelive_model.top_p,
             max_tokens=config.voicelive_model.max_tokens,
+            endpoint_preference=config.voicelive_model.endpoint_preference,
+            verbosity=config.voicelive_model.verbosity,
+            min_p=config.voicelive_model.min_p,
+            typical_p=config.voicelive_model.typical_p,
+            reasoning_effort=config.voicelive_model.reasoning_effort,
+            include_reasoning=config.voicelive_model.include_reasoning,
+            max_completion_tokens=config.voicelive_model.max_completion_tokens,
+            store=config.voicelive_model.store,
+            metadata=config.voicelive_model.metadata,
+            response_format=config.voicelive_model.response_format,
         )
     elif config.model:
         # Fallback: use legacy model, but ensure realtime for voicelive
         base_id = config.model.deployment_id
         voicelive_model = ModelConfig(
             deployment_id=base_id if "realtime" in base_id.lower() else "gpt-realtime",
+            name=config.model.name,
             temperature=config.model.temperature,
             top_p=config.model.top_p,
             max_tokens=config.model.max_tokens,
+            endpoint_preference=config.model.endpoint_preference,
+            verbosity=config.model.verbosity,
+            min_p=config.model.min_p,
+            typical_p=config.model.typical_p,
+            reasoning_effort=config.model.reasoning_effort,
+            include_reasoning=config.model.include_reasoning,
+            max_completion_tokens=config.model.max_completion_tokens,
+            store=config.model.store,
+            metadata=config.model.metadata,
+            response_format=config.model.response_format,
         )
     else:
         voicelive_model = ModelConfig(
@@ -901,17 +1158,39 @@ async def update_session_agent(
     if config.cascade_model:
         cascade_model = ModelConfig(
             deployment_id=config.cascade_model.deployment_id,
+            name=config.cascade_model.name,
             temperature=config.cascade_model.temperature,
             top_p=config.cascade_model.top_p,
             max_tokens=config.cascade_model.max_tokens,
+            endpoint_preference=config.cascade_model.endpoint_preference,
+            verbosity=config.cascade_model.verbosity,
+            min_p=config.cascade_model.min_p,
+            typical_p=config.cascade_model.typical_p,
+            reasoning_effort=config.cascade_model.reasoning_effort,
+            include_reasoning=config.cascade_model.include_reasoning,
+            max_completion_tokens=config.cascade_model.max_completion_tokens,
+            store=config.cascade_model.store,
+            metadata=config.cascade_model.metadata,
+            response_format=config.cascade_model.response_format,
         )
     elif config.model:
         base_id = config.model.deployment_id
         cascade_model = ModelConfig(
             deployment_id="gpt-4o" if "realtime" in base_id.lower() else base_id,
+            name=config.model.name,
             temperature=config.model.temperature,
             top_p=config.model.top_p,
             max_tokens=config.model.max_tokens,
+            endpoint_preference=config.model.endpoint_preference,
+            verbosity=config.model.verbosity,
+            min_p=config.model.min_p,
+            typical_p=config.model.typical_p,
+            reasoning_effort=config.model.reasoning_effort,
+            include_reasoning=config.model.include_reasoning,
+            max_completion_tokens=config.model.max_completion_tokens,
+            store=config.model.store,
+            metadata=config.model.metadata,
+            response_format=config.model.response_format,
         )
     else:
         cascade_model = ModelConfig(
@@ -920,21 +1199,43 @@ async def update_session_agent(
             top_p=0.9,
             max_tokens=4096,
         )
-    
+
     if config.voicelive_model:
         voicelive_model = ModelConfig(
             deployment_id=config.voicelive_model.deployment_id,
+            name=config.voicelive_model.name,
             temperature=config.voicelive_model.temperature,
             top_p=config.voicelive_model.top_p,
             max_tokens=config.voicelive_model.max_tokens,
+            endpoint_preference=config.voicelive_model.endpoint_preference,
+            verbosity=config.voicelive_model.verbosity,
+            min_p=config.voicelive_model.min_p,
+            typical_p=config.voicelive_model.typical_p,
+            reasoning_effort=config.voicelive_model.reasoning_effort,
+            include_reasoning=config.voicelive_model.include_reasoning,
+            max_completion_tokens=config.voicelive_model.max_completion_tokens,
+            store=config.voicelive_model.store,
+            metadata=config.voicelive_model.metadata,
+            response_format=config.voicelive_model.response_format,
         )
     elif config.model:
         base_id = config.model.deployment_id
         voicelive_model = ModelConfig(
             deployment_id=base_id if "realtime" in base_id.lower() else "gpt-realtime",
+            name=config.model.name,
             temperature=config.model.temperature,
             top_p=config.model.top_p,
             max_tokens=config.model.max_tokens,
+            endpoint_preference=config.model.endpoint_preference,
+            verbosity=config.model.verbosity,
+            min_p=config.model.min_p,
+            typical_p=config.model.typical_p,
+            reasoning_effort=config.model.reasoning_effort,
+            include_reasoning=config.model.include_reasoning,
+            max_completion_tokens=config.model.max_completion_tokens,
+            store=config.model.store,
+            metadata=config.model.metadata,
+            response_format=config.model.response_format,
         )
     else:
         voicelive_model = ModelConfig(

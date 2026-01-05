@@ -266,7 +266,9 @@ WARM_POOL_STT_SIZE: int = _env_int("WARM_POOL_STT_SIZE", 2)
 WARM_POOL_BACKGROUND_REFRESH: bool = _env_bool("WARM_POOL_BACKGROUND_REFRESH", True)
 WARM_POOL_REFRESH_INTERVAL: float = _env_float("WARM_POOL_REFRESH_INTERVAL", 30.0)
 WARM_POOL_SESSION_MAX_AGE: float = _env_float("WARM_POOL_SESSION_MAX_AGE", 1800.0)
-WARM_POOL_RESTART_ON_FAILURE: bool = _env_bool("WARM_POOL_RESTART_ON_FAILURE", True)
+WARM_POOL_RESTART_ON_FAILURE: bool = _env_bool("WARM_POOL_RESTART_ON_FAILURE", False)  # Changed to False for graceful degradation
+WARM_POOL_WARMUP_TIMEOUT: float = _env_float("WARM_POOL_WARMUP_TIMEOUT", 10.0)
+WARM_POOL_MAX_RETRIES: int = _env_int("WARM_POOL_MAX_RETRIES", 2)
 
 
 # ==============================================================================

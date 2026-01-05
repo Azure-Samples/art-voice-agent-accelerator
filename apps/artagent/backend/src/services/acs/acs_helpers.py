@@ -13,6 +13,7 @@ This module provides helper functions and utilities for integrating with Azure C
 
 import asyncio
 import json
+from urllib.parse import urlsplit
 
 
 class MediaCancelledException(Exception):
@@ -53,23 +54,29 @@ def construct_websocket_url(base_url: str, path: str) -> str | None:
         logger.warning("BASE_URL contains placeholder. Please update environment variable.")
         return None
 
-    base_url_clean = base_url.strip("/")
     path_clean = path.strip("/")
 
-    if base_url.startswith("https://"):
-        base_url_clean = base_url.replace("https://", "").strip("/")
-        ws_url = f"wss://{base_url_clean}/{path_clean}"
-        logger.info(f"Constructed WebSocket URL: {ws_url}")
-        return ws_url
-    elif base_url.startswith("http://"):
-        logger.warning("BASE_URL starts with http://. ACS Media Streaming usually requires wss://.")
-        base_url_clean = base_url.replace("http://", "").strip("/")
-        ws_url = f"ws://{base_url_clean}/{path_clean}"
-        logger.info(f"Constructed WebSocket URL: {ws_url}")
-        return ws_url
-    else:
+    parsed = urlsplit(base_url)
+    scheme = parsed.scheme.lower()
+    if scheme not in {"https", "http"} or not parsed.netloc:
         logger.error(f"Cannot determine WebSocket protocol (wss/ws) from BASE_URL: {base_url}")
         return None
+
+    ws_scheme = "wss" if scheme == "https" else "ws"
+    if scheme == "http":
+        logger.warning("BASE_URL starts with http://. ACS Media Streaming usually requires wss://.")
+
+    prefix = parsed.path.strip("/")
+    if prefix and path_clean.startswith(prefix):
+        full_path = path_clean
+    elif prefix and path_clean:
+        full_path = f"{prefix}/{path_clean}"
+    else:
+        full_path = prefix or path_clean
+
+    ws_url = f"{ws_scheme}://{parsed.netloc}/{full_path}" if full_path else f"{ws_scheme}://{parsed.netloc}"
+    logger.info(f"Constructed WebSocket URL: {ws_url}")
+    return ws_url
 
 
 def initialize_acs_caller_instance() -> AcsCaller | None:
@@ -142,6 +149,14 @@ async def send_pcm_frames(
     try:
 
         for b64 in b64_frames:
+            # Check WebSocket connection before sending
+            if (
+                ws.client_state != WebSocketState.CONNECTED
+                or ws.application_state != WebSocketState.CONNECTED
+            ):
+                logger.debug("send_pcm_frames aborted: WebSocket disconnected")
+                return
+
             payload = {
                 "kind": "AudioData",
                 "AudioData": {"data": b64},
@@ -200,6 +215,11 @@ async def play_response(
     initial_backoff: float = 0.1,
 ):
     """
+    DEPRECATED: Use apps.artagent.backend.voice.tts.TTSPlayback instead.
+
+    This function uses Azure's TextSource/SsmlSource API instead of the modern
+    media streaming approach. It's slower and less responsive than the new TTS module.
+
     Plays `response_text` into the given ACS call, using the SpeechConfig.
     Sets bot_speaking=True at start, False when done or on error.
 
@@ -212,6 +232,13 @@ async def play_response(
     :param max_retries:        Maximum retry attempts for 8500 errors
     :param initial_backoff:    Initial backoff time in seconds
     """
+    import warnings
+    warnings.warn(
+        "play_response() is deprecated and will be removed. "
+        "Use apps.artagent.backend.voice.tts.TTSPlayback instead for better performance.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     call_connection_id = ws.headers.get("x-ms-call-connection-id")
     acs_caller = ws.app.state.acs_caller
     call_conn = acs_caller.get_call_connection(call_connection_id=call_connection_id)
@@ -355,6 +382,11 @@ async def play_response_with_queue(
     transcription_resume_delay: float = 0.1,
 ):
     """
+    DEPRECATED: Use apps.artagent.backend.voice.tts.TTSPlayback instead.
+
+    This function uses Azure's TextSource/SsmlSource API with manual queuing instead
+    of the modern media streaming approach. The new TTS module handles this better.
+
     Enhanced play_response that supports message queuing for sequential playback.
     If the bot is already speaking, messages are queued and played in order.
 
@@ -368,6 +400,13 @@ async def play_response_with_queue(
     :param initial_backoff:           Initial backoff time in seconds
     :param transcription_resume_delay: Extra delay after media ends to ensure transcription resumes
     """
+    import warnings
+    warnings.warn(
+        "play_response_with_queue() is deprecated and will be removed. "
+        "Use apps.artagent.backend.voice.tts.TTSPlayback instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     cm = getattr(ws.state, "cm", None)
     call_connection_id = ws.headers.get("x-ms-call-connection-id")
 
@@ -486,6 +525,8 @@ async def _play_response_direct(
     transcription_resume_delay: float = 1.0,
 ):
     """
+    DEPRECATED: Internal helper for play_response_with_queue().
+
     Direct implementation of play_response without queuing logic.
     This is the core playback function that handles the actual TTS.
 

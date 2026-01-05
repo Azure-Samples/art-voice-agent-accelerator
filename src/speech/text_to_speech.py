@@ -1836,6 +1836,20 @@ class SpeechSynthesizer:
             if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
                 logger.debug("TTS connection warmed successfully")
                 return True
+            elif result.reason == speechsdk.ResultReason.Canceled:
+                # Extract detailed cancellation reason
+                error_msg = f"TTS warmup canceled: {result.reason}"
+                if hasattr(result, "cancellation_details") and result.cancellation_details:
+                    cancel_reason = getattr(result.cancellation_details, "reason", "unknown")
+                    error_details = getattr(result.cancellation_details, "error_details", "")
+                    error_code = getattr(result.cancellation_details, "error_code", "")
+                    
+                    error_msg = (
+                        f"TTS warmup canceled - Reason: {cancel_reason}, "
+                        f"ErrorCode: {error_code}, Details: {error_details or 'none'}"
+                    )
+                logger.warning(error_msg)
+                return False
             else:
                 logger.warning("TTS warmup synthesis did not complete: %s", result.reason)
                 return False

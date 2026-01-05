@@ -431,3 +431,4 @@ tests/load/sessions/
 tests/load/results/
 infra/terraform/main.tfvars.json
 provider.conf.json
+.archive

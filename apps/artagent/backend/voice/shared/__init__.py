@@ -83,6 +83,12 @@ from .start_agent_resolver import (
     resolve_start_agent,
 )
 
+# Voice session context (Phase 3)
+from .context import (
+    TransportType,
+    VoiceSessionContext,
+)
+
 __all__ = [
     # Context/Result (shared data classes)
     "OrchestratorContext",
@@ -116,4 +122,7 @@ __all__ = [
     "resolve_start_agent",
     "StartAgentResult",
     "StartAgentSource",
+    # Voice Session Context (Phase 3)
+    "TransportType",
+    "VoiceSessionContext",
 ]

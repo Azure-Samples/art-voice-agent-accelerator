@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================================
-# ✅ Preflight Checks - Environment & Subscription Validation
+# ✔ Preflight Checks - Environment & Subscription Validation
 # ============================================================================
 # Validates the user's environment before provisioning:
 #   - Required CLI tools are installed
@@ -29,16 +29,27 @@ fi
 # Logging (matches parent script style)
 # ============================================================================
 
-log()     { echo "│ $*"; }
-info()    { echo "│ ℹ️  $*"; }
-success() { echo "│ ✅ $*"; }
-warn()    { echo "│ ⚠️  $*"; }
-fail()    { echo "│ ❌ $*" >&2; }
+if [[ -z "${BLUE+x}" ]]; then BLUE=$'\033[0;34m'; fi
+if [[ -z "${GREEN+x}" ]]; then GREEN=$'\033[0;32m'; fi
+if [[ -z "${GREEN_BOLD+x}" ]]; then GREEN_BOLD=$'\033[1;32m'; fi
+if [[ -z "${YELLOW+x}" ]]; then YELLOW=$'\033[1;33m'; fi
+if [[ -z "${RED+x}" ]]; then RED=$'\033[0;31m'; fi
+if [[ -z "${CYAN+x}" ]]; then CYAN=$'\033[0;36m'; fi
+if [[ -z "${DIM+x}" ]]; then DIM=$'\033[2m'; fi
+if [[ -z "${NC+x}" ]]; then NC=$'\033[0m'; fi
+readonly BLUE GREEN GREEN_BOLD YELLOW RED CYAN DIM NC
+
+log()          { printf '│ %s%s%s\n' "$DIM" "$*" "$NC"; }
+info()         { printf '│ %s%s%s\n' "$BLUE" "$*" "$NC"; }
+success()      { printf '│ %s✔%s %s\n' "$GREEN" "$NC" "$*"; }
+phase_success(){ printf '│ %s✔ %s%s\n' "$GREEN_BOLD" "$*" "$NC"; }
+warn()         { printf '│ %s⚠%s  %s\n' "$YELLOW" "$NC" "$*"; }
+fail()         { printf '│ %s✖%s %s\n' "$RED" "$NC" "$*" >&2; }
 
 header() {
     echo ""
     echo "╭─────────────────────────────────────────────────────────────"
-    echo "│ $*"
+    echo "│ ${CYAN}$*${NC}"
     echo "├─────────────────────────────────────────────────────────────"
 }
 
@@ -759,7 +770,7 @@ check_resource_quotas() {
     
     if [[ $cosmos_status -eq 2 ]]; then
         log "    ⚪ Quota check skipped (set PREFLIGHT_DEEP_CHECKS=true to enable)"
-        log "    ℹ️  Subscription limit: ~25 clusters"
+        log "    Subscription limit: ~25 clusters"
     elif [[ $cosmos_status -eq 0 ]]; then
         local cosmos_used cosmos_limit
         cosmos_used=$(echo "$cosmos_result" | cut -d'|' -f1)
@@ -784,7 +795,7 @@ check_resource_quotas() {
     
     if [[ $redis_status -eq 2 ]]; then
         log "    ⚪ Quota check skipped (set PREFLIGHT_DEEP_CHECKS=true to enable)"
-        log "    ℹ️  Subscription limit: ~10 clusters"
+        log "    Subscription limit: ~10 clusters"
     elif [[ $redis_status -eq 0 ]]; then
         local redis_used redis_limit
         redis_used=$(echo "$redis_result" | cut -d'|' -f1)
@@ -809,7 +820,7 @@ check_resource_quotas() {
     
     if [[ $aca_status -eq 2 ]]; then
         log "    ⚪ Quota check skipped (set PREFLIGHT_DEEP_CHECKS=true to enable)"
-        log "    ℹ️  Regional limit: ~100 vCPU"
+        log "    Regional limit: ~100 vCPU"
     elif [[ $aca_status -eq 0 ]]; then
         local aca_used aca_limit
         aca_used=$(echo "$aca_result" | cut -d'|' -f1)
@@ -938,29 +949,46 @@ check_regional_availability() {
     # https://learn.microsoft.com/azure/ai-services/speech-service/regions?tabs=voice-live
     # -------------------------------------------------------------------------
     local voice_live_regions=("eastus2" "swedencentral" "westus2" "southeastasia")
+    local configured_voice_live="${TF_VAR_voice_live_location:-}"
+    if [[ -z "$configured_voice_live" ]]; then
+        configured_voice_live=$(azd env get-value TF_VAR_voice_live_location 2>/dev/null | head -n1 || echo "")
+        [[ "$configured_voice_live" == ERROR:* ]] && configured_voice_live=""
+    fi
     
     if [[ " ${voice_live_regions[*]} " =~ " ${location} " ]]; then
         log "  ✓ Azure Voice Live API"
     else
-        info "  ℹ Azure Voice Live API is NOT available in $location"
-        info "    Available regions: eastus2, swedencentral, westus2, southeastasia"
-        info "    📚 https://learn.microsoft.com/azure/ai-services/speech-service/regions?tabs=voice-live"
-        log ""
-        log "    ✨ No action required: This accelerator automatically deploys a"
-        log "       secondary AI Foundry in a supported region for Voice Live."
-        log ""
-        log "    To customize the Voice Live region, update your tfvars file:"
-        log "      📄 infra/terraform/params/main.tfvars.<env>.json"
-        log ""
-        log "    Example configuration:"
-        log "      {"
-        log "        \"location\": \"$location\","
-        log "        \"voice_live_location\": \"eastus2\""
-        log "      }"
-        log ""
-        log "    Or set via azd:"
-        log "      azd env set TF_VAR_voice_live_location \"eastus2\""
-        # Don't increment warnings - this is handled automatically
+        info "  Azure Voice Live API is NOT available in $location"
+        info "  Supported regions: ${voice_live_regions[*]}"
+        info "  Docs: https://learn.microsoft.com/azure/ai-services/speech-service/regions?tabs=voice-live"
+        
+        if [[ -n "$configured_voice_live" ]]; then
+            info "  Using configured Voice Live region: $configured_voice_live"
+        elif [[ "${CI:-}" == "true" || "${AZD_SKIP_INTERACTIVE:-}" == "true" || ! -t 0 ]]; then
+            info "  Default is eastus2 unless you set TF_VAR_voice_live_location"
+            info "  Set via: azd env set TF_VAR_voice_live_location \"<region>\""
+        else
+            log ""
+            log "  Select a Voice Live region:"
+            for i in "${!voice_live_regions[@]}"; do
+                log "    $((i + 1))) ${voice_live_regions[$i]}"
+            done
+            if read -r -p "│ Choice (1-${#voice_live_regions[@]}) or Enter to skip: " voice_live_choice; then
+                : # Got input
+            else
+                voice_live_choice=""
+            fi
+            
+            if [[ "$voice_live_choice" =~ ^[0-9]+$ ]] && \
+                (( voice_live_choice >= 1 && voice_live_choice <= ${#voice_live_regions[@]} )); then
+                local selected_voice_live="${voice_live_regions[$((voice_live_choice - 1))]}"
+                azd env set TF_VAR_voice_live_location "$selected_voice_live" 2>/dev/null || true
+                success "Voice Live region set to: $selected_voice_live"
+            else
+                info "Skipped Voice Live region selection (default: eastus2)"
+            fi
+        fi
+        # Don't increment warnings - this can be configured by the user
     fi
     
     # -------------------------------------------------------------------------
@@ -1057,7 +1085,7 @@ recommend_regions() {
 # ============================================================================
 
 run_preflight_checks() {
-    header "✅ Running Preflight Checks"
+    header "Running Preflight Checks"
     
     local failed=0
     local skip_azure_checks="${PREFLIGHT_LIVE_CHECKS:-}"
@@ -1145,7 +1173,7 @@ run_preflight_checks() {
         return 1
     fi
     
-    success "All preflight checks passed!"
+    phase_success "All preflight checks passed!"
     return 0
 }
 

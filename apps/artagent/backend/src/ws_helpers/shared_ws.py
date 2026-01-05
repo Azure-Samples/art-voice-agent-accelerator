@@ -7,6 +7,15 @@ WebSocket helpers for both realtime and ACS routers:
     • send_response_to_acs  – phone-call TTS
     • push_final            – "close bubble" helper
     • broadcast_message     – relay to /relay dashboards
+
+LEGACY STATUS:
+--------------
+This file contains legacy TTS code paths that are being phased out.
+New code should use:
+  - apps.artagent.backend.voice.tts.TTSPlayback for TTS
+  - ConversationTurnSpan for telemetry tracking
+
+These functions now use OpenTelemetry decorators for telemetry.
 """
 
 from __future__ import annotations
@@ -38,8 +47,8 @@ from config import (
 from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
 from src.enums.stream_modes import StreamMode
-from src.tools.latency_tool import LatencyTool
 from utils.ml_logging import get_logger
+from utils.telemetry_decorators import trace_speech, add_speech_tts_metrics
 
 logger = get_logger("shared_ws")
 
@@ -91,22 +100,6 @@ def _set_connection_metadata(ws: WebSocket, key: str, value) -> bool:
 
     _mirror_ws_state(ws, key, value)
     return updated
-
-
-def _lt_stop(latency_tool: LatencyTool | None, stage: str, ws: WebSocket, meta=None):
-    """Stop latency tracking with error handling and duplicate protection."""
-    if latency_tool:
-        try:
-            #  Check if timer is actually running before stopping
-            if hasattr(latency_tool, "_active_timers") and stage in latency_tool._active_timers:
-                latency_tool.stop(stage, ws.app.state.redis, meta=meta)
-            else:
-                # Timer not running - this is the source of the warning messages
-                logger.debug(
-                    f"[PERF] Timer '{stage}' not running, skipping stop (run={meta.get('run_id', 'unknown') if meta else 'unknown'})"
-                )
-        except Exception as e:
-            logger.error(f"Latency stop error for stage '{stage}': {e}")
 
 
 def _ws_is_connected(ws: WebSocket) -> bool:
@@ -403,10 +396,10 @@ async def send_session_envelope(
     return False
 
 
+@trace_speech(operation="tts.browser_send")
 async def send_tts_audio(
     text: str,
     ws: WebSocket,
-    latency_tool: LatencyTool | None = None,
     voice_name: str | None = None,
     voice_style: str | None = None,
     rate: str | None = None,
@@ -414,22 +407,6 @@ async def send_tts_audio(
 ) -> None:
     """Send TTS audio to browser WebSocket client with optimized pool management."""
     run_id = str(uuid.uuid4())[:8]
-
-    if latency_tool:
-        try:
-            #  Safe timer starts with duplicate detection
-            if not hasattr(latency_tool, "_active_timers"):
-                latency_tool._active_timers = set()
-
-            if "tts" not in latency_tool._active_timers:
-                latency_tool.start("tts")
-                latency_tool._active_timers.add("tts")
-
-            if "tts:synthesis" not in latency_tool._active_timers:
-                latency_tool.start("tts:synthesis")
-                latency_tool._active_timers.add("tts:synthesis")
-        except Exception as e:
-            logger.error(f"Latency start error (run={run_id}): {e}")
 
     # Use dedicated TTS client per session
     synth = None
@@ -604,6 +581,14 @@ async def send_tts_audio(
             _set_connection_metadata(ws, "last_tts_end_ts", time.monotonic())
             return
 
+        # Record TTS metrics
+        add_speech_tts_metrics(
+            voice=voice_to_use,
+            audio_size_bytes=len(pcm_bytes),
+            text_length=len(text),
+            sample_rate=TTS_SAMPLE_RATE_UI,
+        )
+
         # Signal first audio available
         if on_first_audio:
             try:
@@ -611,26 +596,11 @@ async def send_tts_audio(
             except Exception as e:
                 logger.warning(f"on_first_audio callback failed: {e}")
 
-        _lt_stop(
-            latency_tool,
-            "tts:synthesis",
-            ws,
-            meta={"run_id": run_id, "mode": "browser", "voice": voice_to_use},
-        )
-
         # Split into frames
         frames = SpeechSynthesizer.split_pcm_to_base64_frames(
             pcm_bytes, sample_rate=TTS_SAMPLE_RATE_UI
         )
         logger.debug(f"TTS frames prepared: {len(frames)} (run={run_id})")
-
-        if latency_tool:
-            try:
-                if "tts:send_frames" not in latency_tool._active_timers:
-                    latency_tool.start("tts:send_frames")
-                    latency_tool._active_timers.add("tts:send_frames")
-            except Exception:
-                pass
 
         for i, frame in enumerate(frames):
             # Barge-in: stop sending frames immediately if a cancel is requested
@@ -680,29 +650,10 @@ async def send_tts_audio(
                 logger.error(f"Failed to send audio frame {i} (run={run_id}): {e}")
                 break
 
-        #  Safe stop with timer cleanup
-        if latency_tool and "tts:send_frames" in latency_tool._active_timers:
-            latency_tool._active_timers.remove("tts:send_frames")
-        _lt_stop(
-            latency_tool,
-            "tts:send_frames",
-            ws,
-            meta={"run_id": run_id, "mode": "browser", "frames": len(frames)},
-        )
-
         logger.debug(f"TTS complete: {len(frames)} frames sent (run={run_id})")
 
     except Exception as e:
         logger.error(f"TTS synthesis failed (run={run_id}): {e}")
-        # Clean up timer state on error
-        if latency_tool and "tts:synthesis" in latency_tool._active_timers:
-            latency_tool._active_timers.remove("tts:synthesis")
-        _lt_stop(
-            latency_tool,
-            "tts:synthesis",
-            ws,
-            meta={"run_id": run_id, "mode": "browser", "error": str(e)},
-        )
         try:
             await ws.send_json(
                 {
@@ -714,17 +665,6 @@ async def send_tts_audio(
         except Exception:
             pass
     finally:
-        # Clean up timer state
-        if latency_tool:
-            if "tts" in latency_tool._active_timers:
-                latency_tool._active_timers.remove("tts")
-        _lt_stop(
-            latency_tool,
-            "tts",
-            ws,
-            meta={"run_id": run_id, "mode": "browser", "voice": voice_to_use},
-        )
-
         _set_connection_metadata(ws, "is_synthesizing", False)
         _set_connection_metadata(ws, "audio_playing", False)
         try:
@@ -750,12 +690,12 @@ async def send_tts_audio(
                 logger.error(f"Error releasing temporary TTS synthesizer (run={run_id}): {e}")
 
 
+@trace_speech(operation="tts.acs_send")
 async def send_response_to_acs(
     ws: WebSocket,
     text: str,
     *,
     blocking: bool = False,
-    latency_tool: LatencyTool | None = None,
     stream_mode: StreamMode = ACS_STREAMING_MODE,
     voice_name: str | None = None,
     voice_style: str | None = None,
@@ -813,12 +753,6 @@ async def send_response_to_acs(
     if acs_handler:
         main_event_loop = getattr(acs_handler, "main_event_loop", None)
 
-    if latency_tool:
-        try:
-            latency_tool.start("tts")
-        except Exception as e:
-            logger.debug(f"Latency start error (run={run_id}): {e}")
-
     if stream_mode == StreamMode.MEDIA:
         synth = _get_connection_metadata(ws, "tts_client")
         if not synth:
@@ -828,12 +762,6 @@ async def send_response_to_acs(
                 logger.warning("ACS MEDIA: Temporarily acquired TTS synthesizer from pool")
             except Exception as e:
                 logger.error(f"ACS MEDIA: Unable to acquire TTS synthesizer (run={run_id}): {e}")
-                _lt_stop(
-                    latency_tool,
-                    "tts",
-                    ws,
-                    meta={"run_id": run_id, "mode": "acs", "error": "acquire_failed"},
-                )
                 playback_status = "acquire_failed"
                 _record_status(playback_status)
                 return None
@@ -876,17 +804,6 @@ async def send_response_to_acs(
             )
             playback_status = "failed"
             _record_status(playback_status)
-            _lt_stop(
-                latency_tool,
-                "tts",
-                ws,
-                meta={
-                    "run_id": run_id,
-                    "mode": "acs",
-                    "voice": voice_to_use,
-                    "error": "synthesis_failure",
-                },
-            )
             if temp_synth and synth:
                 try:
                     await ws.app.state.tts_pool.release(synth)
@@ -914,12 +831,6 @@ async def send_response_to_acs(
         if not frames:
             playback_status = "no_audio"
             _record_status(playback_status)
-            _lt_stop(
-                latency_tool,
-                "tts",
-                ws,
-                meta={"run_id": run_id, "mode": "acs", "voice": voice_to_use, "frames": 0},
-            )
             if temp_synth and synth:
                 try:
                     await ws.app.state.tts_pool.release(synth)
@@ -928,6 +839,14 @@ async def send_response_to_acs(
                         f"Error releasing temporary ACS TTS synthesizer (run={run_id}): {release_exc}"
                     )
             return None
+        # Record TTS metrics
+        add_speech_tts_metrics(
+            voice=voice_to_use,
+            audio_size_bytes=len(pcm_bytes),
+            text_length=len(text),
+            sample_rate=TTS_SAMPLE_RATE_ACS,
+        )
+
         # Signal first audio available (frames prepared)
         if on_first_audio:
             try:
@@ -988,15 +907,6 @@ async def send_response_to_acs(
                             _record_status(playback_status)
                             break
 
-                        lt = _get_connection_metadata(ws, "lt")
-                        greeting_ttfb_stopped = _get_connection_metadata(
-                            ws, "_greeting_ttfb_stopped", False
-                        )
-
-                        if lt and not greeting_ttfb_stopped:
-                            lt.stop("greeting_ttfb", ws.app.state.redis)
-                            _set_connection_metadata(ws, "_greeting_ttfb_stopped", True)
-
                         try:
                             await ws.send_json(
                                 {
@@ -1049,18 +959,6 @@ async def send_response_to_acs(
                         and main_event_loop.current_playback_task is playback_task_local
                     ):
                         main_event_loop.current_playback_task = None
-                    _lt_stop(
-                        latency_tool,
-                        "tts:send_frames",
-                        ws,
-                        meta={"run_id": run_id, "mode": "acs", "frames": len(frames)},
-                    )
-                    _lt_stop(
-                        latency_tool,
-                        "tts",
-                        ws,
-                        meta={"run_id": run_id, "mode": "acs", "voice": voice_to_use},
-                    )
                     if temp_synth and synth:
                         try:
                             # Use release_for_session with None to clear state
@@ -1082,12 +980,6 @@ async def send_response_to_acs(
         # TRANSCRIPTION mode - queue with ACS caller
         acs_caller = ws.app.state.acs_caller
         if not acs_caller:
-            _lt_stop(
-                latency_tool,
-                "tts",
-                ws,
-                meta={"run_id": run_id, "mode": "acs", "error": "no_acs_caller"},
-            )
             logger.error("ACS caller not available for TRANSCRIPTION mode")
             playback_status = "no_caller"
             _record_status(playback_status)
@@ -1095,12 +987,6 @@ async def send_response_to_acs(
 
         call_conn = _get_connection_metadata(ws, "call_conn")
         if not call_conn:
-            _lt_stop(
-                latency_tool,
-                "tts",
-                ws,
-                meta={"run_id": run_id, "mode": "acs", "error": "no_call_connection"},
-            )
             logger.error("Call connection not available")
             playback_status = "no_call_connection"
             _record_status(playback_status)
@@ -1111,12 +997,6 @@ async def send_response_to_acs(
             play_response_with_queue(acs_caller, call_conn, text, voice_name=voice_to_use)
         )
 
-        _lt_stop(
-            latency_tool,
-            "tts",
-            ws,
-            meta={"run_id": run_id, "mode": "acs", "queued": True},
-        )
         playback_status = "queued"
         _record_status(playback_status)
 
@@ -1277,7 +1157,6 @@ def queue_acs_tts(
     voice_name: str | None = None,
     voice_style: str | None = None,
     rate: str | None = None,
-    latency_tool: LatencyTool | None = None,
     stream_mode: StreamMode | None = None,
     is_greeting: bool = False,
 ) -> asyncio.Task:
@@ -1293,7 +1172,6 @@ def queue_acs_tts(
         voice_name: Optional voice override
         voice_style: Optional style override
         rate: Optional rate override
-        latency_tool: Optional latency tracking
         stream_mode: Optional stream mode override
         is_greeting: Whether this is a greeting (for logging)
 
@@ -1332,7 +1210,6 @@ def queue_acs_tts(
                 ws,
                 text,
                 blocking=True,
-                latency_tool=latency_tool,
                 voice_name=voice_name,
                 voice_style=voice_style,
                 rate=rate,
@@ -1359,7 +1236,6 @@ async def queue_acs_tts_blocking(
     voice_name: str | None = None,
     voice_style: str | None = None,
     rate: str | None = None,
-    latency_tool: LatencyTool | None = None,
     stream_mode: StreamMode | None = None,
     is_greeting: bool = False,
 ) -> None:
@@ -1375,7 +1251,6 @@ async def queue_acs_tts_blocking(
         voice_name=voice_name,
         voice_style=voice_style,
         rate=rate,
-        latency_tool=latency_tool,
         stream_mode=stream_mode,
         is_greeting=is_greeting,
     )

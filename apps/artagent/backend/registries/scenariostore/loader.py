@@ -44,6 +44,7 @@ class HandoffConfig:
         type: "discrete" (silent) or "announced" (greet on switch)
         share_context: Whether to pass conversation context (default True)
         handoff_condition: Prompt text describing when to trigger this handoff
+        context_vars: Extra context variables to pass to the target agent
     """
 
     from_agent: str = ""
@@ -52,6 +53,7 @@ class HandoffConfig:
     type: str = "announced"  # "discrete" or "announced"
     share_context: bool = True
     handoff_condition: str = ""  # User-defined condition for when to trigger handoff
+    context_vars: dict[str, Any] = field(default_factory=dict)
 
     @property
     def greet_on_switch(self) -> bool:
@@ -67,6 +69,10 @@ class HandoffConfig:
         if "greet_on_switch" in data and "type" not in data:
             handoff_type = "announced" if data["greet_on_switch"] else "discrete"
 
+        context_vars = data.get("context_vars", data.get("handoff_context", {}))
+        if not isinstance(context_vars, dict):
+            context_vars = {}
+
         return cls(
             from_agent=data.get("from", data.get("from_agent", "")),
             to_agent=data.get("to", data.get("to_agent", "")),
@@ -74,6 +80,7 @@ class HandoffConfig:
             type=handoff_type,
             share_context=data.get("share_context", True),
             handoff_condition=data.get("handoff_condition", data.get("condition", "")),
+            context_vars=context_vars,
         )
 
 

@@ -103,48 +103,128 @@ cp .env.sample .env
 # Edit .env with your values
 ```
 
-??? example "Required variables for `.env`"
+??? example "Full `.env.sample` Reference"
+    The `.env.sample` file contains all available configuration options. Here are the **required** variables:
+    
     ```bash
-    # Azure OpenAI
-    AZURE_OPENAI_ENDPOINT=https://<your-aoai>.openai.azure.com
-    AZURE_OPENAI_KEY=<aoai-key>
-    AZURE_OPENAI_CHAT_DEPLOYMENT_ID=gpt-4o
+    # ============================================================================
+    # REQUIRED: Azure Identity
+    # ============================================================================
+    AZURE_TENANT_ID=                                    # Azure AD tenant ID
+    AZURE_SUBSCRIPTION_ID=                              # Azure subscription ID
     
-    # Speech Services
-    AZURE_SPEECH_REGION=<region>
-    AZURE_SPEECH_KEY=<speech-key>
+    # ============================================================================
+    # REQUIRED: Azure OpenAI
+    # ============================================================================
+    AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+    AZURE_OPENAI_KEY=                                   # API key (or use managed identity)
+    AZURE_OPENAI_CHAT_DEPLOYMENT_ID=gpt-4o              # Your chat model deployment
     
-    # ACS (optional - only for phone calls)
-    ACS_CONNECTION_STRING=endpoint=https://<acs>.communication.azure.com/;accesskey=<key>
-    ACS_SOURCE_PHONE_NUMBER=+1XXXXXXXXXX
+    # ============================================================================
+    # REQUIRED: Azure Speech Services
+    # ============================================================================
+    AZURE_SPEECH_ENDPOINT=https://your-resource.cognitiveservices.azure.com/
+    AZURE_SPEECH_KEY=                                   # Speech service API key
+    AZURE_SPEECH_REGION=eastus                          # Region must match endpoint
     
-    # Runtime
-    ENVIRONMENT=dev
-    BASE_URL=https://<tunnel-url>
+    # ============================================================================
+    # REQUIRED: Azure Communication Services (for telephony)
+    # ============================================================================
+    ACS_CONNECTION_STRING=endpoint=https://your-acs.communication.azure.com/;accesskey=...
+    ACS_ENDPOINT=https://your-acs.communication.azure.com
+    ACS_SOURCE_PHONE_NUMBER=+1234567890                 # E.164 format (skip if browser-only)
+    
+    # ============================================================================
+    # REQUIRED: Redis (session management)
+    # ============================================================================
+    REDIS_HOST=your-redis.redis.azure.net
+    REDIS_PORT=6380
+    REDIS_PASSWORD=                                     # Or REDIS_ACCESS_KEY
+    
+    # ============================================================================
+    # REQUIRED: Azure Storage (recordings, audio)
+    # ============================================================================
+    AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...
+    AZURE_BLOB_CONTAINER=acs
+    
+    # ============================================================================
+    # REQUIRED: Cosmos DB (conversation history)
+    # ============================================================================
+    AZURE_COSMOS_CONNECTION_STRING=mongodb+srv://...
+    AZURE_COSMOS_DATABASE_NAME=audioagentdb
+    AZURE_COSMOS_COLLECTION_NAME=audioagentcollection
+    
+    # ============================================================================
+    # REQUIRED: Application Insights (telemetry)
+    # ============================================================================
+    APPLICATIONINSIGHTS_CONNECTION_STRING=InstrumentationKey=...
+    
+    # ============================================================================
+    # REQUIRED (Local Dev): Base URL for webhooks
+    # ============================================================================
+    BASE_URL=https://your-tunnel.devtunnels.ms
     ```
+    
+    See the full [`.env.sample`](https://github.com/Azure-Samples/art-voice-agent-accelerator/blob/main/.env.sample) for optional settings like pool sizes, voice configuration, feature flags, and VoiceLive integration.
 
 ---
 
 ## :material-numeric-3-circle: Start Dev Tunnel
 
-Required for ACS callbacks (phone calls). Skip if only using browser.
+!!! info "When is this needed?"
+    Dev Tunnels are required for **phone calls** (PSTN) because Azure Communication Services needs to reach your local machine for callbacks. Skip this section if you're only using browser-based voice.
+
+### Install Dev Tunnels CLI
+
+=== ":material-microsoft: Windows"
+
+    ```powershell
+    winget install Microsoft.devtunnel
+    ```
+
+=== ":material-apple: macOS"
+
+    ```bash
+    brew install --cask devtunnel
+    ```
+
+=== ":material-linux: Linux"
+
+    ```bash
+    curl -sL https://aka.ms/DevTunnelCliInstall | bash
+    ```
+
+### Create and Start Tunnel
 
 ```bash
-# Verify it exists
-cat .env.local
+# Login to Dev Tunnels (one-time)
+devtunnel login
+
+# Create a tunnel with anonymous access (required for ACS callbacks)
+devtunnel create --allow-anonymous
+
+# Add port 8010 to the tunnel
+devtunnel port create -p 8010
+
+# Start hosting the tunnel (keep this terminal open)
+devtunnel host
 ```
 
-Copy the HTTPS URL (e.g., `https://abc123-8010.usw3.devtunnels.ms`) and set it:
+!!! success "Copy the HTTPS URL"
+    After running `devtunnel host`, you'll see output like:
+    ```
+    Connect via browser: https://abc123-8010.usw3.devtunnels.ms
+    ```
+    Copy this URL—you'll need it for `BASE_URL`.
+
+### Configure BASE_URL
+
+Set the tunnel URL in your environment:
 
 ```bash
 # In .env or .env.local
 BASE_URL=https://abc123-8010.usw3.devtunnels.ms
 ```
-
-!!! warning "URL Changes on Restart"
-    If the tunnel restarts, you get a new URL. Update `BASE_URL` and any ACS Event Grid subscriptions.
-
-### Option B: Legacy — Full `.env` File (Manual Setup)
 
 ## :material-numeric-4-circle: Start Backend
 

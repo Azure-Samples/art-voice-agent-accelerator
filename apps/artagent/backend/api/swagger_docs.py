@@ -38,34 +38,25 @@ class DynamicDocsManager:
                 "description": "ACS webhook callbacks and call event processing (connected, disconnected, DTMF, etc.)",
             },
             # ═══════════════════════════════════════════════════════════════════
-            # Media & WebSocket Streaming
+            # Browser Operations
             # ═══════════════════════════════════════════════════════════════════
-            {
-                "name": "ACS Media Session",
-                "description": "Azure Communication Services media streaming for phone calls (Speech Cascade mode)",
-            },
-            {
-                "name": "Browser Communication",
-                "description": "Browser-based voice conversations via WebSocket (Voice Live SDK or Speech Cascade)",
-            },
             {
                 "name": "Browser Status",
                 "description": "Browser service status and active WebSocket connection statistics",
             },
+            # ═══════════════════════════════════════════════════════════════════
+            # Session Operations
+            # ═══════════════════════════════════════════════════════════════════
             {
-                "name": "WebSocket",
-                "description": "WebSocket transport endpoints for real-time audio streaming and dashboard relay",
+                "name": "Session Management",
+                "description": "Session history, metadata, and session lifecycle controls",
             },
             # ═══════════════════════════════════════════════════════════════════
-            # Metrics & Telemetry
+            # Metrics
             # ═══════════════════════════════════════════════════════════════════
             {
                 "name": "Session Metrics",
                 "description": "Session telemetry, latency statistics, and turn-level metrics for active conversations",
-            },
-            {
-                "name": "Telemetry",
-                "description": "OpenTelemetry-based observability data and performance metrics",
             },
             # ═══════════════════════════════════════════════════════════════════
             # Agent Configuration
@@ -73,6 +64,10 @@ class DynamicDocsManager:
             {
                 "name": "Agent Builder",
                 "description": "Dynamic agent creation, template management, and session-scoped agent configuration",
+            },
+            {
+                "name": "Scenario Builder",
+                "description": "Scenario builder utilities for creating, validating, and managing scenario definitions",
             },
             {
                 "name": "Scenarios",

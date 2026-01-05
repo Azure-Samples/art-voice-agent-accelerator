@@ -39,6 +39,9 @@ class WarmablePoolMetrics:
     warm_pool_size: int = 0
     warmup_cycles: int = 0
     warmup_failures: int = 0
+    warmup_timeouts: int = 0
+    warmup_retries: int = 0
+    last_warmup_error: str | None = None
 
 
 class WarmableResourcePool(Generic[T]):
@@ -50,6 +53,9 @@ class WarmableResourcePool(Generic[T]):
 
     When warm_pool_size = 0 (default), behaves like OnDemandResourcePool.
 
+    Features robust failure handling with timeouts, retries, and graceful
+    degradation to ensure application stability even when warmup fails.
+
     Args:
         factory: Async callable that creates a new resource instance.
         name: Pool name for logging and diagnostics.
@@ -60,6 +66,8 @@ class WarmableResourcePool(Generic[T]):
         session_max_age_sec: Max age for cached session resources (cleanup).
         warm_fn: Optional async function to warm a resource after creation.
                  Should return True on success, False on failure.
+        warmup_timeout_sec: Maximum time allowed per warmup attempt (default: 10s).
+        max_warmup_retries: Number of retry attempts for failed warmups (default: 2).
     """
 
     def __init__(
@@ -73,6 +81,8 @@ class WarmableResourcePool(Generic[T]):
         session_awareness: bool = False,
         session_max_age_sec: float = 1800.0,
         warm_fn: Callable[[T], Awaitable[bool]] | None = None,
+        warmup_timeout_sec: float = 10.0,
+        max_warmup_retries: int = 2,
     ) -> None:
         self._factory = factory
         self._name = name
@@ -82,6 +92,8 @@ class WarmableResourcePool(Generic[T]):
         self._session_awareness = session_awareness
         self._session_max_age_sec = session_max_age_sec
         self._warm_fn = warm_fn
+        self._warmup_timeout_sec = warmup_timeout_sec
+        self._max_warmup_retries = max_warmup_retries
 
         # State
         self._ready = asyncio.Event()
@@ -96,12 +108,39 @@ class WarmableResourcePool(Generic[T]):
         """
         Initialize the pool and optionally pre-warm resources.
 
-        If warm_pool_size > 0, creates initial warm resources before marking ready.
-        If enable_background_warmup, starts background maintenance task.
+        If warm_pool_size > 0, attempts to create initial warm resources.
+        Failures during warmup do NOT prevent pool initialization - the pool
+        will gracefully degrade to on-demand allocation.
+        
+        If enable_background_warmup, starts background maintenance task
+        which will continue attempting to fill the warm pool.
         """
+        warmup_success = False
         if self._warm_pool_size > 0:
             logger.debug(f"[{self._name}] Pre-warming {self._warm_pool_size} resources...")
-            await self._fill_warm_pool()
+            try:
+                # Timeout entire warmup phase to prevent startup hang
+                added = await asyncio.wait_for(
+                    self._fill_warm_pool(),
+                    timeout=self._warmup_timeout_sec * self._warm_pool_size + 10.0
+                )
+                warmup_success = added > 0
+                if not warmup_success:
+                    logger.warning(
+                        f"[{self._name}] Initial warmup produced 0 resources. "
+                        f"Pool will use on-demand allocation."
+                    )
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"[{self._name}] Initial warmup timed out. "
+                    f"Pool will use on-demand allocation and background warmup will retry."
+                )
+            except Exception as e:
+                logger.error(
+                    f"[{self._name}] Initial warmup failed: {e}. "
+                    f"Pool will use on-demand allocation.",
+                    exc_info=True
+                )
 
         if self._enable_background_warmup and self._warm_pool_size > 0:
             self._background_task = asyncio.create_task(
@@ -112,11 +151,24 @@ class WarmableResourcePool(Generic[T]):
                 f"[{self._name}] Started background warmup (interval={self._warmup_interval_sec}s)"
             )
 
+        # Always mark ready - graceful degradation
         self._ready.set()
-        logger.debug(
-            f"[{self._name}] Pool ready (warm_size={self._warm_queue.qsize()}, "
-            f"session_awareness={self._session_awareness})"
-        )
+        
+        ready_count = self._warm_queue.qsize()
+        if ready_count == self._warm_pool_size:
+            logger.info(
+                f"[{self._name}] Pool ready with {ready_count}/{self._warm_pool_size} warm resources"
+            )
+        elif ready_count > 0:
+            logger.warning(
+                f"[{self._name}] Pool ready with partial warmup: {ready_count}/{self._warm_pool_size} resources. "
+                f"Background warmup will continue filling."
+            )
+        else:
+            logger.warning(
+                f"[{self._name}] Pool ready in on-demand mode (warmup failed). "
+                f"Expect higher latency until background warmup succeeds."
+            )
 
     async def shutdown(self) -> None:
         """Stop background tasks and clear all resources."""
@@ -311,19 +363,54 @@ class WarmableResourcePool(Generic[T]):
     # ---------- Internal Methods ----------
 
     async def _create_warmed_resource(self) -> T:
-        """Create a new resource and optionally warm it."""
+        """Create a new resource and optionally warm it with timeout and retry."""
         resource = await self._factory()
 
-        if self._warm_fn is not None:
-            try:
-                success = await self._warm_fn(resource)
-                if not success:
-                    logger.warning(f"[{self._name}] Warmup function returned False")
-                    self._metrics.warmup_failures += 1
-            except Exception as e:
-                logger.warning(f"[{self._name}] Warmup function failed: {e}")
-                self._metrics.warmup_failures += 1
+        if self._warm_fn is None:
+            return resource
 
+        # Attempt warmup with retries
+        for attempt in range(self._max_warmup_retries + 1):
+            try:
+                # Apply timeout to warmup operation
+                success = await asyncio.wait_for(
+                    self._warm_fn(resource),
+                    timeout=self._warmup_timeout_sec
+                )
+                
+                if success:
+                    if attempt > 0:
+                        logger.info(f"[{self._name}] Warmup succeeded on retry {attempt}")
+                    return resource
+                else:
+                    error_msg = f"Warmup function returned False (attempt {attempt + 1}/{self._max_warmup_retries + 1})"
+                    logger.warning(f"[{self._name}] {error_msg}")
+                    self._metrics.last_warmup_error = error_msg
+                    
+            except asyncio.TimeoutError:
+                error_msg = f"Warmup timed out after {self._warmup_timeout_sec}s (attempt {attempt + 1}/{self._max_warmup_retries + 1})"
+                logger.warning(f"[{self._name}] {error_msg}")
+                self._metrics.warmup_timeouts += 1
+                self._metrics.last_warmup_error = error_msg
+                
+            except Exception as e:
+                error_msg = f"Warmup failed with {type(e).__name__}: {e} (attempt {attempt + 1}/{self._max_warmup_retries + 1})"
+                logger.warning(f"[{self._name}] {error_msg}")
+                self._metrics.last_warmup_error = error_msg
+            
+            # Retry with exponential backoff (except on last attempt)
+            if attempt < self._max_warmup_retries:
+                self._metrics.warmup_retries += 1
+                backoff = min(2 ** attempt * 0.5, 5.0)  # 0.5s, 1s, 2s... max 5s
+                logger.debug(f"[{self._name}] Retrying warmup in {backoff}s...")
+                await asyncio.sleep(backoff)
+        
+        # All retries exhausted
+        self._metrics.warmup_failures += 1
+        logger.warning(
+            f"[{self._name}] All warmup attempts failed. Resource created but not warmed. "
+            f"This may cause higher latency on first use."
+        )
         return resource
 
     async def _fill_warm_pool(self) -> int:
@@ -331,20 +418,44 @@ class WarmableResourcePool(Generic[T]):
         added = 0
         target = self._warm_pool_size - self._warm_queue.qsize()
 
-        for _ in range(target):
+        for i in range(target):
             if self._shutdown_event.is_set():
                 break
             try:
-                resource = await self._create_warmed_resource()
+                # Add overall timeout per resource (factory + warmup)
+                resource = await asyncio.wait_for(
+                    self._create_warmed_resource(),
+                    timeout=self._warmup_timeout_sec + 5.0  # Extra time for factory
+                )
                 self._warm_queue.put_nowait(resource)
                 added += 1
+                logger.debug(f"[{self._name}] Warmed resource {added}/{target}")
             except asyncio.QueueFull:
+                logger.debug(f"[{self._name}] Warm queue full, stopping fill")
                 break
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"[{self._name}] Resource creation timed out (resource {i+1}/{target}). "
+                    f"Continuing with partial pool."
+                )
+                # Continue trying to create remaining resources
+                continue
             except Exception as e:
-                logger.warning(f"[{self._name}] Failed to create warm resource: {e}")
-                self._metrics.warmup_failures += 1
+                logger.error(
+                    f"[{self._name}] Failed to create warm resource {i+1}/{target}: {e}",
+                    exc_info=True
+                )
+                # Continue trying to create remaining resources
+                continue
 
         self._metrics.warm_pool_size = self._warm_queue.qsize()
+        
+        if added < target:
+            logger.warning(
+                f"[{self._name}] Partial warmup: {added}/{target} resources ready. "
+                f"Pool will fall back to on-demand allocation for remaining capacity."
+            )
+        
         return added
 
     async def _cleanup_stale_sessions(self) -> int:

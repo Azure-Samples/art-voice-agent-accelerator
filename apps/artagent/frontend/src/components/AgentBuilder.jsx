@@ -44,7 +44,9 @@ import {
   ListItemAvatar,
   ListItemIcon,
   ListItemText,
+  MenuItem,
   Radio,
+  Select,
   Slider,
   Stack,
   Tab,
@@ -302,16 +304,43 @@ const extractJinjaVariables = (text = '') => {
   return Array.from(vars);
 };
 
+const detectEndpointPreference = (deploymentId) => {
+  const name = (deploymentId || '').toLowerCase();
+  if (!name) {
+    return 'chat';
+  }
+  if (name.includes('gpt-4')) {
+    return 'chat';
+  }
+  if (name.includes('gpt-5') || name.includes('o1') || name.includes('o3') || name.includes('o4')) {
+    return 'responses';
+  }
+  return 'responses';
+};
+
+const resolveEndpointPreference = (modelConfig) => {
+  if (!modelConfig) {
+    return 'chat';
+  }
+  const preference = modelConfig.endpoint_preference;
+  if (preference && preference !== 'auto') {
+    return preference;
+  }
+  return detectEndpointPreference(
+    modelConfig.deployment_id || modelConfig.model_name || modelConfig.name
+  );
+};
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // MODEL DEFINITIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Models for Cascade mode (standard chat completion API)
+// Models for Cascade mode (chat + responses API)
 const CASCADE_MODEL_OPTIONS = [
   {
     id: 'gpt-4o',
-    name: 'GPT-4o',
-    description: 'Most capable model for complex tasks',
+    name: 'gpt-4o',
+    description: 'Best general-purpose chat model',
     tier: 'recommended',
     speed: 'fast',
     capabilities: ['Vision', 'Function Calling', 'JSON Mode'],
@@ -319,7 +348,7 @@ const CASCADE_MODEL_OPTIONS = [
   },
   {
     id: 'gpt-4o-mini',
-    name: 'GPT-4o Mini',
+    name: 'gpt-4o-mini',
     description: 'Balanced speed and capability',
     tier: 'standard',
     speed: 'fastest',
@@ -327,31 +356,85 @@ const CASCADE_MODEL_OPTIONS = [
     contextWindow: '128K tokens',
   },
   {
-    id: 'gpt-4-turbo',
-    name: 'GPT-4 Turbo',
-    description: 'Previous generation, still powerful',
+    id: 'gpt-4.1',
+    name: 'gpt-4.1',
+    description: 'High-quality chat baseline',
     tier: 'standard',
-    speed: 'medium',
-    capabilities: ['Vision', 'Function Calling', 'JSON Mode'],
+    speed: 'fast',
+    capabilities: ['Vision', 'Function Calling'],
+    contextWindow: '128K tokens',
+  },
+  {
+    id: 'gpt-4.1-mini',
+    name: 'gpt-4.1-mini',
+    description: 'Faster, lower-cost GPT-4.1',
+    tier: 'standard',
+    speed: 'fastest',
+    capabilities: ['Function Calling'],
     contextWindow: '128K tokens',
   },
   {
     id: 'gpt-4',
-    name: 'GPT-4',
-    description: 'Original GPT-4 model',
+    name: 'gpt-4',
+    description: 'Legacy GPT-4 deployments',
     tier: 'legacy',
     speed: 'slow',
     capabilities: ['Function Calling'],
     contextWindow: '8K tokens',
   },
   {
-    id: 'gpt-35-turbo',
-    name: 'GPT-3.5 Turbo',
-    description: 'Fast and cost-effective for simple tasks',
-    tier: 'legacy',
+    id: 'gpt-5',
+    name: 'gpt-5',
+    description: 'Responses API (v1) default',
+    tier: 'recommended',
+    speed: 'medium',
+    capabilities: ['Reasoning', 'Function Calling'],
+    contextWindow: '128K tokens',
+  },
+  {
+    id: 'gpt-5-mini',
+    name: 'gpt-5-mini',
+    description: 'Smaller GPT-5 variant',
+    tier: 'standard',
+    speed: 'fast',
+    capabilities: ['Reasoning', 'Function Calling'],
+    contextWindow: '128K tokens',
+  },
+  {
+    id: 'gpt-5-nano',
+    name: 'gpt-5-nano',
+    description: 'Lightweight GPT-5 variant',
+    tier: 'standard',
     speed: 'fastest',
-    capabilities: ['Function Calling', 'JSON Mode'],
-    contextWindow: '16K tokens',
+    capabilities: ['Reasoning'],
+    contextWindow: '128K tokens',
+  },
+  {
+    id: 'o3-mini',
+    name: 'o3-mini',
+    description: 'Reasoning (Responses API)',
+    tier: 'standard',
+    speed: 'medium',
+    capabilities: ['Reasoning'],
+    contextWindow: '128K tokens',
+  },
+  {
+    id: 'o3',
+    name: 'o3',
+    description: 'Reasoning (Responses API)',
+    tier: 'standard',
+    speed: 'slow',
+    capabilities: ['Reasoning'],
+    contextWindow: '128K tokens',
+  },
+  {
+    id: 'o1',
+    name: 'o1',
+    description: 'Reasoning (Responses API)',
+    tier: 'legacy',
+    speed: 'slow',
+    capabilities: ['Reasoning'],
+    contextWindow: '128K tokens',
   },
 ];
 
@@ -359,21 +442,111 @@ const CASCADE_MODEL_OPTIONS = [
 const VOICELIVE_MODEL_OPTIONS = [
   {
     id: 'gpt-realtime',
-    name: 'GPT-4o Realtime Preview',
-    description: 'Low-latency realtime voice model',
+    name: 'gpt-realtime',
+    description: 'GPT real-time with Azure TTS voices',
     tier: 'recommended',
     speed: 'fastest',
     capabilities: ['Realtime Audio', 'Function Calling'],
     contextWindow: '128K tokens',
   },
   {
-    id: 'gpt-4o-mini-realtime-preview',
-    name: 'GPT-4o Mini Realtime Preview',
-    description: 'Faster, cost-effective realtime model',
+    id: 'gpt-realtime-mini',
+    name: 'gpt-realtime-mini',
+    description: 'Mini real-time with Azure TTS voices',
     tier: 'standard',
     speed: 'fastest',
-    capabilities: ['Realtime Audio', 'Function Calling'],
+    capabilities: ['Realtime Audio'],
     contextWindow: '128K tokens',
+  },
+  {
+    id: 'gpt-4o',
+    name: 'gpt-4o',
+    description: 'GPT-4o with Azure Speech I/O',
+    tier: 'standard',
+    speed: 'fast',
+    capabilities: ['Realtime Audio'],
+    contextWindow: '128K tokens',
+  },
+  {
+    id: 'gpt-4o-mini',
+    name: 'gpt-4o-mini',
+    description: 'GPT-4o Mini with Azure Speech I/O',
+    tier: 'standard',
+    speed: 'fastest',
+    capabilities: ['Realtime Audio'],
+    contextWindow: '128K tokens',
+  },
+  {
+    id: 'gpt-4.1',
+    name: 'gpt-4.1',
+    description: 'GPT-4.1 with Azure Speech I/O',
+    tier: 'standard',
+    speed: 'fast',
+    capabilities: ['Realtime Audio'],
+    contextWindow: '128K tokens',
+  },
+  {
+    id: 'gpt-4.1-mini',
+    name: 'gpt-4.1-mini',
+    description: 'GPT-4.1 Mini with Azure Speech I/O',
+    tier: 'standard',
+    speed: 'fastest',
+    capabilities: ['Realtime Audio'],
+    contextWindow: '128K tokens',
+  },
+  {
+    id: 'gpt-5',
+    name: 'gpt-5',
+    description: 'GPT-5 with Azure Speech I/O',
+    tier: 'recommended',
+    speed: 'medium',
+    capabilities: ['Realtime Audio'],
+    contextWindow: '128K tokens',
+  },
+  {
+    id: 'gpt-5-mini',
+    name: 'gpt-5-mini',
+    description: 'GPT-5 Mini with Azure Speech I/O',
+    tier: 'standard',
+    speed: 'fast',
+    capabilities: ['Realtime Audio'],
+    contextWindow: '128K tokens',
+  },
+  {
+    id: 'gpt-5-nano',
+    name: 'gpt-5-nano',
+    description: 'GPT-5 Nano with Azure Speech I/O',
+    tier: 'standard',
+    speed: 'fastest',
+    capabilities: ['Realtime Audio'],
+    contextWindow: '128K tokens',
+  },
+  {
+    id: 'gpt-5-chat',
+    name: 'gpt-5-chat',
+    description: 'GPT-5 chat variant with Azure Speech I/O',
+    tier: 'standard',
+    speed: 'fast',
+    capabilities: ['Realtime Audio'],
+    contextWindow: '128K tokens',
+  },
+  {
+    id: 'phi4-mm-realtime',
+    name: 'phi4-mm-realtime',
+    description: 'Phi4 multimodal realtime',
+    tier: 'standard',
+    speed: 'fast',
+    capabilities: ['Realtime Audio'],
+    contextWindow: '64K tokens',
+  },
+  {
+    id: 'phi4-mini',
+    name: 'phi4-mini',
+    description: 'Phi4 mini realtime',
+    tier: 'standard',
+    speed: 'fastest',
+    capabilities: ['Realtime Audio'],
+    contextWindow: '64K tokens',
   },
 ];
 
@@ -627,6 +800,10 @@ function ModelSelector({ value, onChange, modelOptions = MODEL_OPTIONS, title = 
     }
   };
 
+  const overrideValue = (value || '').trim();
+  const isCustom = !modelOptions.some((model) => model.id === value);
+  const isOverrideMissing = isCustom && !overrideValue;
+
   return (
     <Stack spacing={2}>
       {showAlert && (
@@ -695,24 +872,85 @@ function ModelSelector({ value, onChange, modelOptions = MODEL_OPTIONS, title = 
             </CardContent>
           </Card>
         ))}
+        <Card
+          variant="outlined"
+          onClick={() => onChange('')}
+          sx={{
+            ...styles.modelCard,
+            ...(isCustom ? styles.modelCardSelected : {}),
+          }}
+        >
+          <CardContent sx={{ py: 1.5, px: 2, '&:last-child': { pb: 1.5 } }}>
+            <Stack direction="row" alignItems="center" justifyContent="space-between">
+              <Stack direction="row" alignItems="center" spacing={2}>
+                <Radio
+                  checked={isCustom}
+                  size="small"
+                  sx={{ p: 0 }}
+                />
+                <Box>
+                  <Stack direction="row" alignItems="center" spacing={1}>
+                    <Typography variant="subtitle2">Custom Deployment</Typography>
+                    <Chip
+                      label="override"
+                      size="small"
+                      color="warning"
+                      sx={{ height: 20, fontSize: '11px' }}
+                    />
+                  </Stack>
+                  <Typography variant="caption" color="text.secondary">
+                    Use a deployed model name not listed above.
+                  </Typography>
+                </Box>
+              </Stack>
+              <Stack direction="row" alignItems="center" spacing={2}>
+                <Tooltip title="Custom">
+                  <Typography variant="caption">✍️</Typography>
+                </Tooltip>
+                <Chip
+                  label="deployments"
+                  size="small"
+                  variant="outlined"
+                  sx={{ height: 20, fontSize: '10px' }}
+                />
+              </Stack>
+            </Stack>
+          </CardContent>
+        </Card>
       </Stack>
 
       {/* Custom deployment input */}
-      <TextField
-        label="Custom Deployment Name"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        size="small"
-        fullWidth
-        helperText="Enter your exact Azure OpenAI deployment name if not listed above"
-        InputProps={{
-          startAdornment: (
-            <InputAdornment position="start">
-              <MemoryIcon fontSize="small" color="action" />
-            </InputAdornment>
-          ),
-        }}
-      />
+      {isCustom && (
+        <TextField
+          label="Deployment Name (Override)"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          size="small"
+          fullWidth
+          required={isCustom}
+          error={isOverrideMissing}
+          helperText={
+            isOverrideMissing
+              ? 'Required for custom models. Must match a deployed model in your Foundry/Azure OpenAI resource.'
+              : 'Overrides the preset. Must match a deployed model in your Foundry/Azure OpenAI resource.'
+          }
+          InputProps={{
+            startAdornment: (
+              <InputAdornment position="start">
+                <MemoryIcon fontSize="small" color="action" />
+              </InputAdornment>
+            ),
+          }}
+          sx={{
+            '& .MuiOutlinedInput-root': {
+              backgroundColor: '#fff7ed',
+              '& fieldset': { borderColor: '#fdba74' },
+              '&:hover fieldset': { borderColor: '#fb923c' },
+              '&.Mui-focused fieldset': { borderColor: '#f97316' },
+            },
+          }}
+        />
+      )}
     </Stack>
   );
 }
@@ -793,21 +1031,34 @@ export default function AgentBuilder({
     tools: [],
     cascade_model: {
       deployment_id: 'gpt-4o',
+      api_version: 'v1',
       temperature: 0.7,
       top_p: 0.9,
       max_tokens: 4096,
+      verbosity: 0,
+      min_p: null,
+      typical_p: null,
+      reasoning_effort: null,
     },
     voicelive_model: {
       deployment_id: 'gpt-realtime',
       temperature: 0.7,
       top_p: 0.9,
       max_tokens: 4096,
+      verbosity: 0,
+      min_p: null,
+      typical_p: null,
+      reasoning_effort: null,
     },
     model: {
       deployment_id: 'gpt-4o',
       temperature: 0.7,
       top_p: 0.9,
       max_tokens: 4096,
+      verbosity: 0,
+      min_p: null,
+      typical_p: null,
+      reasoning_effort: null,
     },
     voice: {
       name: 'en-US-AvaMultilingualNeural',
@@ -846,6 +1097,15 @@ export default function AgentBuilder({
     const merged = new Set([...fromGreeting, ...fromReturnGreeting, ...fromPrompt]);
     return Array.from(merged);
   }, [config.greeting, config.return_greeting, config.prompt]);
+
+  const cascadeEndpointPreference = useMemo(
+    () => resolveEndpointPreference(config.cascade_model),
+    [config.cascade_model],
+  );
+  const cascadeApiVersionValue = useMemo(
+    () => (config.cascade_model?.api_version || 'v1').trim(),
+    [config.cascade_model?.api_version],
+  );
 
   // Ensure config.template_vars includes any detected variables so users can set defaults
   useEffect(() => {
@@ -995,6 +1255,8 @@ export default function AgentBuilder({
             prompt: data.config.prompt_full || data.config.prompt_preview || DEFAULT_PROMPT,
             tools: data.config.tools || [],
             model: data.config.model || prev.model,
+            cascade_model: data.config.cascade_model || prev.cascade_model,
+            voicelive_model: data.config.voicelive_model || prev.voicelive_model,
             voice: data.config.voice || prev.voice,
             speech: data.config.speech || prev.speech,
             template_vars: data.config.template_vars || prev.template_vars,
@@ -1156,8 +1418,8 @@ export default function AgentBuilder({
       // Apply template to config
       // Build cascade_model and voicelive_model from template's model or use defaults
       const templateModel = template.model || {};
-      const cascadeDefaults = { deployment_id: 'gpt-4o', temperature: 0.7, top_p: 0.9, max_tokens: 4096 };
-      const voiceliveDefaults = { deployment_id: 'gpt-realtime', temperature: 0.7, top_p: 0.9, max_tokens: 4096 };
+      const cascadeDefaults = { deployment_id: 'gpt-4o', temperature: 0.7, top_p: 0.9, max_tokens: 4096, verbosity: 0, min_p: null, typical_p: null, reasoning_effort: null };
+      const voiceliveDefaults = { deployment_id: 'gpt-realtime', temperature: 0.7, top_p: 0.9, max_tokens: 4096, verbosity: 0, min_p: null, typical_p: null, reasoning_effort: null };
       
       setConfig(prev => ({
         ...prev,
@@ -1196,6 +1458,9 @@ export default function AgentBuilder({
     setSuccess(null);
 
     try {
+      const cascadeEndpointPreference = resolveEndpointPreference(config.cascade_model);
+      const voiceliveEndpointPreference = resolveEndpointPreference(config.voicelive_model);
+
       // Build payload matching backend DynamicAgentConfig schema
       const payload = {
         name: config.name,
@@ -1209,12 +1474,23 @@ export default function AgentBuilder({
           temperature: config.cascade_model?.temperature ?? 0.7,
           top_p: config.cascade_model?.top_p ?? 0.9,
           max_tokens: config.cascade_model?.max_tokens ?? 4096,
+          verbosity: config.cascade_model?.verbosity ?? 0,
+          min_p: config.cascade_model?.min_p ?? null,
+          typical_p: config.cascade_model?.typical_p ?? null,
+          reasoning_effort: config.cascade_model?.reasoning_effort ?? null,
+          endpoint_preference: cascadeEndpointPreference,
+          api_version: config.cascade_model?.api_version || 'v1',
         },
         voicelive_model: {
           deployment_id: config.voicelive_model?.deployment_id || 'gpt-realtime',
           temperature: config.voicelive_model?.temperature ?? 0.7,
           top_p: config.voicelive_model?.top_p ?? 0.9,
           max_tokens: config.voicelive_model?.max_tokens ?? 4096,
+          verbosity: config.voicelive_model?.verbosity ?? 0,
+          min_p: config.voicelive_model?.min_p ?? null,
+          typical_p: config.voicelive_model?.typical_p ?? null,
+          reasoning_effort: config.voicelive_model?.reasoning_effort ?? null,
+          endpoint_preference: voiceliveEndpointPreference,
         },
         voice: {
           name: config.voice.name,
@@ -2613,7 +2889,7 @@ export default function AgentBuilder({
                 <Alert severity="info" icon={<WarningAmberIcon />} sx={{ borderRadius: '12px' }}>
                   <AlertTitle sx={{ fontWeight: 600 }}>Azure OpenAI Deployment Required</AlertTitle>
                   <Typography variant="body2">
-                    Model deployment names must match deployments in your Azure OpenAI resource.
+                    Model deployment names must match deployments in your Foundry/Azure OpenAI resource.
                     Different models are used depending on the orchestration mode.
                   </Typography>
                 </Alert>
@@ -2637,6 +2913,17 @@ export default function AgentBuilder({
                       title="Cascade Model Deployment"
                       showAlert={false}
                     />
+                    {cascadeEndpointPreference === 'responses' && (
+                      <TextField
+                        label="Responses API Version"
+                        value={cascadeApiVersionValue}
+                        fullWidth
+                        size="small"
+                        disabled
+                        sx={{ mt: 2 }}
+                        helperText="Responses API version is managed by the backend (UI configuration coming soon)."
+                      />
+                    )}
                   </CardContent>
                 </Card>
 
@@ -2659,6 +2946,10 @@ export default function AgentBuilder({
                       title="VoiceLive Model Deployment"
                       showAlert={false}
                     />
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                      VoiceLive models must be deployed to your connected Foundry resource. Foundry agents/BYOM chat
+                      completions are not yet wired in this demo.
+                    </Typography>
                   </CardContent>
                 </Card>
 
@@ -2756,6 +3047,119 @@ export default function AgentBuilder({
                             { value: 16384, label: '16K' },
                           ]}
                         />
+                      </Box>
+
+                      <Box>
+                        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+                          <Stack direction="row" alignItems="center" spacing={1}>
+                            <Typography variant="body2" fontWeight={500}>Verbosity Level</Typography>
+                            <Tooltip title="Output detail level. 0=Minimal (fastest, best for real-time), 1=Standard, 2=Detailed (includes reasoning)">
+                              <InfoOutlinedIcon fontSize="small" color="action" />
+                            </Tooltip>
+                          </Stack>
+                          <Chip label={config.cascade_model?.verbosity ?? 0} size="small" color="primary" />
+                        </Stack>
+                        <Slider
+                          value={config.cascade_model?.verbosity ?? 0}
+                          onChange={(_e, v) => {
+                            handleNestedConfigChange('cascade_model', 'verbosity', v);
+                            handleNestedConfigChange('voicelive_model', 'verbosity', v);
+                          }}
+                          min={0}
+                          max={2}
+                          step={1}
+                          marks={[
+                            { value: 0, label: 'Minimal' },
+                            { value: 1, label: 'Standard' },
+                            { value: 2, label: 'Detailed' },
+                          ]}
+                        />
+                      </Box>
+
+                      <Box>
+                        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+                          <Stack direction="row" alignItems="center" spacing={1}>
+                            <Typography variant="body2" fontWeight={500}>Min P (Minimum Probability)</Typography>
+                            <Tooltip title="Minimum probability threshold for token selection. Lower values allow more diversity. Leave blank for default.">
+                              <InfoOutlinedIcon fontSize="small" color="action" />
+                            </Tooltip>
+                          </Stack>
+                          <Chip label={config.cascade_model?.min_p ?? 'Auto'} size="small" color="primary" />
+                        </Stack>
+                        <Slider
+                          value={config.cascade_model?.min_p ?? 0}
+                          onChange={(_e, v) => {
+                            const val = v === 0 ? null : v;
+                            handleNestedConfigChange('cascade_model', 'min_p', val);
+                            handleNestedConfigChange('voicelive_model', 'min_p', val);
+                          }}
+                          min={0}
+                          max={0.5}
+                          step={0.01}
+                          marks={[
+                            { value: 0, label: 'Auto' },
+                            { value: 0.05, label: '0.05' },
+                            { value: 0.1, label: '0.1' },
+                            { value: 0.2, label: '0.2' },
+                          ]}
+                        />
+                      </Box>
+
+                      <Box>
+                        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+                          <Stack direction="row" alignItems="center" spacing={1}>
+                            <Typography variant="body2" fontWeight={500}>Typical P (Typical Sampling)</Typography>
+                            <Tooltip title="Typical sampling parameter for controlling output quality. Lower values = more typical outputs. Leave blank for default.">
+                              <InfoOutlinedIcon fontSize="small" color="action" />
+                            </Tooltip>
+                          </Stack>
+                          <Chip label={config.cascade_model?.typical_p ?? 'Auto'} size="small" color="primary" />
+                        </Stack>
+                        <Slider
+                          value={config.cascade_model?.typical_p ?? 0}
+                          onChange={(_e, v) => {
+                            const val = v === 0 ? null : v;
+                            handleNestedConfigChange('cascade_model', 'typical_p', val);
+                            handleNestedConfigChange('voicelive_model', 'typical_p', val);
+                          }}
+                          min={0}
+                          max={1}
+                          step={0.05}
+                          marks={[
+                            { value: 0, label: 'Auto' },
+                            { value: 0.5, label: '0.5' },
+                            { value: 0.8, label: '0.8' },
+                            { value: 1, label: '1.0' },
+                          ]}
+                        />
+                      </Box>
+
+                      <Box>
+                        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+                          <Stack direction="row" alignItems="center" spacing={1}>
+                            <Typography variant="body2" fontWeight={500}>Reasoning Effort (o1/o3 Models)</Typography>
+                            <Tooltip title="Amount of reasoning compute for o1/o3 models. Higher effort = more thorough reasoning. Not applicable for other models.">
+                              <InfoOutlinedIcon fontSize="small" color="action" />
+                            </Tooltip>
+                          </Stack>
+                          <Chip label={config.cascade_model?.reasoning_effort || 'Auto'} size="small" color="primary" />
+                        </Stack>
+                        <Select
+                          value={config.cascade_model?.reasoning_effort || ''}
+                          onChange={(e) => {
+                            const val = e.target.value || null;
+                            handleNestedConfigChange('cascade_model', 'reasoning_effort', val);
+                            handleNestedConfigChange('voicelive_model', 'reasoning_effort', val);
+                          }}
+                          size="small"
+                          fullWidth
+                          displayEmpty
+                        >
+                          <MenuItem value="">Auto (model default)</MenuItem>
+                          <MenuItem value="low">Low</MenuItem>
+                          <MenuItem value="medium">Medium</MenuItem>
+                          <MenuItem value="high">High</MenuItem>
+                        </Select>
                       </Box>
                     </Stack>
                   </CardContent>

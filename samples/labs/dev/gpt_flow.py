@@ -491,7 +491,7 @@ async def process_gpt_response(  # noqa: D401
                 kind=SpanKind.CLIENT,
                 attributes={
                     **azure_openai_attrs,
-                    "peer.service": "azure-openai",
+                    "peer.service": "azure.ai.openai",
                     "server.address": host,
                     "server.port": 443,
                     "http.method": "POST",
