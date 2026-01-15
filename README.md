@@ -177,7 +177,7 @@ azd up   # ~15 min for complete infra and code deployment
 - Try the UI: [Demo guide](https://aiappsgbbfactory.github.io/art-voice-agent-accelerator/getting-started/demo-guide/)
 - Production guidance: [Deployment guide](https://aiappsgbbfactory.github.io/art-voice-agent-accelerator/deployment/)
 - Understand the system: [Architecture](https://aiappsgbbfactory.github.io/art-voice-agent-accelerator/architecture/)
-- IaC details (repo): [infra/README.md](infra/README.md)
+- IaC details & resource list: [infra/README.md](infra/README.md)
 
 
 ## **Community & ARTist Certification**
