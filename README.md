@@ -125,9 +125,11 @@ Best for: Speed to production, lowest latency requirements.
 |------------|-------------|
 | Azure CLI | `az --version` |
 | Azure Developer CLI | `azd version` |
-| Docker | `docker --version` |
+| Docker **or** Podman | `docker --version` or `podman --version` |
 | Azure Subscription | `az account show` |
 | Contributor Access | Required for resource creation |
+
+> **Note**: Podman is fully supported as a Docker alternative. See [Using Podman](docs/deployment/PODMAN.md) for setup instructions.
 
 ### ⚡ Fastest Path (15 minutes)
 

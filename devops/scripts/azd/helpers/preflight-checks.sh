@@ -72,9 +72,21 @@ check_required_tools() {
         "jq:jq (JSON processor):https://jqlang.github.io/jq/download/"
     )
     
-    # Docker is optional in CI mode
+    # Check for container runtime (Docker or Podman) - optional in CI mode
+    local container_runtime=""
+    if command -v docker &>/dev/null; then
+        container_runtime="docker"
+    elif command -v podman &>/dev/null; then
+        container_runtime="podman"
+    fi
+    
     if [[ "${CI:-}" != "true" ]]; then
-        tool_checks+=("docker:Docker:https://docs.docker.com/get-docker/")
+        # Add container runtime check in non-CI mode
+        if [[ -n "$container_runtime" ]]; then
+            tool_checks+=("$container_runtime:Container Runtime (Docker/Podman):https://docs.docker.com/get-docker/")
+        else
+            tool_checks+=("docker:Container Runtime (Docker/Podman):https://docs.docker.com/get-docker/")
+        fi
     fi
     
     for tool_info in "${tool_checks[@]}"; do
@@ -85,6 +97,7 @@ check_required_tools() {
                 az)     version=$(az --version 2>/dev/null | head -1 | awk '{print $2}') ;;
                 azd)    version=$(azd version 2>/dev/null | head -1) ;;
                 docker) version=$(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',') ;;
+                podman) version=$(podman --version 2>/dev/null | awk '{print $3}') ;;
                 jq)     version=$(jq --version 2>/dev/null) ;;
                 *)      version="installed" ;;
             esac
@@ -95,14 +108,23 @@ check_required_tools() {
         fi
     done
     
-    # Check Docker separately in CI mode (warn only)
+    # Setup Podman Docker compatibility if using Podman
+    if [[ "$container_runtime" == "podman" ]] && [[ ! $(command -v docker) ]]; then
+        info "Setting up Podman Docker compatibility..."
+        # Export docker alias for current shell and azd
+        alias docker=podman
+        export DOCKER_HOST="unix://$(podman info --format '{{.Host.RemoteSocket.Path}}' 2>/dev/null || echo '/var/run/podman/podman.sock')"
+        log "  ✓ Docker alias configured (podman)"
+    fi
+    
+    # Check container runtime in CI mode (warn only)
     if [[ "${CI:-}" == "true" ]]; then
-        if command -v docker &>/dev/null; then
+        if [[ -n "$container_runtime" ]]; then
             local version
-            version=$(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',')
-            log "  ✓ Docker ($version)"
+            version=$($container_runtime --version 2>/dev/null | awk '{print $3}' | tr -d ',')
+            log "  ✓ Container Runtime: $container_runtime ($version)"
         else
-            log "  ⚪ Docker - skipped (CI mode)"
+            log "  ⚪ Container Runtime - skipped (CI mode)"
         fi
     fi
     
