@@ -649,7 +649,7 @@ async def handoff_bank_advisor(args: dict[str, Any]) -> dict[str, Any]:
     return {
         "success": True,
         "callback_scheduled": True,
-        "target_agent": "FinancialAdvisor",
+        "target_agent": "InvestmentAdvisor",
         "message": f"Callback scheduled for {reason}",
         "handoff_context": {
             "client_id": client_id,
