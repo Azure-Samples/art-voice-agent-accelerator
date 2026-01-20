@@ -529,7 +529,7 @@ class UnifiedAgent:
 
         # Provide sensible defaults for common template variables
         defaults = {
-            "agent_name": self.name or os.getenv("AGENT_NAME", "Erica"),
+            "agent_name": self.name or os.getenv("AGENT_NAME", "Assistant"),
             "institution_name": os.getenv("INSTITUTION_NAME", "Contoso Bank"),
         }
 
@@ -575,7 +575,7 @@ class UnifiedAgent:
         import os
 
         # Use agent's own name as fallback for agent_name
-        agent_display_name = self.name or os.getenv("AGENT_NAME", "Erica")
+        agent_display_name = self.name or os.getenv("AGENT_NAME", "Assistant")
 
         defaults = {
             "agent_name": agent_display_name,
@@ -598,7 +598,7 @@ class UnifiedAgent:
         Render the greeting template with context.
 
         Uses Jinja2 templating to render greeting with variables like:
-        - {{ agent_name | default('Erica') }}
+        - {{ agent_name | default('Assistant') }}
         - {{ institution_name | default('Contoso Bank') }}
 
         Args:

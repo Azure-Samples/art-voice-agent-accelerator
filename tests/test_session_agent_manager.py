@@ -38,11 +38,11 @@ def base_agents() -> dict[str, UnifiedAgent]:
         "EricaConcierge": UnifiedAgent(
             name="EricaConcierge",
             description="Main concierge agent",
-            greeting="Hello! I'm Erica, your financial assistant.",
+            greeting="Hello! I'm your banking assistant.",
             handoff=HandoffConfig(trigger="handoff_concierge"),
             model=ModelConfig(deployment_id="gpt-4o", temperature=0.7),
             voice=VoiceConfig(name="en-US-JennyNeural", style="cheerful"),
-            prompt_template="You are Erica. {{customer_name}} is calling.",
+            prompt_template="You are a banking assistant. {{customer_name}} is calling.",
             tool_names=["check_balance", "transfer_funds", "handoff_fraud_agent"],
             template_vars={"bank_name": "TestBank"},
         ),
@@ -295,13 +295,13 @@ class TestSessionAgentManagerOverrides:
         """Updating prompt should create override."""
         session_manager.update_agent_prompt(
             "EricaConcierge",
-            "You are a custom Erica with special powers.",
+            "You are a custom banking assistant with special powers.",
             source="api",
         )
 
         agent = session_manager.get_agent("EricaConcierge")
 
-        assert agent.prompt_template == "You are a custom Erica with special powers."
+        assert agent.prompt_template == "You are a custom banking assistant with special powers."
         assert agent.metadata.get("_session_override") is True
         assert agent.metadata.get("_override_source") == "api"
 
@@ -713,7 +713,7 @@ class TestSessionAgentManagerIntegration:
         # 3. Modify agents
         manager.update_agent_prompt(
             "EricaConcierge",
-            "You are a friendly bot named Erica. Be concise.",
+            "You are a friendly banking assistant. Be concise.",
         )
         manager.update_agent_voice(
             "EricaConcierge",
@@ -729,7 +729,7 @@ class TestSessionAgentManagerIntegration:
 
         # 5. Verify resolved agent
         agent = manager.get_agent("EricaConcierge")
-        assert agent.prompt_template == "You are a friendly bot named Erica. Be concise."
+        assert agent.prompt_template == "You are a friendly banking assistant. Be concise."
         assert agent.voice.name == "en-US-AvaNeural"
         assert agent.voice.rate == "+10%"
         assert agent.tool_names == ["check_balance", "get_account_summary"]
