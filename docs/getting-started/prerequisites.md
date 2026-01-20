@@ -22,10 +22,13 @@ Install these tools on your development machine:
 |------|---------|---------|--------|
 | **Azure CLI** | Azure resource management | [:material-download: Install](https://docs.microsoft.com/cli/azure/install-azure-cli) | `az --version` |
 | **Azure Developer CLI** | One-command deployment | [:material-download: Install](https://aka.ms/azd-install) | `azd version` |
-| **Docker** | Container builds | [:material-download: Install](https://docs.docker.com/get-docker/) | `docker --version` |
+| **Docker or Podman** | Container builds | [:material-download: Docker](https://docs.docker.com/get-docker/) / [:material-download: Podman](https://podman.io/getting-started/installation) | `docker --version` |
 | **Python 3.11+** | Backend runtime | [:material-download: Install](https://www.python.org/downloads/) | `python --version` |
 | **Node.js 22+** | Frontend build | [:material-download: Install](https://nodejs.org/) | `node --version` |
 | **jq** | JSON processing for scripts | [:material-download: Install](https://jqlang.github.io/jq/download/) | `jq --version` |
+
+!!! info "Podman as Docker Alternative"
+    Podman is fully supported! If you prefer Podman over Docker, see [:material-docker: Using Podman](../deployment/PODMAN.md) for setup instructions.
 
 ---
 
@@ -64,8 +67,14 @@ Install these tools on your development machine:
     brew install python@3.11
     brew install node@22
     brew install jq
-    brew install --cask docker
+    
+    # Choose one:
+    brew install --cask docker        # Docker Desktop
+    brew install podman               # Podman (Docker alternative)
     ```
+    
+    !!! tip "Using Podman on macOS"
+        If using Podman, you'll need to set up Docker compatibility. See [:material-docker: Using Podman](../deployment/PODMAN.md) for detailed setup instructions.
 
 === ":material-microsoft-windows: Windows"
 

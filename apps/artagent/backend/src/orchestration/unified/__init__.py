@@ -76,7 +76,7 @@ _AGENT_LABELS: dict[str, str] = {
     "AuthAgent": "Auth Agent",
     "TransferAgency": "Transfer Agency Specialist",
     "TradingDesk": "Trading Specialist",
-    "EricaConcierge": "Erica",
+    "EricaConcierge": "Concierge",
     "Concierge": "Concierge",
     "CardRecommendation": "Card Specialist",
     "InvestmentAdvisor": "Investment Advisor",

@@ -125,9 +125,11 @@ Best for: Speed to production, lowest latency requirements.
 |------------|-------------|
 | Azure CLI | `az --version` |
 | Azure Developer CLI | `azd version` |
-| Docker | `docker --version` |
+| Docker **or** Podman | `docker --version` or `podman --version` |
 | Azure Subscription | `az account show` |
 | Contributor Access | Required for resource creation |
+
+> **Note**: Podman is fully supported as a Docker alternative. See [Using Podman](docs/deployment/PODMAN.md) for setup instructions.
 
 ### ⚡ Fastest Path (15 minutes)
 
@@ -177,7 +179,7 @@ azd up   # ~15 min for complete infra and code deployment
 - Try the UI: [Demo guide](https://aiappsgbbfactory.github.io/art-voice-agent-accelerator/getting-started/demo-guide/)
 - Production guidance: [Deployment guide](https://aiappsgbbfactory.github.io/art-voice-agent-accelerator/deployment/)
 - Understand the system: [Architecture](https://aiappsgbbfactory.github.io/art-voice-agent-accelerator/architecture/)
-- IaC details (repo): [infra/README.md](infra/README.md)
+- IaC details & resource list: [infra/README.md](infra/README.md)
 
 
 ## **Community & ARTist Certification**

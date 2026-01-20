@@ -72,7 +72,7 @@ def _build_handoff_payload(
 handoff_concierge_schema: dict[str, Any] = {
     "name": "handoff_concierge",
     "description": (
-        "Return customer to Erica Concierge (main banking assistant). "
+        "Return customer to Concierge (main banking assistant). "
         "Use after completing specialist task or when customer needs different help."
         + SILENT_HANDOFF_NOTE
     ),
@@ -226,7 +226,7 @@ handoff_transfer_agency_agent_schema: dict[str, Any] = {
 handoff_bank_advisor_schema: dict[str, Any] = {
     "name": "handoff_bank_advisor",
     "description": (
-        "Schedule callback with Merrill human advisor for personalized investment advice. "
+        "Schedule callback with financial advisor for personalized investment advice. "
         "Use when customer needs human specialist for complex investment decisions."
         + SILENT_HANDOFF_NOTE
     ),
@@ -451,7 +451,7 @@ handoff_subro_agent_schema: dict[str, Any] = {
 
 
 async def handoff_concierge(args: dict[str, Any]) -> dict[str, Any]:
-    """Return customer to Erica Concierge from specialist agent."""
+    """Return customer to Concierge from specialist agent."""
     client_id = (args.get("client_id") or "").strip()
     previous_topic = (args.get("previous_topic") or "").strip()
     resolution_summary = (args.get("resolution_summary") or "").strip()
@@ -633,7 +633,7 @@ async def handoff_transfer_agency_agent(args: dict[str, Any]) -> dict[str, Any]:
 
 
 async def handoff_bank_advisor(args: dict[str, Any]) -> dict[str, Any]:
-    """Schedule callback with Merrill human advisor."""
+    """Schedule callback with financial advisor."""
     client_id = (args.get("client_id") or "").strip()
     reason = (args.get("reason") or "").strip()
     context_summary = (args.get("context") or "").strip()
@@ -643,13 +643,13 @@ async def handoff_bank_advisor(args: dict[str, Any]) -> dict[str, Any]:
     if not reason:
         return {"success": False, "message": "reason is required."}
 
-    logger.info("👤 Merrill Advisor callback scheduled | client=%s reason=%s", client_id, reason)
+    logger.info("👤 Financial Advisor callback scheduled | client=%s reason=%s", client_id, reason)
 
     # This is a callback scheduling, not a live transfer
     return {
         "success": True,
         "callback_scheduled": True,
-        "target_agent": "MerrillAdvisor",
+        "target_agent": "InvestmentAdvisor",
         "message": f"Callback scheduled for {reason}",
         "handoff_context": {
             "client_id": client_id,

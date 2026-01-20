@@ -982,7 +982,7 @@ register_tool(
     tags={"investments", "retirement", "knowledge_base"},
 )
 # NOTE: schedule_advisor_consultation is NOT registered here because
-# handoff_bank_advisor in handoffs.py handles Merrill advisor callbacks.
+# handoff_bank_advisor in handoffs.py handles financial advisor callbacks.
 # The function is kept for reference but the prompt uses handoff_bank_advisor.
 # register_tool(
 #     "schedule_advisor_consultation",
