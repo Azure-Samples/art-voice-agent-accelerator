@@ -1,0 +1,432 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/Azure-Samples/art-voice-agent-accelerator/tests/evaluation/scenarios/scenario.schema.json",
+  "title": "Evaluation Scenario Schema",
+  "description": "Schema for evaluation scenario and A/B comparison YAML files",
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/definitions/SessionScenario" },
+    { "$ref": "#/definitions/ABComparison" }
+  ],
+  "definitions": {
+    "SessionScenario": {
+      "type": "object",
+      "description": "Session-based evaluation scenario",
+      "required": ["scenario_name", "session_config", "turns"],
+      "additionalProperties": false,
+      "properties": {
+        "scenario_name": {
+          "type": "string",
+          "description": "Unique identifier for the scenario"
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of the scenario"
+        },
+        "session_config": { "$ref": "#/definitions/SessionConfig" },
+        "agent_overrides": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/AgentOverride" },
+          "description": "Optional per-agent model overrides"
+        },
+        "turns": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/Turn" },
+          "minItems": 1,
+          "description": "List of conversation turns"
+        },
+        "thresholds": { "$ref": "#/definitions/Thresholds" },
+        "foundry_export": { "$ref": "#/definitions/FoundryExport" }
+      }
+    },
+    "ABComparison": {
+      "type": "object",
+      "description": "A/B comparison scenario for comparing model variants",
+      "required": ["comparison_name", "variants", "turns"],
+      "additionalProperties": false,
+      "properties": {
+        "comparison_name": {
+          "type": "string",
+          "description": "Unique identifier for the comparison"
+        },
+        "scenario_template": {
+          "type": "string",
+          "description": "Base scenario template to use (e.g., 'banking', 'insurance')"
+        },
+        "scenario_name": {
+          "type": "string",
+          "description": "Human-readable name for the comparison"
+        },
+        "description": {
+          "type": "string",
+          "description": "Description of what is being compared"
+        },
+        "thresholds": { "$ref": "#/definitions/Thresholds" },
+        "foundry_export": { "$ref": "#/definitions/FoundryExport" },
+        "variants": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/Variant" },
+          "minItems": 2,
+          "description": "Model variants to compare"
+        },
+        "turns": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/Turn" },
+          "minItems": 1,
+          "description": "Shared turns across all variants"
+        },
+        "comparison_metrics": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "latency_p95_ms",
+              "tool_precision",
+              "tool_recall",
+              "tool_efficiency",
+              "grounded_span_ratio",
+              "cost_per_turn",
+              "ttft_ms"
+            ]
+          },
+          "description": "Metrics to compare between variants"
+        }
+      }
+    },
+    "SessionConfig": {
+      "type": "object",
+      "description": "Configuration for session-based scenarios",
+      "required": ["start_agent"],
+      "additionalProperties": false,
+      "properties": {
+        "agents": {
+          "oneOf": [
+            { "type": "string", "enum": ["all"] },
+            { "type": "array", "items": { "type": "string" } }
+          ],
+          "default": "all",
+          "description": "'all' to use all discovered agents, or list of agent names"
+        },
+        "agent_patterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Regex patterns to filter agents"
+        },
+        "exclude_agents": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Agent names to exclude"
+        },
+        "start_agent": {
+          "type": "string",
+          "description": "Agent to start the session with"
+        },
+        "handoff_type": {
+          "type": "string",
+          "enum": ["discrete", "announced"],
+          "default": "announced",
+          "description": "Default handoff type"
+        },
+        "handoffs": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/HandoffConfig" },
+          "description": "Explicit handoff edges"
+        },
+        "generic_handoff": { "$ref": "#/definitions/GenericHandoff" },
+        "agent_defaults": {
+          "type": "object",
+          "description": "Default settings applied to all agents"
+        }
+      }
+    },
+    "HandoffConfig": {
+      "type": "object",
+      "required": ["from", "to"],
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "type": "string",
+          "description": "Source agent"
+        },
+        "to": {
+          "type": "string",
+          "description": "Target agent"
+        },
+        "tool": {
+          "type": "string",
+          "default": "handoff_to_agent",
+          "description": "Handoff tool name"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["discrete", "announced"],
+          "default": "announced"
+        },
+        "share_context": {
+          "type": "boolean",
+          "default": true
+        },
+        "handoff_condition": {
+          "type": "string",
+          "description": "Prompt describing when to trigger"
+        }
+      }
+    },
+    "GenericHandoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "allowed_targets": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Empty = all agents allowed"
+        },
+        "default_type": {
+          "type": "string",
+          "enum": ["discrete", "announced"],
+          "default": "announced"
+        },
+        "share_context": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "Turn": {
+      "type": "object",
+      "required": ["turn_id", "user_input"],
+      "additionalProperties": false,
+      "properties": {
+        "turn_id": {
+          "type": "string",
+          "description": "Unique turn identifier"
+        },
+        "user_input": {
+          "type": "string",
+          "description": "User message text"
+        },
+        "expectations": { "$ref": "#/definitions/Expectations" }
+      }
+    },
+    "Expectations": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tools_called": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Required tools that MUST be called"
+        },
+        "tools_optional": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional tools"
+        },
+        "tools_forbidden": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Tools that MUST NOT be called"
+        },
+        "handoff": {
+          "type": "object",
+          "properties": {
+            "to_agent": { "type": "string" }
+          },
+          "description": "Expected handoff"
+        },
+        "no_handoff": {
+          "type": "boolean",
+          "default": false,
+          "description": "Assert NO handoff occurs"
+        },
+        "response_constraints": {
+          "type": "object",
+          "properties": {
+            "max_tokens": { "type": "integer" },
+            "must_include": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "must_not_include": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "must_ask_for": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "grounding_required": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "min_grounded_ratio": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "max_latency_ms": {
+          "type": "integer",
+          "description": "Maximum E2E latency in milliseconds"
+        }
+      }
+    },
+    "Thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "min_tool_precision": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Minimum tool precision (0-1)"
+        },
+        "min_tool_recall": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Minimum tool recall (0-1)"
+        },
+        "min_grounded_ratio": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Minimum grounded span ratio"
+        },
+        "max_latency_p95_ms": {
+          "type": "integer",
+          "description": "Maximum P95 latency in milliseconds"
+        }
+      }
+    },
+    "Variant": {
+      "type": "object",
+      "required": ["variant_id"],
+      "additionalProperties": false,
+      "properties": {
+        "variant_id": {
+          "type": "string",
+          "description": "Unique identifier for the variant"
+        },
+        "agent_overrides": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/AgentOverride" },
+          "description": "Model overrides per agent"
+        }
+      }
+    },
+    "AgentOverride": {
+      "type": "object",
+      "required": ["agent", "model_override"],
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "Agent name to override"
+        },
+        "model_override": { "$ref": "#/definitions/ModelOverride" }
+      }
+    },
+    "ModelOverride": {
+      "type": "object",
+      "required": ["deployment_id"],
+      "additionalProperties": false,
+      "properties": {
+        "deployment_id": {
+          "type": "string",
+          "description": "Azure OpenAI deployment ID"
+        },
+        "endpoint_preference": {
+          "type": "string",
+          "enum": ["chat", "responses"],
+          "default": "chat"
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "top_p": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "max_tokens": {
+          "type": "integer",
+          "description": "Max output tokens (chat models)"
+        },
+        "max_completion_tokens": {
+          "type": "integer",
+          "description": "Max completion tokens (reasoning models)"
+        },
+        "reasoning_effort": {
+          "type": "string",
+          "enum": ["low", "medium", "high"],
+          "description": "Reasoning effort for o1/o3/o4 models"
+        }
+      }
+    },
+    "FoundryExport": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "output_filename": {
+          "type": "string",
+          "default": "foundry_eval.jsonl"
+        },
+        "include_metadata": {
+          "type": "boolean",
+          "default": true
+        },
+        "context_source": {
+          "type": "string",
+          "enum": ["none", "evidence", "raw_tool_results"],
+          "default": "evidence"
+        },
+        "ground_truth_field": {
+          "type": "string",
+          "description": "Field to extract as ground truth"
+        },
+        "evaluators": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/FoundryEvaluator" }
+        }
+      }
+    },
+    "FoundryEvaluator": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Evaluator ID (e.g., builtin.relevance)"
+        },
+        "init_params": {
+          "type": "object",
+          "properties": {
+            "deployment_name": { "type": "string" }
+          }
+        },
+        "data_mapping": {
+          "type": "object",
+          "properties": {
+            "query": { "type": "string" },
+            "response": { "type": "string" },
+            "context": { "type": "string" },
+            "ground_truth": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

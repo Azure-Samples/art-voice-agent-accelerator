@@ -55,14 +55,17 @@ dependencies = [
     "azure-ai-agents==1.2.0b5",
     "azure-ai-projects==1.0.0",
     "azure-ai-voicelive==1.0.0",
-    # Azure monitoring and telemetry
+    # Azure monitoring and telemetry (pinned to avoid conflicts with google-adk)
     "azure-monitor-opentelemetry>=1.6.11",
-    "opentelemetry-sdk",
-    "opentelemetry-instrumentation",
-    "opentelemetry-instrumentation-fastapi",
-    "opentelemetry-instrumentation-requests",
-    "opentelemetry-instrumentation-urllib",
-    "opentelemetry-instrumentation-urllib3",
+    "opentelemetry-api==1.37.0",
+    "opentelemetry-sdk==1.37.0",
+    "opentelemetry-semantic-conventions==0.58b0",
+    "opentelemetry-instrumentation==0.58b0",
+    "opentelemetry-instrumentation-fastapi==0.58b0",
+    "opentelemetry-instrumentation-asgi==0.58b0",
+    "opentelemetry-instrumentation-requests==0.58b0",
+    "opentelemetry-instrumentation-urllib==0.58b0",
+    "opentelemetry-instrumentation-urllib3==0.58b0",
     # Azure + misc
     "azure-core>=1.29.0",
     "colorama>=0.4.6",
@@ -120,6 +123,8 @@ dev = [
     "pre-commit==2.14.0",
     # Load testing
     "locust>=2.20.0",
+    # Evaluation (Foundry cloud submission)
+    "azure-ai-evaluation>=1.0.0",
 
     # Local audio (mic capture / playback)
     "sounddevice>=0.4.6",
@@ -226,6 +231,9 @@ pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "-q -ra"
 asyncio_mode = "auto"
+markers = [
+  "evaluation: marks tests as evaluation tests (deselect with '-m \"not evaluation\"')",
+]
 filterwarnings = [
   "ignore::DeprecationWarning",
   "ignore::UserWarning"
@@ -278,6 +286,7 @@ include = ["src*", "apps*", "utils*"]
 
 [dependency-groups]
 dev = [
+    "azure-ai-projects>=1.0.0",
     "ipykernel>=7.1.0",
     "ipywidgets>=8.1.8",
     "pandas>=2.3.3",

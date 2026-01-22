@@ -1,0 +1,165 @@
+# yaml-language-server: $schema=../scenario.schema.json
+# Session-Based Evaluation Scenario
+# ================================
+#
+# This scenario type allows you to define agent lists, handoffs, and routing
+# directly in the evaluation YAML - similar to scenariostore orchestrator.yml
+# but without requiring a pre-defined scenario.
+#
+# Use this when you want to:
+# - Test with all discovered agents or a custom subset
+# - Define ad-hoc handoff routing for evaluation
+# - Run evaluations without modifying scenariostore configs
+
+scenario_name: banking_session_based
+description: Multi-agent banking scenario with dynamic agent discovery
+
+# Session configuration - mirrors scenariostore orchestrator.yml format
+session_config:
+  # Agent selection options:
+  # - "all": Use all discovered agents
+  # - ["Agent1", "Agent2"]: Specific agent list
+  # - Use agent_patterns for regex matching
+  agents:
+    - BankingConcierge
+    - CardRecommendation
+    - InvestmentAdvisor
+
+  # Optional: Regex patterns to filter agents (applied after agents list)
+  # agent_patterns:
+  #   - "^Banking.*"
+  #   - "^Card.*"
+
+  # Optional: Agents to exclude (applied last)
+  # exclude_agents:
+  #   - TestAgent
+
+  # Starting agent for the session
+  start_agent: BankingConcierge
+
+  # Default handoff behavior: "announced" or "discrete"
+  handoff_type: announced
+
+  # Explicit handoff edges (like scenariostore handoffs)
+  handoffs:
+    - from: BankingConcierge
+      to: CardRecommendation
+      tool: handoff_card_recommendation
+      type: discrete
+      share_context: true
+      handoff_condition: |
+        Transfer to CardRecommendation when the customer:
+        - Asks about credit cards, debit cards, or card benefits
+        - Wants to compare card options or upgrade their card
+
+    - from: BankingConcierge
+      to: InvestmentAdvisor
+      tool: handoff_investment_advisor
+      type: discrete
+      share_context: true
+      handoff_condition: |
+        Transfer to InvestmentAdvisor when the customer:
+        - Expresses interest in investing, stocks, or bonds
+        - Asks about retirement planning (401k, IRA, pension)
+
+    - from: CardRecommendation
+      to: BankingConcierge
+      tool: handoff_concierge
+      type: discrete
+
+    - from: InvestmentAdvisor
+      to: BankingConcierge
+      tool: handoff_concierge
+      type: discrete
+
+  # Generic handoff configuration - enables handoff_to_agent tool
+  generic_handoff:
+    enabled: true
+    allowed_targets: []  # Empty = all agents in session allowed
+    default_type: announced
+    share_context: true
+
+  # Agent defaults (applied to all agents)
+  agent_defaults:
+    institution_name: "Contoso Bank"
+    industry: "banking"
+
+# Optional: Per-agent model overrides (same as comparison scenarios)
+agent_overrides:
+  - agent: BankingConcierge
+    model_override:
+      deployment_id: gpt-4o
+      temperature: 0.7
+      max_tokens: 500
+
+  - agent: CardRecommendation
+    model_override:
+      deployment_id: gpt-4o
+      temperature: 0.6
+      max_tokens: 400
+
+  - agent: InvestmentAdvisor
+    model_override:
+      deployment_id: gpt-4o
+      temperature: 0.6
+      max_tokens: 400
+
+# Test turns
+turns:
+  - turn_id: turn_1
+    user_input: "Hi, I'd like to check my account and maybe look at some credit card options."
+    expectations:
+      tools_called:
+        - verify_client_identity
+        - get_user_profile
+
+  - turn_id: turn_2
+    user_input: "Can you tell me about cards with travel rewards?"
+    expectations:
+      tools_called:
+        - handoff_to_agent  # or handoff_card_recommendation
+      handoff:
+        to_agent: CardRecommendation
+
+  - turn_id: turn_3
+    user_input: "What about cards with no foreign transaction fees?"
+    expectations:
+      tools_called:
+        - search_card_products
+
+  - turn_id: turn_4
+    user_input: "Thanks! Actually, I'd also like to learn about retirement accounts."
+    expectations:
+      tools_called:
+        - handoff_to_agent
+      handoff:
+        to_agent: InvestmentAdvisor
+
+  - turn_id: turn_5
+    user_input: "What's the difference between a 401k and an IRA?"
+    expectations:
+      tools_called: []
+      no_handoff: true
+      response_constraints:
+        must_include:
+          - "401k"
+          - "IRA"
+
+  - turn_id: turn_6
+    user_input: "That's all for now, thanks!"
+    expectations:
+      tools_called:
+        - handoff_to_agent
+      handoff:
+        to_agent: BankingConcierge
+
+# Evaluation thresholds
+thresholds:
+  min_tool_precision: 0.6
+  min_tool_recall: 0.6
+  min_grounded_ratio: 0.5
+  max_latency_p95_ms: 10000
+
+# Optional: Foundry export
+foundry_export:
+  enabled: false

@@ -979,6 +979,9 @@ check_regional_availability() {
     
     if [[ " ${voice_live_regions[*]} " =~ " ${location} " ]]; then
         log "  ✓ Azure Voice Live API"
+    elif [[ -n "$existing_voicelive_endpoint" ]]; then
+        # VoiceLive endpoint already provisioned - skip region selection
+        log "  ✓ Azure Voice Live API (endpoint already configured)"
     else
         info "  Azure Voice Live API is NOT available in $location"
         info "  Supported regions: ${voice_live_regions[*]}"

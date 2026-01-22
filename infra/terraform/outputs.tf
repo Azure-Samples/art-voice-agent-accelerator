@@ -63,6 +63,10 @@ output "ACS_RESOURCE_ID" {
   value       = azapi_resource.acs.id
 }
 
+output "AZURE_EMAIL_SENDER_ADDRESS" {
+  description = "Azure Email Communication Services sender address (e.g., noreply@domain.azurecomm.net)"
+  value       = "${local.email_sender_username}@${azurerm_email_communication_service_domain.managed.mail_from_sender_domain}"
+}
 
 # output "ACS_MANAGED_IDENTITY_PRINCIPAL_ID" {
 #   description = "Azure Communication Services system-assigned managed identity principal ID"

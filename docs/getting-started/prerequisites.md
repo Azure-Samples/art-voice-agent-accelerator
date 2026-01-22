@@ -125,6 +125,10 @@ az account show --query "{Name:name, ID:id, State:state}" -o table
 
 Run this script to verify all prerequisites:
 
+!!! tip "Script Available"
+    This verification script is also available at `devops/scripts/azd/helpers/verification_script.sh`. 
+    Run it directly with: `./devops/scripts/azd/helpers/verification_script.sh`
+
 ```bash
 #!/bin/bash
 echo "🔍 Checking prerequisites..."

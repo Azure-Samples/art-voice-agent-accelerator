@@ -164,6 +164,7 @@ add_kv "azure/speech/resource-id" "$(get_azd_value AZURE_SPEECH_RESOURCE_ID)"
 add_kv "azure/acs/endpoint" "$(get_azd_value ACS_ENDPOINT)"
 add_kv "azure/acs/immutable-id" "$(get_azd_value ACS_IMMUTABLE_ID)"
 add_kv_ref "azure/acs/connection-string" "acs-connection-string"
+add_kv "azure/acs/email-sender-address" "$(get_azd_value AZURE_EMAIL_SENDER_ADDRESS)"
 
 # Redis
 add_kv "azure/redis/hostname" "$(get_azd_value REDIS_HOSTNAME)"
