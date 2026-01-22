@@ -977,6 +977,13 @@ check_regional_availability() {
         [[ "$configured_voice_live" == ERROR:* ]] && configured_voice_live=""
     fi
     
+    # Check if VoiceLive endpoint is already provisioned (skip region selection if so)
+    local existing_voicelive_endpoint="${AZURE_VOICELIVE_ENDPOINT:-}"
+    if [[ -z "$existing_voicelive_endpoint" ]]; then
+        existing_voicelive_endpoint=$(azd env get-value AZURE_VOICELIVE_ENDPOINT 2>/dev/null | head -n1 || echo "")
+        [[ "$existing_voicelive_endpoint" == ERROR:* ]] && existing_voicelive_endpoint=""
+    fi
+    
     if [[ " ${voice_live_regions[*]} " =~ " ${location} " ]]; then
         log "  ✓ Azure Voice Live API"
     elif [[ -n "$existing_voicelive_endpoint" ]]; then
