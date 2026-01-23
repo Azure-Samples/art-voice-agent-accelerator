@@ -207,6 +207,24 @@ _JINJA_VAR_RE = re.compile(
     r"\{\{\s*([a-zA-Z0-9_.]+)(?:\s*\|[^}]*)?\s*\}\}"
 )
 _GET_VAR_RE = re.compile(r"([a-zA-Z0-9_.]+)\.get\(['\"]([a-zA-Z0-9_.]+)['\"]\)")
+_SESSION_SUFFIX = " (session)"
+
+
+def _normalize_agent_name(name: str | None) -> str | None:
+    if name and name.endswith(_SESSION_SUFFIX):
+        return name[: -len(_SESSION_SUFFIX)]
+    return name
+
+
+def _normalize_agent_names(names: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for name in names:
+        canonical = _normalize_agent_name(name)
+        if canonical and canonical not in seen:
+            normalized.append(canonical)
+            seen.add(canonical)
+    return normalized
 
 
 def extract_prompt_vars(prompt_template: str | None) -> list[str]:
@@ -473,17 +491,22 @@ async def list_available_agents(session_id: str | None = None) -> dict[str, Any]
 
     # Get dynamic session agents - use optimized function if filtering by session
     session_agents_added = 0
+    session_agent_names = set()  # Track names of session agents for replacement logic
+    
     if session_id:
         # Efficient: only get agents for this specific session
         session_agents_dict = list_session_agents_by_session(session_id)
+        
+        # First pass: collect session agent names
+        session_agent_names = {agent.name for agent in session_agents_dict.values()}
+        
+        # Remove base agents that will be overridden by session agents
+        # Session agents with same name REPLACE base agents, not duplicate them
+        agents_list = [a for a in agents_list if a.name not in session_agent_names]
+        
         for agent_name, agent in session_agents_dict.items():
-            # Check if this session agent already exists in static registry
-            existing_names = {a.name for a in agents_list}
+            # Session agent replaces base agent - use original name (no suffix)
             display_name = agent.name
-
-            # If duplicate name, suffix with (session)
-            if display_name in existing_names:
-                display_name = f"{agent.name} (session)"
 
             tool_names = agent.tool_names if hasattr(agent, "tool_names") else []
             prompt_template = getattr(agent, "prompt_template", None)
@@ -514,6 +537,7 @@ async def list_available_agents(session_id: str | None = None) -> dict[str, Any]
             session_agents_added += 1
     else:
         # No filter: get all session agents across all sessions
+        # In this global view, we show session overrides separately with session context
         # list_session_agents() returns {"{session_id}:{agent_name}": agent}
         all_session_agents = list_session_agents()
         for composite_key, agent in all_session_agents.items():
@@ -521,13 +545,13 @@ async def list_available_agents(session_id: str | None = None) -> dict[str, Any]
             parts = composite_key.split(":", 1)
             agent_session_id = parts[0] if len(parts) > 1 else composite_key
             
-            # Check if this session agent already exists in static registry
+            # Check if this session agent overrides a base agent
             existing_names = {a.name for a in agents_list}
             agent_name = agent.name
 
-            # If duplicate name, suffix with session ID
+            # In global view (no session filter), suffix with session ID to show it's an override
             if agent_name in existing_names:
-                agent_name = f"{agent.name} (session)"
+                agent_name = f"{agent.name} [{agent_session_id[:8]}]"
 
             tool_names = agent.tool_names if hasattr(agent, "tool_names") else []
             prompt_template = getattr(agent, "prompt_template", None)
@@ -631,12 +655,15 @@ async def create_dynamic_scenario(
     """
     start = time.time()
 
+    normalized_agents = _normalize_agent_names(config.agents)
+    normalized_start_agent = _normalize_agent_name(config.start_agent)
+
     # Validate agents exist (include both template agents and session-scoped custom agents)
     agents_registry = discover_agents()
     session_agents = list_session_agents_by_session(session_id)
     all_valid_agents = set(agents_registry.keys()) | set(session_agents.keys())
-    if config.agents:
-        invalid_agents = [a for a in config.agents if a not in all_valid_agents]
+    if normalized_agents:
+        invalid_agents = [a for a in normalized_agents if a not in all_valid_agents]
         if invalid_agents:
             raise HTTPException(
                 status_code=400,
@@ -644,16 +671,16 @@ async def create_dynamic_scenario(
             )
 
     # Validate start_agent
-    if config.start_agent:
-        if config.agents and config.start_agent not in config.agents:
+    if normalized_start_agent:
+        if normalized_agents and normalized_start_agent not in normalized_agents:
             raise HTTPException(
                 status_code=400,
-                detail=f"start_agent '{config.start_agent}' must be in agents list",
+                detail=f"start_agent '{normalized_start_agent}' must be in agents list",
             )
-        if not config.agents and config.start_agent not in all_valid_agents:
+        if not normalized_agents and normalized_start_agent not in all_valid_agents:
             raise HTTPException(
                 status_code=400,
-                detail=f"start_agent '{config.start_agent}' not found in registry or session agents",
+                detail=f"start_agent '{normalized_start_agent}' not found in registry or session agents",
             )
 
     # Build agent_defaults
@@ -671,10 +698,12 @@ async def create_dynamic_scenario(
     # Build handoff configs
     handoffs: list[HandoffConfig] = []
     for h in config.handoffs:
+        normalized_from = _normalize_agent_name(h.from_agent)
+        normalized_to = _normalize_agent_name(h.to_agent)
         handoffs.append(
             HandoffConfig(
-                from_agent=h.from_agent,
-                to_agent=h.to_agent,
+                from_agent=normalized_from,
+                to_agent=normalized_to,
                 tool=h.tool,
                 type=h.type,
                 share_context=h.share_context,
@@ -688,11 +717,11 @@ async def create_dynamic_scenario(
         name=config.name,
         description=config.description,
         icon=config.icon,
-        agents=config.agents,
+        agents=normalized_agents,
         agent_defaults=agent_defaults,
         global_template_vars=config.global_template_vars,
         tools=config.tools,
-        start_agent=config.start_agent,
+        start_agent=normalized_start_agent,
         handoff_type=config.handoff_type,
         handoffs=handoffs,
     )
@@ -717,8 +746,8 @@ async def create_dynamic_scenario(
             "name": config.name,
             "description": config.description,
             "icon": config.icon,
-            "agents": config.agents,
-            "start_agent": config.start_agent,
+            "agents": normalized_agents,
+            "start_agent": normalized_start_agent,
             "handoff_type": config.handoff_type,
             "handoffs": [
                 {
@@ -815,12 +844,15 @@ async def update_session_scenario(
 
     Creates a new scenario if one doesn't exist.
     """
+    normalized_agents = _normalize_agent_names(config.agents)
+    normalized_start_agent = _normalize_agent_name(config.start_agent)
+
     # Validate agents exist (include both template agents and session-scoped custom agents)
     agents_registry = discover_agents()
     session_agents = list_session_agents_by_session(session_id)
     all_valid_agents = set(agents_registry.keys()) | set(session_agents.keys())
-    if config.agents:
-        invalid_agents = [a for a in config.agents if a not in all_valid_agents]
+    if normalized_agents:
+        invalid_agents = [a for a in normalized_agents if a not in all_valid_agents]
         if invalid_agents:
             raise HTTPException(
                 status_code=400,
@@ -828,16 +860,16 @@ async def update_session_scenario(
             )
 
     # Validate start_agent
-    if config.start_agent:
-        if config.agents and config.start_agent not in config.agents:
+    if normalized_start_agent:
+        if normalized_agents and normalized_start_agent not in normalized_agents:
             raise HTTPException(
                 status_code=400,
-                detail=f"start_agent '{config.start_agent}' must be in agents list",
+                detail=f"start_agent '{normalized_start_agent}' must be in agents list",
             )
-        if not config.agents and config.start_agent not in all_valid_agents:
+        if not normalized_agents and normalized_start_agent not in all_valid_agents:
             raise HTTPException(
                 status_code=400,
-                detail=f"start_agent '{config.start_agent}' not found in registry or session agents",
+                detail=f"start_agent '{normalized_start_agent}' not found in registry or session agents",
             )
 
     existing = get_session_scenario(session_id)
@@ -858,10 +890,12 @@ async def update_session_scenario(
     # Build handoff configs
     handoffs: list[HandoffConfig] = []
     for h in config.handoffs:
+        normalized_from = _normalize_agent_name(h.from_agent)
+        normalized_to = _normalize_agent_name(h.to_agent)
         handoffs.append(
             HandoffConfig(
-                from_agent=h.from_agent,
-                to_agent=h.to_agent,
+                from_agent=normalized_from,
+                to_agent=normalized_to,
                 tool=h.tool,
                 type=h.type,
                 share_context=h.share_context,
@@ -875,11 +909,11 @@ async def update_session_scenario(
         name=config.name,
         description=config.description,
         icon=config.icon,
-        agents=config.agents,
+        agents=normalized_agents,
         agent_defaults=agent_defaults,
         global_template_vars=config.global_template_vars,
         tools=config.tools,
-        start_agent=config.start_agent,
+        start_agent=normalized_start_agent,
         handoff_type=config.handoff_type,
         handoffs=handoffs,
     )
@@ -903,8 +937,8 @@ async def update_session_scenario(
             "name": config.name,
             "description": config.description,
             "icon": config.icon,
-            "agents": config.agents,
-            "start_agent": config.start_agent,
+            "agents": normalized_agents,
+            "start_agent": normalized_start_agent,
             "handoff_type": config.handoff_type,
             "handoffs": [
                 {

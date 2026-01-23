@@ -1078,6 +1078,9 @@ export default function AgentBuilder({
       agent_name: 'Assistant',
     },
   });
+  const [draftGreeting, setDraftGreeting] = useState('');
+  const [draftReturnGreeting, setDraftReturnGreeting] = useState('');
+  const [draftPrompt, setDraftPrompt] = useState(DEFAULT_PROMPT);
   
   // Tool categories expanded state
   const [expandedCategories, setExpandedCategories] = useState({});
@@ -1121,6 +1124,18 @@ export default function AgentBuilder({
       return changed ? { ...prev, template_vars: nextTemplateVars } : prev;
     });
   }, [detectedTemplateVars]);
+
+  useEffect(() => {
+    setDraftGreeting(config.greeting || '');
+  }, [config.greeting]);
+
+  useEffect(() => {
+    setDraftReturnGreeting(config.return_greeting || '');
+  }, [config.return_greeting]);
+
+  useEffect(() => {
+    setDraftPrompt(config.prompt || DEFAULT_PROMPT);
+  }, [config.prompt]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // DATA FETCHING
@@ -1465,9 +1480,9 @@ export default function AgentBuilder({
       const payload = {
         name: config.name,
         description: config.description,
-        greeting: config.greeting,
-        return_greeting: config.return_greeting,
-        prompt: config.prompt,  // Backend expects 'prompt', not 'prompt_template'
+        greeting: draftGreeting,
+        return_greeting: draftReturnGreeting,
+        prompt: draftPrompt,  // Backend expects 'prompt', not 'prompt_template'
         tools: config.tools,
         cascade_model: {
           deployment_id: config.cascade_model?.deployment_id || 'gpt-4o',
@@ -1507,6 +1522,15 @@ export default function AgentBuilder({
         },
         template_vars: config.template_vars,
       };
+      if (draftGreeting !== config.greeting) {
+        handleConfigChange('greeting', draftGreeting);
+      }
+      if (draftReturnGreeting !== config.return_greeting) {
+        handleConfigChange('return_greeting', draftReturnGreeting);
+      }
+      if (draftPrompt !== config.prompt) {
+        handleConfigChange('prompt', draftPrompt);
+      }
 
       // Use PUT for update, POST for create
       const isUpdate = isEditMode;
@@ -2186,8 +2210,13 @@ export default function AgentBuilder({
                           </Typography>
                         </Stack>
                         <TextField
-                          value={config.greeting}
-                          onChange={(e) => handleConfigChange('greeting', e.target.value)}
+                          value={draftGreeting}
+                          onChange={(e) => setDraftGreeting(e.target.value)}
+                          onBlur={() => {
+                            if (draftGreeting !== config.greeting) {
+                              handleConfigChange('greeting', draftGreeting);
+                            }
+                          }}
                           fullWidth
                           multiline
                           rows={4}
@@ -2208,7 +2237,7 @@ export default function AgentBuilder({
                         <TemplateVariableHelper
                           usedVars={detectedTemplateVars}
                           onInsert={(val) =>
-                            setConfig(prev => ({ ...prev, greeting: (prev.greeting || '') + val }))
+                            setDraftGreeting((prev) => prev + val)
                           }
                         />
                       </Box>
@@ -2220,8 +2249,13 @@ export default function AgentBuilder({
                           </Typography>
                         </Stack>
                         <TextField
-                          value={config.return_greeting || ''}
-                          onChange={(e) => handleConfigChange('return_greeting', e.target.value)}
+                          value={draftReturnGreeting}
+                          onChange={(e) => setDraftReturnGreeting(e.target.value)}
+                          onBlur={() => {
+                            if (draftReturnGreeting !== config.return_greeting) {
+                              handleConfigChange('return_greeting', draftReturnGreeting);
+                            }
+                          }}
                           fullWidth
                           multiline
                           rows={3}
@@ -2242,7 +2276,7 @@ export default function AgentBuilder({
                         <TemplateVariableHelper
                           usedVars={detectedTemplateVars}
                           onInsert={(val) =>
-                            setConfig(prev => ({ ...prev, return_greeting: (prev.return_greeting || '') + val }))
+                            setDraftReturnGreeting((prev) => prev + val)
                           }
                         />
                       </Box>
@@ -2257,14 +2291,19 @@ export default function AgentBuilder({
                         📝 System Prompt
                       </Typography>
                       <Chip 
-                        label={`${config.prompt.length} chars`} 
+                        label={`${draftPrompt.length} chars`} 
                         size="small" 
                         variant="outlined"
                       />
                     </Stack>
                     <TextField
-                      value={config.prompt}
-                      onChange={(e) => handleConfigChange('prompt', e.target.value)}
+                      value={draftPrompt}
+                      onChange={(e) => setDraftPrompt(e.target.value)}
+                      onBlur={() => {
+                        if (draftPrompt !== config.prompt) {
+                          handleConfigChange('prompt', draftPrompt);
+                        }
+                      }}
                       fullWidth
                       multiline
                       rows={12}
@@ -2285,7 +2324,7 @@ export default function AgentBuilder({
                       <TemplateVariableHelper
                         usedVars={detectedTemplateVars}
                         onInsert={(val) =>
-                          setConfig(prev => ({ ...prev, prompt: (prev.prompt || '') + val }))
+                          setDraftPrompt((prev) => prev + val)
                         }
                       />
                     </Box>

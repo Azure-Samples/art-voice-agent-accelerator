@@ -4383,13 +4383,13 @@ function RealTimeVoiceApp() {
       sessionProfile={activeSessionProfile}
       onAgentCreated={(agentConfig) => {
         appendLog(`✨ Dynamic agent created: ${agentConfig.name}`);
-        appendSystemMessage(`🤖 Agent "${agentConfig.name}" is now active`, {
+        appendSystemMessage(`🤖 Agent "${agentConfig.name}" created and available`, {
           tone: "success",
           statusCaption: `Tools: ${agentConfig.tools?.length || 0} · Voice: ${agentConfig.voice?.name || 'default'}`,
-          statusLabel: "Agent Active",
+          statusLabel: "Agent Created",
         });
-        // Set the created agent as the active agent
-        setSelectedAgentName(agentConfig.name);
+        // Note: Do NOT auto-select the created agent to prevent unintended scenario changes
+        // User can explicitly select the agent if they want to use it
         fetchSessionAgentConfig();
         // Refresh agent inventory to include the new session agent
         setAgentInventory((prev) => {
@@ -4477,12 +4477,13 @@ function RealTimeVoiceApp() {
       }
       onAgentCreated={(agentConfig) => {
         appendLog(`✨ Dynamic agent created: ${agentConfig.name}`);
-        appendSystemMessage(`🤖 Agent "${agentConfig.name}" is now active`, {
+        appendSystemMessage(`🤖 Agent "${agentConfig.name}" created and available`, {
           tone: "success",
           statusCaption: `Tools: ${agentConfig.tools?.length || 0} · Voice: ${agentConfig.voice?.name || 'default'}`,
-          statusLabel: "Agent Active",
+          statusLabel: "Agent Created",
         });
-        setSelectedAgentName(agentConfig.name);
+        // Note: Do NOT auto-select the created agent to prevent unintended scenario changes
+        // User can explicitly select the agent if they want to use it
         fetchSessionAgentConfig();
         setAgentInventory((prev) => {
           if (!prev) return prev;
