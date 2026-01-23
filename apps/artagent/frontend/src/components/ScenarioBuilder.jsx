@@ -3583,7 +3583,7 @@ export default function ScenarioBuilder({
               : 'linear-gradient(135deg, #4f46e5 0%, #6366f1 100%)',
           }}
         >
-          {saving ? 'Saving...' : editMode ? 'Update Scenario' : 'Create Scenario'}
+          {saving ? 'Saving Scenario...' : 'Save Scenario'}
         </Button>
       </Box>
 

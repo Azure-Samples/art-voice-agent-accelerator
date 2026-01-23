@@ -3138,9 +3138,7 @@ export default function AgentBuilderContent({
               : 'linear-gradient(135deg, #4f46e5 0%, #6366f1 100%)',
           }}
         >
-          {saving
-            ? isEditMode ? 'Updating...' : 'Creating...'
-            : isEditMode ? 'Update Agent' : 'Create Agent'}
+          {saving ? 'Saving Agent...' : 'Save Agent'}
         </Button>
       </Box>
 
