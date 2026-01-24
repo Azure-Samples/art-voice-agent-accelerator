@@ -110,6 +110,11 @@ nav:
   - Guides:
     - Repository Structure: guides/repository-structure.md
     - Utilities & Services: guides/utilities.md
+    - Registries:
+      - Overview: guides/registries/index.md
+      - Tools: guides/registries/tools.md
+      - Agents: guides/registries/agents.md
+      - Scenarios: guides/registries/scenarios.md
 extra_css:
   - assets/oad-styles.css
 

@@ -1115,7 +1115,6 @@ const ScenarioGraphCanvas = React.memo(function ScenarioGraphCanvas({
           width: nodeWidth,
           height: nodeHeight,
           isStart: isStartAgent,
-          isSession: agent?.is_session_agent || false,
           isFloating,
           hasOutgoing,
           agent,
@@ -1574,7 +1573,7 @@ const ScenarioGraphCanvas = React.memo(function ScenarioGraphCanvas({
 
         <Box sx={{ flex: 1, overflowY: 'auto', p: 1 }}>
           {availableAgents.map(agent => {
-            const colorScheme = agent.is_session_agent ? colors.session : colors.active;
+            const colorScheme = colors.active;
             return (
               <Paper
                 key={agent.name}
@@ -1640,18 +1639,6 @@ const ScenarioGraphCanvas = React.memo(function ScenarioGraphCanvas({
                       <SettingsIcon sx={{ fontSize: 14, color: '#94a3b8' }} />
                     </IconButton>
                   </Tooltip>
-                  {agent.is_session_agent && (
-                    <Chip
-                      size="small"
-                      label="Custom"
-                      sx={{
-                        height: 18,
-                        fontSize: 9,
-                        backgroundColor: colors.session.bg,
-                        color: colors.session.avatar,
-                      }}
-                    />
-                  )}
                 </Stack>
               </Paper>
             );
@@ -2353,6 +2340,7 @@ export default function ScenarioBuilderGraph({
   // Data
   const [availableAgents, setAvailableAgents] = useState([]);
   const [availableTemplates, setAvailableTemplates] = useState([]);
+  const [sessionScenarios, setSessionScenarios] = useState([]);
   const [selectedTemplate, setSelectedTemplate] = useState(null);
 
   // Scenario config
@@ -2382,6 +2370,35 @@ export default function ScenarioBuilderGraph({
     '🎭', '🎯', '🎪', '🏛️', '🏦', '🏥', '🏢', '📞', '💬', '🤖',
     '🎧', '📱', '💼', '🛒', '🍔', '✈️', '🏨', '🚗', '📚', '⚖️',
   ];
+  const defaultTemplate = useMemo(() => {
+    if (!availableTemplates.length) return null;
+    return (
+      availableTemplates.find((template) => template.id === 'banking') ||
+      availableTemplates.find((template) => template.id === 'default') ||
+      availableTemplates[0]
+    );
+  }, [availableTemplates]);
+  const sessionScenarioItems = useMemo(() => {
+    if (!defaultTemplate) return sessionScenarios;
+    const exists = sessionScenarios.some(
+      (scenario) =>
+        (scenario.name || '').toLowerCase() === (defaultTemplate.name || '').toLowerCase()
+    );
+    if (exists) return sessionScenarios;
+    return [
+      {
+        name: defaultTemplate.name,
+        description: defaultTemplate.description,
+        icon: defaultTemplate.icon,
+        start_agent: defaultTemplate.start_agent,
+        handoff_type: defaultTemplate.handoff_type,
+        handoffs: defaultTemplate.handoffs || [],
+        global_template_vars: defaultTemplate.global_template_vars || {},
+        is_default_template: true,
+      },
+      ...sessionScenarios,
+    ];
+  }, [defaultTemplate, sessionScenarios]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // DATA FETCHING
@@ -2414,6 +2431,24 @@ export default function ScenarioBuilderGraph({
     }
   }, []);
 
+  const fetchSessionScenarios = useCallback(async () => {
+    if (!sessionId) {
+      setSessionScenarios([]);
+      return;
+    }
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/v1/scenario-builder/session/${encodeURIComponent(sessionId)}/scenarios`
+      );
+      if (response.ok) {
+        const data = await response.json();
+        setSessionScenarios(data.scenarios || []);
+      }
+    } catch (err) {
+      logger.error('Failed to fetch session scenarios:', err);
+    }
+  }, [sessionId]);
+
   const fetchExistingScenario = useCallback(async () => {
     if (!sessionId) return;
     try {
@@ -2445,9 +2480,16 @@ export default function ScenarioBuilderGraph({
     Promise.all([
       fetchAvailableAgents(),
       fetchAvailableTemplates(),
+      fetchSessionScenarios(),
       editMode ? fetchExistingScenario() : Promise.resolve(),
     ]).finally(() => setLoading(false));
-  }, [fetchAvailableAgents, fetchAvailableTemplates, fetchExistingScenario, editMode]);
+  }, [
+    fetchAvailableAgents,
+    fetchAvailableTemplates,
+    fetchSessionScenarios,
+    fetchExistingScenario,
+    editMode,
+  ]);
 
   useEffect(() => {
     if (existingConfig) {
@@ -2495,6 +2537,22 @@ export default function ScenarioBuilderGraph({
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  const handleApplySessionScenario = useCallback((scenario, scenarioKey) => {
+    if (!scenario) return;
+    setConfig({
+      name: scenario.name || 'Custom Scenario',
+      description: scenario.description || '',
+      icon: scenario.icon || '🎭',
+      start_agent: scenario.start_agent,
+      handoff_type: scenario.handoff_type || 'announced',
+      handoffs: scenario.handoffs || [],
+      global_template_vars: scenario.global_template_vars || {},
+    });
+    setSelectedTemplate(scenarioKey || `session:${scenario.name || 'custom'}`);
+    setSuccess(`Loaded session scenario: ${scenario.name || 'Custom Scenario'}`);
+    setTimeout(() => setSuccess(null), 3000);
   }, []);
 
   const handleSave = async () => {
@@ -2551,6 +2609,7 @@ export default function ScenarioBuilderGraph({
         onScenarioCreated(data.config || config);
       }
 
+      fetchSessionScenarios();
       setSuccess(editMode ? 'Scenario updated!' : 'Scenario created!');
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
@@ -2589,6 +2648,7 @@ export default function ScenarioBuilderGraph({
     setError(null);
     setSuccess('Scenario reset');
     setTimeout(() => setSuccess(null), 2000);
+    fetchSessionScenarios();
   };
 
   const handleExportScenario = () => {
@@ -2788,22 +2848,51 @@ export default function ScenarioBuilderGraph({
         </Stack>
 
         {/* Templates */}
-        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-          <Typography variant="caption" color="text.secondary">
-            Templates:
-          </Typography>
-          {availableTemplates.map((template) => (
-            <Chip
-              key={template.id}
-              label={template.name}
-              size="small"
-              icon={selectedTemplate === template.id ? <CheckIcon /> : <HubIcon fontSize="small" />}
-              color={selectedTemplate === template.id ? 'primary' : 'default'}
-              variant={selectedTemplate === template.id ? 'filled' : 'outlined'}
-              onClick={() => handleApplyTemplate(template.id)}
-              sx={{ cursor: 'pointer' }}
-            />
-          ))}
+        <Stack spacing={1.2}>
+          <Box>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
+                Session Scenarios
+              </Typography>
+              <Chip size="small" label={sessionScenarioItems.length} />
+            </Stack>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+              Stored in session state. Click to load and edit.
+            </Typography>
+            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+              {sessionScenarioItems.length > 0 ? (
+                sessionScenarioItems.map((scenario, index) => {
+                  const scenarioKey = `session:${scenario.name || index}`;
+                  return (
+                    <Chip
+                      key={scenarioKey}
+                      label={
+                        scenario.is_default_template
+                          ? `${scenario.icon || '🎭'} ${scenario.name || 'Default'} (default)`
+                          : `${scenario.icon || '🎭'} ${scenario.name || 'Custom Scenario'}`
+                      }
+                      size="small"
+                      icon={
+                        selectedTemplate === scenarioKey
+                          ? <CheckIcon />
+                          : scenario.is_active
+                            ? <AutoFixHighIcon fontSize="small" />
+                            : <EditIcon fontSize="small" />
+                      }
+                      color={selectedTemplate === scenarioKey ? 'primary' : 'default'}
+                      variant={selectedTemplate === scenarioKey ? 'filled' : 'outlined'}
+                      onClick={() => handleApplySessionScenario(scenario, scenarioKey)}
+                      sx={{ cursor: 'pointer' }}
+                    />
+                  );
+                })
+              ) : (
+                <Typography variant="caption" color="text.secondary">
+                  {sessionId ? 'No session scenarios yet.' : 'Connect a session to load scenarios.'}
+                </Typography>
+              )}
+            </Stack>
+          </Box>
         </Stack>
 
         {/* Settings panel */}
@@ -3069,7 +3158,7 @@ export default function ScenarioBuilderGraph({
               : 'linear-gradient(135deg, #4f46e5 0%, #6366f1 100%)',
           }}
         >
-          {saving ? 'Saving...' : editMode ? 'Update Scenario' : 'Create Scenario'}
+          {saving ? 'Saving Scenario...' : 'Save Scenario'}
         </Button>
       </Box>
     </Box>

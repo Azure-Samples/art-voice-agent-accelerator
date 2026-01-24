@@ -31,6 +31,8 @@ from fastapi.websockets import WebSocketState
 from utils.ml_logging import get_logger
 from utils.telemetry_decorators import add_speech_tts_metrics, trace_speech
 
+from apps.artagent.backend.src.orchestration.naming import find_agent_by_name
+
 if TYPE_CHECKING:
     from apps.artagent.backend.voice.shared.context import VoiceSessionContext
 
@@ -164,7 +166,8 @@ class TTSPlayback:
         # Fallback to start agent from unified agents
         unified_agents = getattr(self._app_state, "unified_agents", {})
         start_agent_name = getattr(self._app_state, "start_agent", "Concierge")
-        start_agent = unified_agents.get(start_agent_name)
+        # Use case-insensitive lookup
+        _, start_agent = find_agent_by_name(unified_agents, start_agent_name)
 
         if start_agent and hasattr(start_agent, "voice") and start_agent.voice:
             voice = start_agent.voice
@@ -195,10 +198,10 @@ class TTSPlayback:
             agent_name: Name of the active agent
         """
         if agent_name:
-            # Look up agent in unified_agents and set on context
+            # Look up agent in unified_agents and set on context (case-insensitive)
             unified_agents = getattr(self._app_state, "unified_agents", {})
-            agent = unified_agents.get(agent_name)
-            if agent:
+            actual_key, agent = find_agent_by_name(unified_agents, agent_name)
+            if actual_key is not None:
                 self._context.current_agent = agent
                 logger.debug(
                     "[%s] Active agent set for TTS: %s",

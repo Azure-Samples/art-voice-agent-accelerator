@@ -864,7 +864,9 @@ class VoiceLiveSDKHandler:
                 if not scenario_name:
                     memo_mgr = getattr(self.websocket.state, "cm", None)
                     if memo_mgr and hasattr(memo_mgr, "get_value_from_corememory"):
-                        scenario_name = memo_mgr.get_value_from_corememory("scenario_name", None)
+                        # Use centralized naming utility for consistent key lookup
+                        from apps.artagent.backend.src.orchestration.naming import get_scenario_from_corememory
+                        scenario_name = get_scenario_from_corememory(memo_mgr)
                         if scenario_name:
                             logger.debug(
                                 "[VoiceLiveSDK] Resolved scenario from MemoManager | scenario=%s session=%s",
