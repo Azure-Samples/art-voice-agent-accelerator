@@ -61,6 +61,9 @@ class TurnValidationResult:
     passed: bool
     checks: List[ValidationResult] = field(default_factory=list)
     failed_checks: List[str] = field(default_factory=list)
+    user_text: str = ""  # User input for debugging
+    response_text: str = ""  # Agent response for debugging
+    tools_called: List[str] = field(default_factory=list)  # Actual tools called
 
     @property
     def message(self) -> str:
@@ -86,10 +89,131 @@ class ExpectationValidator:
     - max_tokens: Response within token budget
     - min_grounded_ratio: Groundedness above threshold
     - max_latency: E2E latency within threshold
+
+    Compact Syntax (Phase 1 Refactor)
+    ---------------------------------
+    Supports shorthand expectations for common cases:
+
+    ```yaml
+    # Shorthand: just tools as array
+    expect: [verify_identity, get_balance]
+
+    # Shorthand: compact object form
+    expect:
+      tools: [verify_identity]
+      handoff: CardAgent
+      contains: ["balance", "$"]
+      excludes: ["error"]
+      max_latency: 5000
+      no_tools: true
+    ```
+
+    These get normalized to full ScenarioExpectations format internally.
     """
 
     def __init__(self):
         self.logger = logger
+
+    def _normalize_expectations(
+        self,
+        expectations: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Normalize compact expectation syntax to full ScenarioExpectations format.
+
+        Supports shortcuts:
+          - expect: [tools] -> tools_called: [tools]
+          - expect.tools -> tools_called
+          - expect.handoff -> handoff.to_agent
+          - expect.contains -> response_constraints.must_include
+          - expect.excludes -> response_constraints.must_not_include
+          - expect.max_latency -> max_latency_ms
+          - expect.no_tools -> (expects tools_called to be empty)
+          - expect.no_handoff -> no_handoff: true
+
+        Args:
+            expectations: Raw expectations dict (may be compact or full format)
+
+        Returns:
+            Normalized expectations dict in full ScenarioExpectations format
+        """
+        # If no 'expect' key, assume already full format
+        if "expect" not in expectations:
+            return expectations
+
+        expect = expectations["expect"]
+        normalized: Dict[str, Any] = {}
+
+        # Copy existing full-format fields (backward compat)
+        for key in ["tools_called", "tools_optional", "tools_forbidden", "handoff",
+                    "no_handoff", "response_constraints", "grounding_required",
+                    "min_grounded_ratio", "max_latency_ms"]:
+            if key in expectations:
+                normalized[key] = expectations[key]
+
+        # Handle shorthand: expect: [tools] (array of tool names)
+        if isinstance(expect, list):
+            normalized["tools_called"] = expect
+            return normalized
+
+        # Handle shorthand: expect: {...} (compact object form)
+        if isinstance(expect, dict):
+            # tools -> tools_called
+            if "tools" in expect:
+                normalized["tools_called"] = expect["tools"]
+
+            # no_tools -> expects empty tools_called
+            if expect.get("no_tools"):
+                # Don't require tools, but track for potential validation
+                if "tools_called" not in normalized:
+                    normalized["tools_called"] = []
+
+            # handoff -> handoff.to_agent
+            if "handoff" in expect:
+                handoff_target = expect["handoff"]
+                if isinstance(handoff_target, str):
+                    normalized["handoff"] = {"to_agent": handoff_target}
+                elif isinstance(handoff_target, dict):
+                    normalized["handoff"] = handoff_target
+
+            # no_handoff
+            if expect.get("no_handoff"):
+                normalized["no_handoff"] = True
+
+            # contains -> response_constraints.must_include
+            if "contains" in expect:
+                if "response_constraints" not in normalized:
+                    normalized["response_constraints"] = {}
+                normalized["response_constraints"]["must_include"] = (
+                    expect["contains"] if isinstance(expect["contains"], list)
+                    else [expect["contains"]]
+                )
+
+            # excludes -> response_constraints.must_not_include
+            if "excludes" in expect:
+                if "response_constraints" not in normalized:
+                    normalized["response_constraints"] = {}
+                normalized["response_constraints"]["must_not_include"] = (
+                    expect["excludes"] if isinstance(expect["excludes"], list)
+                    else [expect["excludes"]]
+                )
+
+            # max_latency -> max_latency_ms
+            if "max_latency" in expect:
+                normalized["max_latency_ms"] = expect["max_latency"]
+
+            # min_grounded -> min_grounded_ratio
+            if "min_grounded" in expect:
+                normalized["min_grounded_ratio"] = expect["min_grounded"]
+
+            # forbidden -> tools_forbidden
+            if "forbidden" in expect:
+                normalized["tools_forbidden"] = (
+                    expect["forbidden"] if isinstance(expect["forbidden"], list)
+                    else [expect["forbidden"]]
+                )
+
+        return normalized
 
     def validate_turn(
         self,
@@ -108,8 +232,9 @@ class ExpectationValidator:
         Returns:
             TurnValidationResult with all check results
         """
-        # Convert dict to ScenarioExpectations if needed
+        # Normalize compact syntax to full format (Phase 1 refactor)
         if isinstance(expectations, dict):
+            expectations = self._normalize_expectations(expectations)
             exp = ScenarioExpectations.model_validate(expectations)
         else:
             exp = expectations
@@ -275,6 +400,9 @@ class ExpectationValidator:
             passed=len(failed_checks) == 0,
             checks=checks,
             failed_checks=failed_checks,
+            user_text=turn.user_text,
+            response_text=turn.response_text,
+            tools_called=actual_tools,
         )
 
     def validate_run(
@@ -303,9 +431,14 @@ class ExpectationValidator:
 
         for turn_spec in turns_spec:
             turn_id = turn_spec.get("turn_id", "")
-            exp = turn_spec.get("expectations", {})
+            # Support both 'expectations' (full) and 'expect' (compact)
+            exp = turn_spec.get("expectations") or turn_spec.get("expect")
             if exp:
-                expectations_map[turn_id] = exp
+                # Handle compact: expect at turn level
+                if "expect" in turn_spec and "expectations" not in turn_spec:
+                    expectations_map[turn_id] = {"expect": exp}
+                else:
+                    expectations_map[turn_id] = exp if isinstance(exp, dict) else {"expect": exp}
 
         # Validate each event
         for event in events:
@@ -351,6 +484,11 @@ class ExpectationValidator:
             for result in results:
                 if not result.passed:
                     lines.append(f"\n  {result.turn_id}:")
+                    # Show user input and response for debugging
+                    lines.append(f"    📥 User: {result.user_text[:150]}{'...' if len(result.user_text) > 150 else ''}")
+                    lines.append(f"    📤 Response: {result.response_text[:200]}{'...' if len(result.response_text) > 200 else ''}")
+                    lines.append(f"    🔧 Tools called: {result.tools_called or '(none)'}")
+                    lines.append(f"    \n    Failed checks:")
                     for check in result.checks:
                         if not check.passed:
                             lines.append(f"    - {check.check_name}: {check.message}")

@@ -1089,6 +1089,12 @@ export default function AgentBuilderContent({
   const [draftReturnGreeting, setDraftReturnGreeting] = useState('');
   const [draftPrompt, setDraftPrompt] = useState(DEFAULT_PROMPT);
 
+  // Explicit custom mode tracking - prevents input reset when typing hyphens
+  // that might temporarily match a preset name (e.g., typing "my-gpt-4o-test" matches "gpt-4o")
+  const [isCascadeCustomMode, setIsCascadeCustomMode] = useState(false);
+  const [isVoiceliveCustomMode, setIsVoiceliveCustomMode] = useState(false);
+  const customModeInitialized = useRef(false);
+
   const cascadeEndpointPreference = useMemo(
     () => resolveEndpointPreference(config.cascade_model),
     [config.cascade_model],
@@ -1097,20 +1103,35 @@ export default function AgentBuilderContent({
     () => resolveEndpointPreference(config.voicelive_model),
     [config.voicelive_model],
   );
+  // Compute preset values for dropdown display
   const cascadeModelPreset = useMemo(() => {
+    if (isCascadeCustomMode) return 'custom';
     const deploymentId = (config.cascade_model?.deployment_id || '').trim();
     return CASCADE_MODEL_PRESETS.some((preset) => preset.id === deploymentId)
       ? deploymentId
       : 'custom';
-  }, [config.cascade_model?.deployment_id]);
+  }, [config.cascade_model?.deployment_id, isCascadeCustomMode]);
   const voiceliveModelPreset = useMemo(() => {
+    if (isVoiceliveCustomMode) return 'custom';
     const deploymentId = (config.voicelive_model?.deployment_id || '').trim();
     return VOICELIVE_MODEL_PRESETS.some((preset) => preset.id === deploymentId)
       ? deploymentId
       : 'custom';
-  }, [config.voicelive_model?.deployment_id]);
-  const isCascadeCustom = cascadeModelPreset === 'custom';
-  const isVoiceliveCustom = voiceliveModelPreset === 'custom';
+  }, [config.voicelive_model?.deployment_id, isVoiceliveCustomMode]);
+  const isCascadeCustom = isCascadeCustomMode || cascadeModelPreset === 'custom';
+  const isVoiceliveCustom = isVoiceliveCustomMode || voiceliveModelPreset === 'custom';
+
+  // Initialize custom mode flags based on loaded config (only once)
+  useEffect(() => {
+    if (customModeInitialized.current) return;
+    const cascadeId = (config.cascade_model?.deployment_id || '').trim();
+    const voiceliveId = (config.voicelive_model?.deployment_id || '').trim();
+    const cascadeIsCustom = cascadeId && !CASCADE_MODEL_PRESETS.some(p => p.id === cascadeId);
+    const voiceliveIsCustom = voiceliveId && !VOICELIVE_MODEL_PRESETS.some(p => p.id === voiceliveId);
+    if (cascadeIsCustom) setIsCascadeCustomMode(true);
+    if (voiceliveIsCustom) setIsVoiceliveCustomMode(true);
+    customModeInitialized.current = true;
+  }, [config.cascade_model?.deployment_id, config.voicelive_model?.deployment_id]);
   const cascadeOverrideValue = (config.cascade_model?.deployment_id || '').trim();
   const voiceliveOverrideValue = (config.voicelive_model?.deployment_id || '').trim();
   const isCascadeOverrideMissing = isCascadeCustom && !cascadeOverrideValue;
@@ -2320,11 +2341,16 @@ export default function AgentBuilderContent({
                         value={cascadeModelPreset}
                         onChange={(e) => {
                           const selected = e.target.value;
-                          handleNestedConfigChange(
-                            'cascade_model',
-                            'deployment_id',
-                            selected === 'custom' ? '' : selected
-                          );
+                          if (selected === 'custom') {
+                            setIsCascadeCustomMode(true);
+                            // Keep existing value if any, otherwise empty
+                            if (!config.cascade_model?.deployment_id || CASCADE_MODEL_PRESETS.some(p => p.id === config.cascade_model?.deployment_id)) {
+                              handleNestedConfigChange('cascade_model', 'deployment_id', '');
+                            }
+                          } else {
+                            setIsCascadeCustomMode(false);
+                            handleNestedConfigChange('cascade_model', 'deployment_id', selected);
+                          }
                         }}
                         fullWidth
                         size="small"
@@ -2627,11 +2653,16 @@ export default function AgentBuilderContent({
                         value={voiceliveModelPreset}
                         onChange={(e) => {
                           const selected = e.target.value;
-                          handleNestedConfigChange(
-                            'voicelive_model',
-                            'deployment_id',
-                            selected === 'custom' ? '' : selected
-                          );
+                          if (selected === 'custom') {
+                            setIsVoiceliveCustomMode(true);
+                            // Keep existing value if any, otherwise empty
+                            if (!config.voicelive_model?.deployment_id || VOICELIVE_MODEL_PRESETS.some(p => p.id === config.voicelive_model?.deployment_id)) {
+                              handleNestedConfigChange('voicelive_model', 'deployment_id', '');
+                            }
+                          } else {
+                            setIsVoiceliveCustomMode(false);
+                            handleNestedConfigChange('voicelive_model', 'deployment_id', selected);
+                          }
                         }}
                         fullWidth
                         size="small"

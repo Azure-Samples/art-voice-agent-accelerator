@@ -42,16 +42,18 @@ session_config:
   agent_defaults:
     institution_name: "Contoso Services"
 
-# Simple test turns
+# Test turns - user inputs must be explicit enough to trigger expected tools
+# CRITICAL: For verify_client_identity, user must provide name + SSN/last4
+# For handoffs, user must express clear intent that maps to specialist expertise
 turns:
   - turn_id: turn_1
-    user_input: "Hello, I need help with my account."
+    user_input: "Hello, I need help with my account. My name is John Smith and my last four SSN digits are 5678."
     expectations:
       tools_called:
         - verify_client_identity
 
   - turn_id: turn_2
-    user_input: "I think there's been some fraudulent activity on my account."
+    user_input: "I noticed a charge I didn't make on my account. This might be fraud - can you transfer me to someone who handles fraud cases?"
     expectations:
       tools_called:
         - handoff_to_agent
@@ -59,7 +61,7 @@ turns:
         to_agent: FraudAgent
 
   - turn_id: turn_3
-    user_input: "Can you check the suspicious transactions from last week?"
+    user_input: "Please analyze my recent transactions to find any suspicious activity."
     expectations:
       tools_called:
         - analyze_recent_transactions

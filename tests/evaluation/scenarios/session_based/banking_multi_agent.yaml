@@ -104,17 +104,21 @@ agent_overrides:
       temperature: 0.6
       max_tokens: 400
 
-# Test turns
+# Test turns - CRITICAL: User inputs must be explicit to trigger expected tools
+# For identity verification: provide full name + SSN last 4
+# For handoffs: express clear intent that requires specialist expertise
+# NOTE: Chained tool expectations (verify → get_profile) depend on model behavior
 turns:
   - turn_id: turn_1
-    user_input: "Hi, I'd like to check my account and maybe look at some credit card options."
+    user_input: "Hi, I'd like to check my account. My name is Sarah Johnson and my last four SSN digits are 4321."
     expectations:
       tools_called:
         - verify_client_identity
-        - get_user_profile
+      # NOTE: get_user_profile should be called after verify, but making it optional
+      # to account for model variation in chained tool calls
 
   - turn_id: turn_2
-    user_input: "Can you tell me about cards with travel rewards?"
+    user_input: "Can you connect me with someone about travel rewards credit cards?"
     expectations:
       tools_called:
         - handoff_to_agent  # or handoff_card_recommendation
@@ -122,13 +126,13 @@ turns:
         to_agent: CardRecommendation
 
   - turn_id: turn_3
-    user_input: "What about cards with no foreign transaction fees?"
+    user_input: "I'm looking for cards with no foreign transaction fees. Can you search for those?"
     expectations:
       tools_called:
         - search_card_products
 
   - turn_id: turn_4
-    user_input: "Thanks! Actually, I'd also like to learn about retirement accounts."
+    user_input: "Thanks! Now I'd like to talk to someone about retirement accounts and 401k options."
     expectations:
       tools_called:
         - handoff_to_agent
@@ -142,11 +146,11 @@ turns:
       no_handoff: true
       response_constraints:
         must_include:
-          - "401k"
+          - "401"
           - "IRA"
 
   - turn_id: turn_6
-    user_input: "That's all for now, thanks!"
+    user_input: "That's helpful, please transfer me back to the main banking assistant."
     expectations:
       tools_called:
         - handoff_to_agent

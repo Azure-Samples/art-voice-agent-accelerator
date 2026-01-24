@@ -780,7 +780,18 @@ const TemplateVariableHelper = React.memo(function TemplateVariableHelper({ onIn
 // MODEL SELECTOR COMPONENT
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function ModelSelector({ value, onChange, modelOptions = MODEL_OPTIONS, title = 'Select Model Deployment', showAlert = true }) {
+function ModelSelector({ 
+  value, 
+  onChange, 
+  modelOptions = MODEL_OPTIONS, 
+  title = 'Select Model Deployment', 
+  showAlert = true,
+  isCustomMode = null,  // Optional: explicit custom mode tracking
+  onCustomModeChange = null  // Optional: callback when custom mode changes
+}) {
+  // Internal state for when external tracking is not provided
+  const [internalCustomMode, setInternalCustomMode] = React.useState(false);
+  
   const getTierColor = (tier) => {
     switch (tier) {
       case 'recommended': return 'success';
@@ -801,8 +812,44 @@ function ModelSelector({ value, onChange, modelOptions = MODEL_OPTIONS, title = 
   };
 
   const overrideValue = (value || '').trim();
-  const isCustom = !modelOptions.some((model) => model.id === value);
+  
+  // Use external custom mode if provided, otherwise use internal state or derive from value
+  const useExternalTracking = isCustomMode !== null && onCustomModeChange !== null;
+  const isCustom = useExternalTracking 
+    ? isCustomMode 
+    : (internalCustomMode || !modelOptions.some((model) => model.id === value));
   const isOverrideMissing = isCustom && !overrideValue;
+  
+  // Initialize internal custom mode based on initial value
+  React.useEffect(() => {
+    if (!useExternalTracking) {
+      const valueMatchesPreset = modelOptions.some((model) => model.id === value);
+      if (!valueMatchesPreset && value) {
+        setInternalCustomMode(true);
+      }
+    }
+  }, []);  // Only on mount
+
+  const handlePresetSelect = (modelId) => {
+    if (useExternalTracking) {
+      onCustomModeChange(false);
+    } else {
+      setInternalCustomMode(false);
+    }
+    onChange(modelId);
+  };
+
+  const handleCustomSelect = () => {
+    if (useExternalTracking) {
+      onCustomModeChange(true);
+    } else {
+      setInternalCustomMode(true);
+    }
+    // Only clear value if it matches a preset (preserve existing custom value)
+    if (modelOptions.some((model) => model.id === value) || !value) {
+      onChange('');
+    }
+  };
 
   return (
     <Stack spacing={2}>
@@ -828,17 +875,17 @@ function ModelSelector({ value, onChange, modelOptions = MODEL_OPTIONS, title = 
           <Card
             key={model.id}
             variant="outlined"
-            onClick={() => onChange(model.id)}
+            onClick={() => handlePresetSelect(model.id)}
             sx={{
               ...styles.modelCard,
-              ...(value === model.id ? styles.modelCardSelected : {}),
+              ...(value === model.id && !isCustom ? styles.modelCardSelected : {}),
             }}
           >
             <CardContent sx={{ py: 1.5, px: 2, '&:last-child': { pb: 1.5 } }}>
               <Stack direction="row" alignItems="center" justifyContent="space-between">
                 <Stack direction="row" alignItems="center" spacing={2}>
                   <Radio
-                    checked={value === model.id}
+                    checked={value === model.id && !isCustom}
                     size="small"
                     sx={{ p: 0 }}
                   />
@@ -874,7 +921,7 @@ function ModelSelector({ value, onChange, modelOptions = MODEL_OPTIONS, title = 
         ))}
         <Card
           variant="outlined"
-          onClick={() => onChange('')}
+          onClick={handleCustomSelect}
           sx={{
             ...styles.modelCard,
             ...(isCustom ? styles.modelCardSelected : {}),

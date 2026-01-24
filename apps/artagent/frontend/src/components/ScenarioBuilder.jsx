@@ -1297,6 +1297,36 @@ function HandoffEditorDialog({ open, onClose, handoff, agents, scenarioAgents = 
                 ? 'Target agent will greet/announce the transfer'
                 : 'Silent handoff - agent continues conversation naturally'}
             </Typography>
+            {/* Detailed behavior explanation */}
+            <Paper 
+              variant="outlined" 
+              sx={{ 
+                mt: 1.5, 
+                p: 1.5, 
+                borderRadius: '8px', 
+                bgcolor: type === 'announced' ? 'rgba(139, 92, 246, 0.05)' : 'rgba(245, 158, 11, 0.05)',
+                borderColor: type === 'announced' ? 'rgba(139, 92, 246, 0.2)' : 'rgba(245, 158, 11, 0.2)'
+              }}
+            >
+              <Typography variant="caption" sx={{ fontWeight: 600, display: 'block', mb: 0.5 }}>
+                {type === 'announced' ? '🔊 Announced Behavior:' : '🔇 Discrete Behavior:'}
+              </Typography>
+              {type === 'announced' ? (
+                <Typography variant="caption" color="text.secondary" component="div">
+                  • Target agent speaks their <strong>greeting</strong> message on arrival<br/>
+                  • User hears a clear transition (e.g., "Hi, I'm the Fraud Specialist...")<br/>
+                  • Best for: First-time routing, specialist introductions, formal transfers<br/>
+                  • Creates explicit "I'm transferring you" experience
+                </Typography>
+              ) : (
+                <Typography variant="caption" color="text.secondary" component="div">
+                  • Target agent uses <strong>return_greeting</strong> (or continues silently)<br/>
+                  • Seamless transition - user may not notice the switch<br/>
+                  • Best for: Returning to previous agent, internal escalations<br/>
+                  • Creates natural conversational flow without interruption
+                </Typography>
+              )}
+            </Paper>
           </Box>
 
           {/* Share context */}

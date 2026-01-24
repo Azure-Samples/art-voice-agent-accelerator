@@ -67,7 +67,16 @@ python -m tests.evaluation.cli submit \
 ```text
 tests/evaluation/
 ├── __init__.py              # Package exports + import guards
-├── schemas.py               # Pydantic models (TurnEvent, ToolCall, etc.)
+├── schemas/                 # Pydantic models (modular package)
+│   ├── config.py            # ModelProfile, SessionAgentConfig
+│   ├── events.py            # TurnEvent, ToolCall, HandoffEvent
+│   ├── expectations.py      # ScenarioExpectations
+│   ├── results.py           # TurnScore, RunSummary
+│   └── foundry.py           # Azure AI Foundry types
+├── hooks/                   # Extensible hooks system
+│   ├── base.py              # TurnHook, ToolHook, PreScoreHook
+│   ├── registry.py          # HookRegistry
+│   └── builtin.py           # 5 built-in hooks
 ├── recorder.py              # EventRecorder - captures events to JSONL
 ├── wrappers.py              # EvaluationOrchestratorWrapper
 ├── scorer.py                # MetricsScorer - computes metrics
@@ -81,10 +90,7 @@ tests/evaluation/
 ├── scenarios/
 │   ├── scenario.schema.json # JSON Schema for YAML validation
 │   ├── session_based/       # Multi-agent session scenarios
-│   │   ├── banking_multi_agent.yaml
-│   │   └── all_agents_discovery.yaml
 │   └── ab_tests/            # A/B comparison scenarios
-│       └── fraud_detection_comparison.yaml
 └── README.md                # This file
 ```
 
@@ -126,6 +132,55 @@ turns:
     user_input: "I see charges I didn't make"
 ```
 
+### Model Profiles (DRY Configuration)
+
+Define reusable model configs to reduce YAML duplication:
+
+```yaml
+model_profiles:
+  gpt4o_fast:
+    deployment_id: gpt-4o
+    temperature: 0.6
+    max_tokens: 200
+
+variants:
+  - variant_id: baseline
+    model_profile: gpt4o_fast  # All agents inherit this config
+```
+
+### Compact Expectations
+
+Simplified shorthand syntax for turn expectations:
+
+```yaml
+turns:
+  - turn_id: turn_1
+    user_input: "Check my balance"
+    expect: [verify_identity, get_balance]  # Array shorthand for tools
+
+  - turn_id: turn_2
+    user_input: "Transfer to cards"
+    expect:
+      tools: [verify_identity]
+      handoff: CardAgent
+      contains: ["transferred"]
+      max_latency: 5000
+```
+
+### Hooks System
+
+Extend evaluation with custom analyzers:
+
+```yaml
+hooks:
+  on_turn_complete:
+    - builtin.log_metrics
+    - module: my_analyzers.sentiment
+      function: analyze_response
+  pre_score:
+    - builtin.aggregate_metrics
+```
+
 ## Key Components
 
 | Component | Purpose |
@@ -134,8 +189,10 @@ turns:
 | `MetricsScorer` | Computes tool precision/recall, latency, groundedness |
 | `ExpectationValidator` | Validates events against YAML expectations |
 | `ScenarioRunner` | Executes session-based scenarios |
-| `ComparisonRunner` | Runs A/B comparison tests |
+| `ComparisonRunner` | Runs A/B comparison tests with model profiles |
+| `HookRegistry` | Manages extensible hooks for custom analysis |
 | `FoundryExporter` | Exports to Azure AI Foundry format |
+| `ModelProfile` | Reusable model configuration template |
 
 ## Pytest Markers
 

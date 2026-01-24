@@ -92,6 +92,7 @@ from tests.evaluation.schemas import (
     EvalModelConfig,
     EvidenceBlob,
     HandoffEvent,
+    ModelProfile,
     RunSummary,
     ScenarioExpectations,
     ToolCall,
@@ -99,6 +100,7 @@ from tests.evaluation.schemas import (
     TurnScore,
 )
 from tests.evaluation.scorer import MetricsScorer
+from tests.evaluation.hooks import HookRegistry
 from tests.evaluation.validator import (
     ExpectationValidator,
     TurnValidationResult,
@@ -113,6 +115,7 @@ __all__ = [
     "EventRecorder",
     "EvaluationOrchestratorWrapper",
     "MetricsScorer",
+    "HookRegistry",
     # Scenario runners
     "ScenarioRunner",
     "ComparisonRunner",
@@ -129,6 +132,7 @@ __all__ = [
     "EvidenceBlob",
     "HandoffEvent",
     "EvalModelConfig",
+    "ModelProfile",
     "TurnEvent",
     "ScenarioExpectations",
     "TurnScore",
@@ -145,7 +149,7 @@ _PACKAGE_INFO = {
     "description": "Model-to-model evaluation framework for voice agent orchestration",
     "safe_imports_from": [
         "tests/eval_scenarios/",
-        "apps/artagent/backend/evaluation/",
+        "tests/evaluation/",
     ],
     "forbidden_imports_from": [
         "apps/artagent/backend/voice/",

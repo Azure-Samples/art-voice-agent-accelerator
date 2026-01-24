@@ -208,9 +208,9 @@ async def test_ab_comparison_e2e(
         variant_dir = comparison_dir / variant_id
 
         # Load events for this variant
-        events_files = list(variant_dir.rglob("events.jsonl"))
+        events_files = list(variant_dir.rglob("*_events.jsonl"))
         if not events_files:
-            logger.warning(f"No events.jsonl found for variant {variant_id}")
+            logger.warning(f"No *_events.jsonl found for variant {variant_id}")
             continue
 
         events = scorer.load_events(events_files[0])
@@ -365,8 +365,12 @@ async def test_session_scenario_e2e(
     validator = ExpectationValidator()
     scorer = MetricsScorer()
 
-    # Find events file
-    events_files = list(scenario_output.rglob("*_events.jsonl"))
+    # Find events file (newest first to use latest run)
+    events_files = sorted(
+        scenario_output.rglob("*_events.jsonl"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
     if not events_files:
         pytest.fail(f"No events.jsonl found in {scenario_output}")
 
@@ -508,8 +512,12 @@ async def test_session_expectations_from_existing_data(
     validator = ExpectationValidator()
     scorer = MetricsScorer()
 
-    # Find events file (session scenarios use *_events.jsonl pattern)
-    events_files = list(scenario_output.rglob("*_events.jsonl"))
+    # Find events file (session scenarios use *_events.jsonl pattern, newest first)
+    events_files = sorted(
+        scenario_output.rglob("*_events.jsonl"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
     if not events_files:
         pytest.skip("No events data found")
 
@@ -575,7 +583,7 @@ async def test_expectations_from_existing_data(
         variant_id = variant_dir.name
 
         # Load events
-        events_files = list(variant_dir.rglob("events.jsonl"))
+        events_files = list(variant_dir.rglob("*_events.jsonl"))
         if not events_files:
             continue
 

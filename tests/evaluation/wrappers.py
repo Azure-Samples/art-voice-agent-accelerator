@@ -127,6 +127,10 @@ class EvaluationOrchestratorWrapper:
         wrapped_on_tool_end = self._wrap_tool_end_callback(on_tool_end)
         wrapped_on_agent_switch = self._wrap_agent_switch_callback(on_agent_switch)
 
+        # Register agent switch callback (must be set before process_turn)
+        if hasattr(self._orchestrator, "set_on_agent_switch"):
+            self._orchestrator.set_on_agent_switch(wrapped_on_agent_switch)
+
         # Delegate to REAL orchestrator (zero changes to production code!)
         try:
             result = await self._orchestrator.process_turn(

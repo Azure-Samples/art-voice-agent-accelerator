@@ -42,11 +42,13 @@ from tests.evaluation.mocks import MockMemoManager
 from tests.evaluation.recorder import EventRecorder
 from tests.evaluation.schemas import (
     FoundryExportConfig,
+    ModelProfile,
     RunSummary,
     SessionAgentConfig,
 )
 from tests.evaluation.scorer import MetricsScorer
 from tests.evaluation.wrappers import EvaluationOrchestratorWrapper
+from tests.evaluation.generators import TurnExpander
 from apps.artagent.backend.registries.agentstore.base import ModelConfig
 from apps.artagent.backend.registries.agentstore.loader import (
     build_handoff_map,
@@ -57,9 +59,17 @@ from apps.artagent.backend.src.orchestration.session_agents import (
     remove_session_agent,
 )
 from apps.artagent.backend.voice.shared.base import OrchestratorContext
-from apps.artagent.backend.voice.shared.config_resolver import resolve_orchestrator_config
+from apps.artagent.backend.voice.shared.config_resolver import (
+    OrchestratorConfigResult,
+    resolve_orchestrator_config,
+)
 from apps.artagent.backend.voice.speech_cascade.orchestrator import (
     CascadeOrchestratorAdapter,
+)
+from apps.artagent.backend.registries.scenariostore.loader import (
+    ScenarioConfig,
+    GenericHandoffConfig,
+    HandoffConfig as ScenarioHandoffConfig,
 )
 from utils.ml_logging import get_logger
 
@@ -225,6 +235,12 @@ class ScenarioRunner:
         self.output_dir = output_dir or Path("runs")
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
+        # Phase 2: Initialize hook registry
+        from tests.evaluation.hooks import HookRegistry
+        self._hook_registry = HookRegistry()
+        if self.scenario.get("hooks"):
+            self._hook_registry.load_from_config(self.scenario["hooks"])
+
     def _load_scenario(self, path: Path) -> dict[str, Any]:
         """Load and validate scenario YAML."""
         logger.info(f"Loading scenario from: {path}")
@@ -266,6 +282,123 @@ class ScenarioRunner:
             )
 
         logger.info(f"Loaded scenario: {scenario['scenario_name']}")
+
+        # Phase 4: Expand template variables and generators in turns
+        scenario = self._expand_turns(scenario)
+
+        return scenario
+
+    def _expand_turns(self, scenario: dict[str, Any]) -> dict[str, Any]:
+        """
+        Expand template variables and generators in scenario turns.
+
+        Phase 4: Supports dynamic turn content via:
+            - Template variables: {{variable_name}}
+            - Turn generators: generator: builtin.identity_verification
+
+        Args:
+            scenario: Loaded scenario dict with turns
+
+        Returns:
+            Scenario with expanded turns
+        """
+        turns = scenario.get("turns", [])
+        if not turns:
+            return scenario
+
+        # Check if any turn has templates or generators
+        has_templates = any(
+            "{{" in turn.get("user_input", "") or "generator" in turn
+            for turn in turns
+        )
+
+        if not has_templates:
+            logger.debug("No template variables or generators found - skipping expansion")
+            return scenario
+
+        # Load fixtures if specified
+        fixtures = self._load_fixtures(scenario)
+
+        # Build context from scenario metadata
+        context = {
+            "scenario_name": scenario.get("scenario_name", ""),
+            **scenario.get("metadata", {}).get("context", {}),
+        }
+
+        # Expand turns
+        expander = TurnExpander(fixtures=fixtures, context=context)
+        expanded_turns = expander.expand_turns(turns, fixtures=fixtures, context=context)
+
+        original_count = len(turns)
+        expanded_count = len(expanded_turns)
+
+        if expanded_count != original_count:
+            logger.info(
+                f"Turn expansion: {original_count} → {expanded_count} turns "
+                f"(+{expanded_count - original_count} from generators)"
+            )
+
+        # Return scenario with expanded turns
+        return {**scenario, "turns": expanded_turns}
+
+    def _load_fixtures(self, scenario: dict[str, Any]) -> dict[str, Any]:
+        """
+        Load test fixtures for template variable resolution.
+
+        Args:
+            scenario: Scenario dict with optional 'fixtures' key
+
+        Returns:
+            Dict with fixture data
+        """
+        fixtures_config = scenario.get("fixtures", {})
+
+        if not fixtures_config:
+            return {}
+
+        # If fixtures is a string, treat it as a file path
+        if isinstance(fixtures_config, str):
+            fixtures_path = self.scenario_path.parent / fixtures_config
+            if fixtures_path.exists():
+                with open(fixtures_path, encoding="utf-8") as f:
+                    if fixtures_path.suffix == ".json":
+                        return json.load(f)
+                    else:
+                        return yaml.safe_load(f) or {}
+            else:
+                logger.warning(f"Fixtures file not found: {fixtures_path}")
+                return {}
+
+        # If fixtures is a dict, use it directly
+        if isinstance(fixtures_config, dict):
+            return fixtures_config
+
+        return {}
+
+    def _normalize_scenario(self, scenario: dict[str, Any]) -> dict[str, Any]:
+        """Convert legacy/template formats to normalized session_config format.
+
+        Phase 2: Provides backward compatibility for legacy single-agent scenarios.
+
+        Returns:
+            Normalized scenario dict with session_config.
+        """
+        if "session_config" in scenario:
+            return scenario  # Already normalized
+
+        # Legacy single-agent format: { agent: "...", model_override: {...} }
+        if "agent" in scenario:
+            agent = scenario["agent"]
+            normalized = {
+                **scenario,
+                "session_config": {
+                    "agents": [agent],
+                    "start_agent": agent,
+                },
+            }
+            logger.info(f"Normalized legacy single-agent scenario: {agent}")
+            return normalized
+
         return scenario
 
     def _create_orchestrator(
@@ -576,6 +709,45 @@ class ScenarioRunner:
             streaming=False,
         )
 
+        # NOTE: ScenarioConfig injection temporarily disabled to debug empty responses
+        # TODO: Re-enable once root cause is found
+        # Build ScenarioConfig from session_config for HandoffService
+        # This enables generic handoffs in evaluation scenarios
+        # scenario_handoffs = []
+        # for h in session_config.handoffs:
+        #     scenario_handoffs.append(ScenarioHandoffConfig(
+        #         from_agent=h.from_agent,
+        #         to_agent=h.to_agent,
+        #         tool=h.tool,
+        #         type=h.type or "announced",
+        #         share_context=h.share_context if h.share_context is not None else True,
+        #     ))
+
+        # generic_cfg = GenericHandoffConfig(
+        #     enabled=generic_config.get("enabled", False),
+        #     allowed_targets=generic_config.get("allowed_targets", []),
+        #     default_type=generic_config.get("default_type", "announced"),
+        #     share_context=generic_config.get("share_context", True),
+        # )
+
+        # scenario_obj = ScenarioConfig(
+        #     name=f"eval_{session_id}",
+        #     agents=list(filtered_agents.keys()),
+        #     start_agent=start_agent,
+        #     handoff_type=session_config.handoff_type or "announced",
+        #     handoffs=scenario_handoffs,
+        #     generic_handoff=generic_cfg,
+        # )
+
+        # Inject cached config so HandoffService uses our scenario
+        # adapter._cached_orchestrator_config = OrchestratorConfigResult(
+        #     start_agent=start_agent,
+        #     agents=filtered_agents,
+        #     handoff_map=handoff_map,
+        #     scenario=scenario_obj,
+        #     scenario_name=f"eval_{session_id}",
+        # )
+
         return adapter, start_agent
 
     async def run(self) -> RunSummary:
@@ -685,6 +857,18 @@ class ScenarioRunner:
             # Run turn (this will be recorded automatically)
             result = await eval_orchestrator.process_turn(context)
 
+            # Phase 2: Dispatch turn hooks
+            if self._hook_registry.has_turn_hooks:
+                if recorder.events:
+                    hook_ctx = {
+                        "scenario_name": scenario_name,
+                        "turn_id": turn_id,
+                        "expectations": turn_expectations,
+                    }
+                    await self._hook_registry.dispatch_turn_complete(
+                        recorder.events[-1], hook_ctx
+                    )
+
             # Update mock history if we aren't using the real orchestrator
             if use_mock:
                 memo_manager.append_to_history(agent_name, "user", user_input)
@@ -698,6 +882,15 @@ class ScenarioRunner:
         # Score the results
         scorer = MetricsScorer()
         events = scorer.load_events(self.output_dir / f"{run_id}_events.jsonl")
+
+        # Phase 2: Dispatch pre-score hooks
+        if self._hook_registry.has_pre_score_hooks:
+            hook_ctx = {
+                "scenario_name": scenario_name,
+                "run_id": run_id,
+                "expectations": self.scenario.get("expectations", {}),
+            }
+            await self._hook_registry.dispatch_pre_score(events, hook_ctx)
 
         summary = scorer.generate_summary(
             events,
@@ -837,6 +1030,91 @@ class ComparisonRunner:
         logger.info(f"Loaded comparison: {comparison['comparison_name']}")
         return comparison
 
+    def _resolve_model_profiles(
+        self,
+        variant: dict[str, Any],
+        profiles: dict[str, dict[str, Any]],
+        agent_names: list[str],
+    ) -> list[dict[str, Any]]:
+        """
+        Resolve model_profile to agent_overrides for DRY configuration.
+
+        If variant specifies a model_profile, it applies to ALL agents in agent_names.
+        Per-agent overrides in agent_overrides merge on top of the profile.
+
+        Example:
+            model_profiles:
+              gpt4o_fast:
+                deployment_id: gpt-4o
+                temperature: 0.6
+
+            variants:
+              - variant_id: baseline
+                model_profile: gpt4o_fast
+                agent_overrides:
+                  - agent: CardRecommendation
+                    model_override:
+                      temperature: 0.3  # Override just this field
+
+        Args:
+            variant: Variant dict with optional model_profile and agent_overrides
+            profiles: Dict of profile_name -> ModelProfile config dict
+            agent_names: List of agent names to apply profile to
+
+        Returns:
+            List of {agent: name, model_override: config} dicts
+        """
+        # If variant already has agent_overrides without model_profile, return as-is
+        existing_overrides = variant.get("agent_overrides", [])
+        profile_name = variant.get("model_profile")
+
+        if not profile_name:
+            return existing_overrides
+
+        # Validate profile exists
+        if profile_name not in profiles:
+            logger.warning(
+                "model_profile '%s' not found in model_profiles; using existing overrides",
+                profile_name,
+            )
+            return existing_overrides
+
+        # Parse profile into ModelProfile for validation
+        try:
+            profile = ModelProfile.model_validate(profiles[profile_name])
+            base_config = profile.to_override_dict()
+        except Exception as e:
+            logger.warning("Invalid model_profile '%s': %s", profile_name, e)
+            return existing_overrides
+
+        # Build override map from existing agent_overrides (for merging)
+        override_map: dict[str, dict[str, Any]] = {}
+        for entry in existing_overrides:
+            agent = entry.get("agent")
+            if agent:
+                override_map[agent] = entry.get("model_override", {})
+
+        # Generate overrides for all agents
+        resolved = []
+        for agent_name in agent_names:
+            # Start with profile config
+            agent_config = dict(base_config)
+
+            # Merge per-agent overrides if present
+            if agent_name in override_map:
+                agent_config.update(override_map[agent_name])
+
+            resolved.append({"agent": agent_name, "model_override": agent_config})
+
+        logger.info(
+            "Resolved model_profile '%s' for %d agents (variant: %s)",
+            profile_name,
+            len(resolved),
+            variant.get("variant_id", "unknown"),
+        )
+
+        return resolved
+
     async def run(self) -> dict[str, RunSummary]:
         """
         Run all variants and compare.
@@ -853,6 +1131,33 @@ class ComparisonRunner:
 
         results = {}
 
+        # Get model_profiles for DRY configuration (Phase 1 refactor)
+        model_profiles = self.comparison.get("model_profiles", {})
+        if model_profiles:
+            logger.info(f"Found {len(model_profiles)} model_profiles: {list(model_profiles.keys())}")
+
+        # Determine agent list for profile resolution
+        # Priority: session_config.agents > scenario_template agents > discover_agents
+        session_config_data = self.comparison.get("session_config")
+        scenario_template = self.comparison.get("scenario_template")
+        agent_names: list[str] = []
+
+        if session_config_data:
+            # Get agents from session_config
+            all_agents = discover_agents()
+            try:
+                session_config = SessionAgentConfig.model_validate(session_config_data)
+                agent_names = session_config.get_agent_list(all_agents)
+            except Exception as e:
+                logger.warning("Failed to parse session_config: %s", e)
+        
+        if not agent_names:
+            # Fallback: discover all available agents
+            all_agents = discover_agents()
+            agent_names = list(all_agents.keys())
+
+        logger.info(f"Agent list for profile resolution: {agent_names}")
+
         # Run each variant
         for variant in self.comparison["variants"]:
             variant_id = variant["variant_id"]
@@ -862,14 +1167,20 @@ class ComparisonRunner:
             metadata = self.comparison.get("metadata", {}).copy()
             metadata["variant_id"] = variant_id
 
-            # Support both legacy single model_override and new agent_overrides format
-            agent_overrides = variant.get("agent_overrides", [])
-            legacy_override = variant.get("model_override")
-            legacy_agent = variant.get("agent")
+            # Phase 1 refactor: Resolve model_profile to agent_overrides
+            if model_profiles and variant.get("model_profile"):
+                agent_overrides = self._resolve_model_profiles(variant, model_profiles, agent_names)
+            else:
+                # Support both legacy single model_override and new agent_overrides format
+                agent_overrides = variant.get("agent_overrides", [])
+                legacy_override = variant.get("model_override")
+                legacy_agent = variant.get("agent")
 
-            # Convert legacy format to agent_overrides if needed
-            if not agent_overrides and legacy_override and legacy_agent:
-                agent_overrides = [{"agent": legacy_agent, "model_override": legacy_override}]
+                # Convert legacy format to agent_overrides if needed
+                if not agent_overrides and legacy_override and legacy_agent:
+                    agent_overrides = [{"agent": legacy_agent, "model_override": legacy_override}]
+
+            legacy_agent = variant.get("agent")
 
             # Get foundry export config from comparison or variant
             foundry_export = variant.get("foundry_export") or self.comparison.get("foundry_export")
