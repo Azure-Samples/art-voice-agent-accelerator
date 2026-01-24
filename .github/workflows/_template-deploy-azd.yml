@@ -523,13 +523,31 @@ jobs:
             
             echo "resource_group=${AZURE_RESOURCE_GROUP:-unknown}" >> $GITHUB_OUTPUT
             echo "container_registry_endpoint=${AZURE_CONTAINER_REGISTRY_ENDPOINT:-}" >> $GITHUB_OUTPUT
-            echo "frontend_url=${FRONTEND_CONTAINER_APP_FQDN:-}" >> $GITHUB_OUTPUT
-            echo "backend_url=${BACKEND_CONTAINER_APP_FQDN:-}" >> $GITHUB_OUTPUT
+            
+            # Use full URLs (with https://) if available, otherwise construct from FQDN
+            if [ -n "${FRONTEND_CONTAINER_APP_URL:-}" ]; then
+              echo "frontend_url=${FRONTEND_CONTAINER_APP_URL}" >> $GITHUB_OUTPUT
+            elif [ -n "${FRONTEND_CONTAINER_APP_FQDN:-}" ]; then
+              echo "frontend_url=https://${FRONTEND_CONTAINER_APP_FQDN}" >> $GITHUB_OUTPUT
+            else
+              echo "frontend_url=" >> $GITHUB_OUTPUT
+            fi
+            
+            if [ -n "${BACKEND_CONTAINER_APP_URL:-}" ]; then
+              echo "backend_url=${BACKEND_CONTAINER_APP_URL}" >> $GITHUB_OUTPUT
+            elif [ -n "${BACKEND_CONTAINER_APP_FQDN:-}" ]; then
+              echo "backend_url=https://${BACKEND_CONTAINER_APP_FQDN}" >> $GITHUB_OUTPUT
+            else
+              echo "backend_url=" >> $GITHUB_OUTPUT
+            fi
+            
             echo "appconfig_endpoint=${AZURE_APPCONFIG_ENDPOINT:-}" >> $GITHUB_OUTPUT
             echo "appconfig_label=${AZURE_APPCONFIG_LABEL:-${{ inputs.environment }}}" >> $GITHUB_OUTPUT
             
             echo "📊 Outputs extracted:"
             echo "  Resource Group: ${AZURE_RESOURCE_GROUP:-unknown}"
+            echo "  Frontend URL: ${FRONTEND_CONTAINER_APP_URL:-https://${FRONTEND_CONTAINER_APP_FQDN:-not set}}"
+            echo "  Backend URL: ${BACKEND_CONTAINER_APP_URL:-https://${BACKEND_CONTAINER_APP_FQDN:-not set}}"
             echo "  App Config: ${AZURE_APPCONFIG_ENDPOINT:-not set}"
           else
             echo "⚠️ Could not extract outputs"

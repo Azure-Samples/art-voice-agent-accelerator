@@ -71,6 +71,20 @@ Choose **one** of these options:
     uv sync  # or: pip install -e .[dev]
     ```
 
+!!! tip "Local Audio Capture (Optional)"
+    If you need local microphone capture/playback features (e.g., for testing with `pyaudio`), install the `audio` extra:
+    
+    ```bash
+    # First install the system portaudio library
+    # macOS: brew install portaudio
+    # Ubuntu/Debian: apt-get install portaudio19-dev
+    
+    # Then install with audio extras
+    pip install -e ".[dev-all]"  # or: pip install -e ".[dev,audio]"
+    ```
+    
+    This is **not required** for the main voice pipeline which uses Azure Communication Services.
+
 ---
 
 ## :material-numeric-2-circle: Environment Configuration

@@ -89,7 +89,7 @@ dependencies = [
     "pyyaml>=6.0.0",
     "pyyaml-include>=1.3.0",
     # Audio processing
-    # NOTE: local microphone capture/playback deps live in the `dev` extra.
+    # NOTE: local microphone capture/playback deps live in the `audio` extra.
     # Database drivers
     "pymongo>=4.6.0",
     "rapidfuzz>=3.13.0",
@@ -125,7 +125,43 @@ dev = [
     "locust>=2.20.0",
     # Evaluation (Foundry cloud submission)
     "azure-ai-evaluation>=1.0.0",
+]
 
+# Local audio capture/playback - requires system portaudio library
+# Install with: pip install -e ".[audio]" or ".[dev-all]"
+# On Ubuntu: apt-get install portaudio19-dev
+# On macOS: brew install portaudio
+audio = [
+    "sounddevice>=0.4.6",
+    "pyaudio>=0.2.11",
+]
+
+# Full dev environment including local audio support
+# Duplicates dev deps to avoid self-reference issues with some tools
+dev-all = [
+    # Testing
+    "pytest>=7.4.0",
+    "pytest-asyncio",
+    "pytest-cov",
+    "anyio",
+    # Code quality
+    "black[jupyter]==25.1.0",
+    "isort==5.9.3",
+    "flake8==3.9.2",
+    "ruff",
+    "pylint",
+    "bandit",
+    # Type checking
+    "types-requests",
+    "types-PyYAML",
+    # Docstring coverage
+    "interrogate==1.4.0",
+    # Pre-commit hooks
+    "pre-commit==2.14.0",
+    # Load testing
+    "locust>=2.20.0",
+    # Evaluation (Foundry cloud submission)
+    "azure-ai-evaluation>=1.0.0",
     # Local audio (mic capture / playback)
     "sounddevice>=0.4.6",
     "pyaudio>=0.2.11",
