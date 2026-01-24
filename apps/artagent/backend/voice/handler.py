@@ -109,8 +109,17 @@ SILENCE_GAP_MS: int = 500
 BROWSER_PCM_SAMPLE_RATE: int = 24000
 BROWSER_SPEECH_RMS_THRESHOLD: int = 200
 BROWSER_SILENCE_GAP_SECONDS: float = 0.5
-INACTIVITY_TIMEOUT_S: float = 300.0
-INACTIVITY_CHECK_INTERVAL_S: float = 5.0
+# Session inactivity timeout - loaded from settings (set to 0 or negative to disable)
+try:
+    from apps.artagent.backend.config.settings import (
+        SESSION_INACTIVITY_TIMEOUT_S,
+        SESSION_INACTIVITY_CHECK_INTERVAL_S,
+    )
+    INACTIVITY_TIMEOUT_S: float = SESSION_INACTIVITY_TIMEOUT_S
+    INACTIVITY_CHECK_INTERVAL_S: float = SESSION_INACTIVITY_CHECK_INTERVAL_S
+except ImportError:
+    INACTIVITY_TIMEOUT_S: float = 300.0
+    INACTIVITY_CHECK_INTERVAL_S: float = 5.0
 
 # Aliases for backward compatibility with MediaHandler imports
 VOICE_LIVE_PCM_SAMPLE_RATE = BROWSER_PCM_SAMPLE_RATE
@@ -556,7 +565,11 @@ class VoiceHandler:
             )
 
     def _start_idle_monitor(self) -> None:
-        """Start background inactivity monitor."""
+        """Start background inactivity monitor (skipped if timeout disabled)."""
+        # Skip if idle timeout is disabled (0 or negative)
+        if INACTIVITY_TIMEOUT_S <= 0:
+            logger.debug("[%s] Idle timeout disabled, skipping monitor", self._session_short)
+            return
         if self._idle_task and not self._idle_task.done():
             return
         self._last_activity_ts = time.monotonic()

@@ -1167,8 +1167,11 @@ async def list_scenarios_for_session(
         "session_id": session_id,
         "total": len(session_scenario_list) + len(builtin_scenario_list),
         "active_scenario": active_name,
-        "scenarios": session_scenario_list,  # Session-custom scenarios
-        "builtin_scenarios": builtin_scenario_list,  # Built-in scenario templates
+        # Combine all scenarios - builtin first as templates, then custom
+        "scenarios": builtin_scenario_list + session_scenario_list,
+        # Keep separate arrays for backwards compatibility
+        "custom_scenarios": session_scenario_list,
+        "builtin_scenarios": builtin_scenario_list,
     }
 
 

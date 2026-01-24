@@ -252,6 +252,10 @@ MAX_CONCURRENT_SESSIONS: int = _env_int("MAX_CONCURRENT_SESSIONS", 1000)
 ENABLE_SESSION_PERSISTENCE: bool = _env_bool("ENABLE_SESSION_PERSISTENCE", True)
 SESSION_STATE_TTL: int = _env_int("SESSION_STATE_TTL", 86400)
 
+# Session inactivity timeout (set to 0 or negative to disable)
+SESSION_INACTIVITY_TIMEOUT_S: float = _env_float("SESSION_INACTIVITY_TIMEOUT_S", 300.0)
+SESSION_INACTIVITY_CHECK_INTERVAL_S: float = _env_float("SESSION_INACTIVITY_CHECK_INTERVAL_S", 5.0)
+
 # Speech service pools
 POOL_SIZE_TTS: int = _env_int("POOL_SIZE_TTS", 50)
 POOL_SIZE_STT: int = _env_int("POOL_SIZE_STT", 50)

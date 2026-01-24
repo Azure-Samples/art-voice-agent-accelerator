@@ -96,13 +96,7 @@ tools:
   - escalate_human
   - escalate_emergency               # Medical/fire/injury emergencies
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Template Variables
-# ─────────────────────────────────────────────────────────────────────────────
-template_vars:
-  institution_name: "XYMZ Insurance"
-  agent_name: "ClaimsIntake"
-  industry: "insurance"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Prompt (external Jinja file)
