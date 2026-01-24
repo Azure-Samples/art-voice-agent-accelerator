@@ -12,7 +12,8 @@
 		
 		// Node.js for React/Vite frontend
 		"ghcr.io/devcontainers/features/node:1": {
-			"version": "22"
+			"version": "22",
+			"installYarnUsingApt": false
 		},
 		
 		// Azure CLI
