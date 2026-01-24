@@ -3819,13 +3819,20 @@ function RealTimeVoiceApp() {
                         <button
                           key={scenarioKey}
                           onClick={async () => {
-                            const scenarioStartAgent = scenario.start_agent || scenario.agents?.[0] || null;
-                            // Set active scenario on backend
+                            let scenarioStartAgent = scenario.start_agent || scenario.agents?.[0] || null;
+                            // Set active scenario on backend and get the confirmed start_agent
                             try {
-                              await fetch(
+                              const response = await fetch(
                                 `${API_BASE_URL}/api/v1/scenario-builder/session/${sessionId}/active?scenario_name=${encodeURIComponent(scenario.name)}`,
                                 { method: 'POST' }
                               );
+                              if (response.ok) {
+                                const data = await response.json();
+                                // Use backend-confirmed start_agent if available
+                                if (data.scenario?.start_agent) {
+                                  scenarioStartAgent = data.scenario.start_agent;
+                                }
+                              }
                             } catch (err) {
                               appendLog(`Failed to set active scenario: ${err.message}`);
                             }

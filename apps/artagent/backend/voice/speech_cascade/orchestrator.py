@@ -98,6 +98,8 @@ except ImportError:
 
     logger = logging.getLogger("cascade.adapter")
 
+from apps.artagent.backend.src.orchestration.naming import find_agent_by_name
+
 tracer = trace.get_tracer(__name__)
 
 
@@ -269,16 +271,21 @@ class CascadeOrchestratorAdapter:
         if not self._active_agent:
             self._active_agent = self.config.start_agent
 
-        # Validate start agent exists
-        if self._active_agent and self._active_agent not in self.agents:
-            available = list(self.agents.keys())
-            if available:
-                logger.warning(
-                    "Start agent '%s' not found, using '%s'",
-                    self._active_agent,
-                    available[0],
-                )
-                self._active_agent = available[0]
+        # Validate start agent exists (case-insensitive)
+        if self._active_agent:
+            actual_key, _ = find_agent_by_name(self.agents, self._active_agent)
+            if actual_key is None:
+                available = list(self.agents.keys())
+                if available:
+                    logger.warning(
+                        "Start agent '%s' not found, using '%s'",
+                        self._active_agent,
+                        available[0],
+                    )
+                    self._active_agent = available[0]
+            else:
+                # Normalize to actual key
+                self._active_agent = actual_key
 
     def _load_agents(self) -> None:
         """Load agents from the unified agent registry with scenario support."""
@@ -413,10 +420,11 @@ class CascadeOrchestratorAdapter:
         because scenario changes during a call would be disruptive anyway.
         """
         if not hasattr(self, "_cached_orchestrator_config"):
-            # Get scenario_name from session memo_manager if available
+            # Get scenario_name from session memo_manager using centralized utility
             scenario_name = None
             if self._current_memo_manager:
-                scenario_name = self._current_memo_manager.get_value_from_corememory("scenario_name", None)
+                from apps.artagent.backend.src.orchestration.naming import get_scenario_from_corememory
+                scenario_name = get_scenario_from_corememory(self._current_memo_manager)
             self._cached_orchestrator_config = resolve_orchestrator_config(
                 session_id=self.config.session_id,
                 scenario_name=scenario_name,
@@ -677,23 +685,31 @@ class CascadeOrchestratorAdapter:
 
         # Switch to start_agent if provided (always switch for explicit scenario change)
         if start_agent:
-            self._active_agent = start_agent
+            # Normalize to actual key
+            actual_key, _ = find_agent_by_name(agents, start_agent)
+            self._active_agent = actual_key or start_agent
             logger.info(
                 "🔄 Cascade switching to scenario start_agent | from=%s to=%s scenario=%s",
                 old_active,
-                start_agent,
+                self._active_agent,
                 scenario_name or "(unknown)",
             )
-        elif self._active_agent not in agents:
-            # Current agent not in new scenario - switch to first available
-            available = list(agents.keys())
-            if available:
-                self._active_agent = available[0]
-                logger.warning(
-                    "🔄 Cascade current agent not in scenario, switching | from=%s to=%s",
-                    old_active,
-                    self._active_agent,
-                )
+        else:
+            # Check if current agent in new scenario (case-insensitive)
+            actual_key, _ = find_agent_by_name(agents, self._active_agent)
+            if actual_key is None:
+                # Current agent not in new scenario - switch to first available
+                available = list(agents.keys())
+                if available:
+                    self._active_agent = available[0]
+                    logger.warning(
+                        "🔄 Cascade current agent not in scenario, switching | from=%s to=%s",
+                        old_active,
+                        self._active_agent,
+                    )
+            else:
+                # Normalize to actual key
+                self._active_agent = actual_key
 
         logger.info(
             "🔄 Cascade scenario updated | old_agents=%s new_agents=%s active=%s scenario=%s",
@@ -1418,6 +1434,7 @@ class CascadeOrchestratorAdapter:
                 )
 
                 # Use asyncio.Queue for thread-safe async communication
+                # Special markers: None = stream end, "__HANDOFF_DETECTED__" = discard prior text
                 tts_queue: asyncio.Queue[str | None] = asyncio.Queue()
                 tool_buffers: dict[str, dict[str, Any]] = {}
                 collected_text: list[str] = []
@@ -1425,6 +1442,7 @@ class CascadeOrchestratorAdapter:
                 stream_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
                 loop = asyncio.get_running_loop()
                 tool_call_detected = False  # Track if tool calls are streaming
+                handoff_tool_detected = False  # Track if specifically a handoff tool
 
                 # Sentence buffer state for sentence-based TTS streaming
                 sentence_buffer = ""
@@ -1439,6 +1457,10 @@ class CascadeOrchestratorAdapter:
                         return
                     if text and text.strip():
                         loop.call_soon_threadsafe(tts_queue.put_nowait, text)
+                
+                def _signal_handoff_detected() -> None:
+                    """Signal consumer to discard any queued text (for discrete handoffs)."""
+                    loop.call_soon_threadsafe(tts_queue.put_nowait, "__HANDOFF_DETECTED__")
 
                 # Capture current OpenTelemetry context to propagate into thread
                 from opentelemetry import context as otel_context
@@ -1446,7 +1468,7 @@ class CascadeOrchestratorAdapter:
 
                 def _streaming_completion():
                     """Run in thread - consumes OpenAI stream."""
-                    nonlocal sentence_buffer, tool_call_detected
+                    nonlocal sentence_buffer, tool_call_detected, handoff_tool_detected
                     # Attach the parent span context in the thread
                     token = otel_context.attach(current_context)
                     try:
@@ -1557,6 +1579,15 @@ class CascadeOrchestratorAdapter:
                                             fn_name = getattr(fn, "name", None)
                                             if fn_name:
                                                 buf["name"] = fn_name
+                                                # Check if this is a handoff tool - signal to discard queued text
+                                                # This ensures discrete handoffs are seamless (no old agent speech)
+                                                if not handoff_tool_detected and self.handoff_service.is_handoff(fn_name):
+                                                    handoff_tool_detected = True
+                                                    logger.debug(
+                                                        "Handoff tool detected: %s - signaling to discard queued TTS",
+                                                        fn_name,
+                                                    )
+                                                    _signal_handoff_detected()
                                             fn_args = getattr(fn, "arguments", None)
                                             if fn_args:
                                                 buf["arguments"] += fn_args
@@ -1601,6 +1632,7 @@ class CascadeOrchestratorAdapter:
                 llm_timeout = 90.0  # seconds
                 queue_timeout = 5.0  # per-chunk timeout
                 start_time = time.perf_counter()
+                suppress_tts_output = False  # Set to True when handoff detected
 
                 while True:
                     elapsed = time.perf_counter() - start_time
@@ -1621,6 +1653,18 @@ class CascadeOrchestratorAdapter:
 
                     if chunk is None:
                         break
+                    
+                    # Handle handoff detection signal - suppress all TTS output for seamless handoff
+                    if chunk == "__HANDOFF_DETECTED__":
+                        suppress_tts_output = True
+                        logger.debug("Handoff detected - suppressing all TTS output for seamless transfer")
+                        continue
+                    
+                    # Skip TTS if handoff is pending (for discrete/seamless handoffs)
+                    if suppress_tts_output:
+                        logger.debug("Suppressing TTS chunk due to pending handoff: %s...", chunk[:30] if len(chunk) > 30 else chunk)
+                        continue
+                        
                     if on_tts_chunk:
                         try:
                             await on_tts_chunk(chunk)

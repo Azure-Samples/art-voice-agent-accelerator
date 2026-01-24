@@ -52,6 +52,7 @@ from collections.abc import Callable, Awaitable
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
+from jinja2 import Template
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
@@ -78,6 +79,7 @@ from apps.artagent.backend.voice.messaging import (
 
 # Orchestration imports - session_agents OK, route_turn imported lazily to avoid circular
 from apps.artagent.backend.src.orchestration.session_agents import get_session_agent
+from apps.artagent.backend.src.orchestration.naming import find_agent_by_name
 from apps.artagent.backend.voice.shared.config_resolver import resolve_orchestrator_config
 
 # Pool management
@@ -1095,7 +1097,10 @@ class VoiceHandler:
         scenario_start_agent = None
         if config.scenario:
             try:
-                scenario_cfg = resolve_orchestrator_config(scenario_name=config.scenario)
+                scenario_cfg = resolve_orchestrator_config(
+                    session_id=config.session_id,
+                    scenario_name=config.scenario,
+                )
                 scenario_start_agent = scenario_cfg.start_agent or scenario_start_agent
             except Exception as exc:
                 logger.warning(
@@ -1136,9 +1141,21 @@ class VoiceHandler:
         memory_manager = self._context.memo_manager
         app_state = self._app_state
         session_id = self._session_id
+        institution_name = None
+        if memory_manager:
+            institution_name = memory_manager.get_value_from_corememory("institution_name", None)
 
-        # Check for session agent greeting
-        session_agent = get_session_agent(session_id) if session_id else None
+        active_agent_name = None
+        if memory_manager:
+            active_agent_name = memory_manager.get_value_from_corememory("active_agent")
+
+        # Check for session agent greeting (prefer active agent name when available)
+        session_agent = None
+        if session_id:
+            if active_agent_name:
+                session_agent = get_session_agent(session_id, active_agent_name)
+            if not session_agent:
+                session_agent = get_session_agent(session_id)
         if session_agent:
             # Use agent's greeting if available
             context = {}
@@ -1146,17 +1163,19 @@ class VoiceHandler:
                 context = {
                     "caller_name": memory_manager.get_value_from_corememory("caller_name", None),
                     "agent_name": session_agent.name,
+                    "institution_name": institution_name,
                 }
 
             if hasattr(session_agent, "render_greeting"):
                 rendered = session_agent.render_greeting(context)
                 if rendered:
-                    return rendered
+                    return self._render_greeting_template(rendered, session_agent, context)
 
         # Fall back to unified agents
         unified_agents = getattr(app_state, "unified_agents", {})
-        start_agent_name = getattr(app_state, "start_agent", "Concierge")
-        start_agent = unified_agents.get(start_agent_name)
+        start_agent_name = active_agent_name or getattr(app_state, "start_agent", "Concierge")
+        # Use case-insensitive lookup
+        _, start_agent = find_agent_by_name(unified_agents, start_agent_name)
 
         if start_agent and hasattr(start_agent, "render_greeting"):
             context = {}
@@ -1164,13 +1183,36 @@ class VoiceHandler:
                 context = {
                     "caller_name": memory_manager.get_value_from_corememory("caller_name", None),
                     "agent_name": start_agent_name,
+                    "institution_name": institution_name,
                 }
             rendered = start_agent.render_greeting(context)
             if rendered:
-                return rendered
+                return self._render_greeting_template(rendered, start_agent, context)
 
         # Default greeting
-        return GREETING
+        return self._render_greeting_template(GREETING, None, {"institution_name": institution_name})
+
+    def _render_greeting_template(
+        self,
+        greeting: str,
+        agent: Any | None,
+        context: dict[str, Any] | None,
+    ) -> str:
+        if not greeting:
+            return greeting
+        if "{{" not in greeting and "{%" not in greeting:
+            return greeting
+        try:
+            render_context: dict[str, Any] = {}
+            if agent and hasattr(agent, "_get_greeting_context"):
+                render_context = agent._get_greeting_context(context or {})
+            elif context:
+                render_context = {k: v for k, v in context.items() if v is not None}
+            rendered = Template(greeting).render(**render_context)
+            return rendered.strip() or greeting
+        except Exception:
+            logger.debug("Failed to render greeting template", exc_info=True)
+            return greeting
 
     @staticmethod
     async def _close_websocket_static(ws: WebSocket, code: int, reason: str) -> None:
