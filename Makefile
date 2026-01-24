@@ -68,6 +68,54 @@ fix_code_quality:
 run_unit_tests:
 	$(PYTHON_INTERPRETER) -m pytest --cov=my_module --cov-report=term-missing --cov-config=.coveragerc
 
+############################################################
+# Evaluation Framework Testing
+# Purpose: Run evaluation framework tests (hooks, metrics, generators)
+############################################################
+
+# Run all evaluation framework tests
+test_evaluation:
+	@echo "🧪 Running Evaluation Framework Tests"
+	@echo "======================================"
+	$(PYTHON_INTERPRETER) -m pytest tests/evaluation/ -v --tb=short
+
+# Run evaluation tests with coverage
+test_evaluation_cov:
+	@echo "🧪 Running Evaluation Tests with Coverage"
+	@echo "========================================="
+	$(PYTHON_INTERPRETER) -m pytest tests/evaluation/ \
+		-v \
+		--tb=short \
+		--cov=tests/evaluation \
+		--cov-report=term-missing \
+		--cov-report=html:htmlcov/evaluation
+
+# Run specific evaluation test modules
+test_evaluation_hooks:
+	@echo "🪝 Running Hook Tests"
+	$(PYTHON_INTERPRETER) -m pytest tests/evaluation/test_hooks.py -v
+
+test_evaluation_metrics:
+	@echo "📊 Running Metrics Tests"
+	$(PYTHON_INTERPRETER) -m pytest tests/evaluation/test_metrics.py -v
+
+test_evaluation_generators:
+	@echo "⚡ Running Generator Tests"
+	$(PYTHON_INTERPRETER) -m pytest tests/evaluation/test_generators.py -v
+
+test_evaluation_scenarios:
+	@echo "🎬 Running Scenario Tests"
+	$(PYTHON_INTERPRETER) -m pytest tests/evaluation/test_scenarios.py -v
+
+# Validate evaluation schemas load correctly
+test_evaluation_schemas:
+	@echo "📋 Validating Evaluation Schemas"
+	$(PYTHON_INTERPRETER) -c "\
+from tests.evaluation.schemas import ModelProfile, TurnEvent, ScenarioConfig, RunSummary; \
+print('✅ All schemas valid')"
+
+.PHONY: test_evaluation test_evaluation_cov test_evaluation_hooks test_evaluation_metrics test_evaluation_generators test_evaluation_scenarios test_evaluation_schemas
+
 
 # Convenience targets for full code/test quality cycle
 check_and_fix_code_quality: fix_code_quality check_code_quality
@@ -573,6 +621,15 @@ help:
 	@echo "  generate_audio                   Generate PCM audio files for load testing"
 	@echo "  run_load_test_acs_media          Run ACS media WebSocket load test (PIPELINE=$(PIPELINE))"
 	@echo "  run_load_test_browser_conversation  Run browser conversation WebSocket load test"
+	@echo ""
+	@echo "🧪 Evaluation Framework Testing:"
+	@echo "  test_evaluation                  Run all evaluation framework tests"
+	@echo "  test_evaluation_cov              Run evaluation tests with coverage report"
+	@echo "  test_evaluation_hooks            Run hook system tests only"
+	@echo "  test_evaluation_metrics          Run metrics plugin tests only"
+	@echo "  test_evaluation_generators       Run generator tests only"
+	@echo "  test_evaluation_scenarios        Run scenario tests only"
+	@echo "  test_evaluation_schemas          Validate evaluation schemas"
 	@echo ""
 	@echo "📞 Azure Communication Services:"
 	@echo "  purchase_acs_phone_number        Purchase ACS phone number and store in env file"

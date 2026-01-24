@@ -246,7 +246,7 @@ def initialize_tools() -> int:
         ("rag_retrieval", lambda: __import__("apps.artagent.backend.registries.toolstore.rag_retrieval", fromlist=[""])),
         ("transfer_agency", lambda: __import__("apps.artagent.backend.registries.toolstore.transfer_agency", fromlist=[""])),
         ("voicemail", lambda: __import__("apps.artagent.backend.registries.toolstore.voicemail", fromlist=[""])),
-        ("document_intelligence", lambda: __import__("apps.artagent.backend.registries.toolstore.document_intelligence", fromlist=[""])),
+        # ("document_intelligence", lambda: __import__("apps.artagent.backend.registries.toolstore.document_intelligence", fromlist=[""])),
         # Banking tools
         ("banking.banking", lambda: __import__("apps.artagent.backend.registries.toolstore.banking.banking", fromlist=[""])),
         ("banking.investments", lambda: __import__("apps.artagent.backend.registries.toolstore.banking.investments", fromlist=[""])),

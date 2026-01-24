@@ -37,9 +37,52 @@ variants: object               # A/B test variants
 turns: [Turn]                  # Conversation turns
 expectations: Expectations     # Global expectations
 foundry_export: FoundryConfig  # Azure AI Foundry settings
+hooks: HooksConfig             # Custom analysis hooks (Phase 2)
 ```
 
 ### Turn Object
+
+Two syntax options are supported - **compact** (recommended) and **full** (verbose):
+
+**Compact Syntax (Recommended):**
+
+```yaml
+turns:
+  # Array shorthand - just tool names
+  - turn_id: turn_1
+    user_input: "Check my balance"
+    expect: [verify_identity, get_balance]
+
+  # Object shorthand - multiple expectation types
+  - turn_id: turn_2
+    user_input: "Transfer to cards team"
+    expect:
+      tools: [verify_identity]
+      handoff: CardAgent
+      contains: ["transferred", "card"]
+      excludes: ["error"]
+      max_latency: 5000
+      no_tools: false
+      no_handoff: false
+      forbidden: [delete_account]
+      min_grounded: 0.7
+```
+
+**Compact → Full Mapping:**
+| Compact | Full Form |
+|---------|-----------|
+| `expect: [tools]` | `expectations.tools_called: [tools]` |
+| `expect.tools` | `expectations.tools_called` |
+| `expect.handoff` | `expectations.handoff.to_agent` |
+| `expect.contains` | `expectations.response_constraints.must_include` |
+| `expect.excludes` | `expectations.response_constraints.must_not_include` |
+| `expect.max_latency` | `expectations.max_latency_ms` |
+| `expect.no_tools` | empty `tools_called` |
+| `expect.no_handoff` | `expectations.no_handoff: true` |
+| `expect.forbidden` | `expectations.tools_forbidden` |
+| `expect.min_grounded` | `expectations.min_grounded_ratio` |
+
+**Full Syntax (Verbose):**
 
 ```yaml
 turns:
@@ -91,9 +134,50 @@ agent_overrides:
   timeout_per_turn_ms: int
 ```
 
-### Variants (A/B Testing)
+### Model Profiles (DRY Configuration)
+
+Model profiles enable reusable model configurations, reducing duplication in multi-variant comparisons:
 
 ```yaml
+model_profiles:
+  gpt4o_fast:                  # Profile name
+    deployment_id: gpt-4o
+    endpoint_preference: chat  # "chat" or "responses"
+    temperature: 0.6
+    max_tokens: 200
+
+  o3_reasoning:
+    deployment_id: o3-mini
+    endpoint_preference: responses
+    reasoning_effort: medium    # "low", "medium", "high"
+    max_completion_tokens: 2000
+```
+
+**Available profile fields:**
+- `deployment_id` (required): Model deployment name
+- `endpoint_preference`: "chat" or "responses" 
+- `temperature`, `top_p`, `min_p`, `typical_p`: Sampling parameters
+- `max_tokens`, `max_completion_tokens`: Token limits
+- `reasoning_effort`, `include_reasoning`: o-series model settings
+
+### Variants (A/B Testing)
+
+Variants can reference model profiles for DRY configuration:
+
+```yaml
+# With model profiles (recommended)
+variants:
+  - variant_id: baseline
+    model_profile: gpt4o_fast   # All agents use this profile
+  
+  - variant_id: reasoning
+    model_profile: o3_reasoning
+    agent_overrides:            # Per-agent exceptions (optional)
+      - agent: CardRecommendation
+        model_override:
+          reasoning_effort: low
+
+# Legacy format (still supported)
 variants:
   baseline:                    # First variant name
     model: string
@@ -160,9 +244,108 @@ foundry_export:
 | `similarity` | Semantic similarity | response, ground_truth |
 | `f1_score` | Token F1 score | response, ground_truth |
 
+### Hooks Configuration
+
+Hooks enable custom analysis without modifying core framework code:
+
+```yaml
+hooks:
+  # Called after each turn completes
+  on_turn_complete:
+    - builtin.log_metrics              # Built-in hook
+    - module: my_analyzers.sentiment   # Custom hook
+      function: analyze_response
+
+  # Called after each tool execution
+  on_tool_complete:
+    - builtin.validate_tool_result
+
+  # Called before scoring
+  pre_score:
+    - builtin.aggregate_metrics
+    - module: my_analyzers.custom_metrics
+      function: compute_domain_metrics
+```
+
+**Built-in Hooks:**
+
+| Hook ID | Event | Purpose |
+|---------|-------|---------|
+| `builtin.log_metrics` | on_turn_complete | Log turn metrics to console |
+| `builtin.validate_expectations` | on_turn_complete | Run expectation checks |
+| `builtin.capture_reasoning` | on_turn_complete | Extract reasoning tokens (o-series) |
+| `builtin.validate_tool_result` | on_tool_complete | Validate tool execution |
+| `builtin.aggregate_metrics` | pre_score | Compute aggregate metrics |
+
+**Custom Hook Implementation:**
+
+```python
+# my_analyzers/sentiment.py
+from tests.evaluation.hooks import TurnHook, HookResult
+
+class SentimentAnalyzer(TurnHook):
+    async def on_turn_complete(self, turn, context) -> HookResult:
+        sentiment = self._analyze(turn.response_text)
+        return HookResult(
+            success=True,
+            metadata={"sentiment_score": sentiment}
+        )
+```
+
 ---
 
 ## Complete Examples
+
+### Model Profile Comparison (Recommended Pattern)
+
+```yaml
+scenario_name: model_comparison_with_profiles
+description: Compare GPT-4o vs o3-mini using model profiles
+
+# Define reusable profiles
+model_profiles:
+  gpt4o_fast:
+    deployment_id: gpt-4o
+    endpoint_preference: chat
+    temperature: 0.6
+    max_tokens: 200
+
+  o3_reasoning:
+    deployment_id: o3-mini
+    endpoint_preference: responses
+    reasoning_effort: medium
+    max_completion_tokens: 2000
+
+# Variants reference profiles (DRY)
+variants:
+  - variant_id: baseline
+    model_profile: gpt4o_fast
+
+  - variant_id: reasoning
+    model_profile: o3_reasoning
+    agent_overrides:
+      - agent: CardRecommendation
+        model_override:
+          reasoning_effort: low
+
+# Compact turn syntax
+turns:
+  - turn_id: turn_1
+    user_input: "Check my account balance"
+    expect: [verify_identity, get_balance]
+
+  - turn_id: turn_2
+    user_input: "Connect me to cards team"
+    expect:
+      handoff: CardRecommendation
+      contains: ["transfer", "card"]
+
+  - turn_id: turn_3
+    user_input: "What's my credit limit?"
+    expect:
+      tools: [get_card_details]
+      max_latency: 3000
+```
 
 ### Basic Single-Turn Test
 
@@ -406,8 +589,10 @@ Scenarios are validated at load time. Common errors:
 
 ## Tips
 
-1. **Start minimal** - Add expectations incrementally
-2. **Use tags** - Group related scenarios for batch runs
-3. **Version scenarios** - Track changes alongside agent changes
-4. **Document intent** - Use description field liberally
-5. **Test locally first** - Run without Foundry export initially
+1. **Use model profiles** - Define once, reuse across variants (70% config reduction)
+2. **Use compact expectations** - `expect: [tools]` is clearer than verbose form
+3. **Start minimal** - Add expectations incrementally
+4. **Use tags** - Group related scenarios for batch runs
+5. **Version scenarios** - Track changes alongside agent changes
+6. **Document intent** - Use description field liberally
+7. **Test locally first** - Run without Foundry export initially

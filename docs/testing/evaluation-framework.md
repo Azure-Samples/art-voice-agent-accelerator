@@ -148,10 +148,56 @@ turns:
 
 ### A/B Comparison
 
-Compare two configurations:
+Compare two configurations using model profiles (recommended) or inline configuration:
+
+**Using Model Profiles (Recommended):**
 
 ```yaml
 scenario_name: model_ab_test
+description: Compare GPT-4o vs o3-mini using profiles
+
+# Define reusable profiles
+model_profiles:
+  gpt4o_fast:
+    deployment_id: gpt-4o
+    endpoint_preference: chat
+    temperature: 0.6
+    max_tokens: 200
+
+  o3_reasoning:
+    deployment_id: o3-mini
+    endpoint_preference: responses
+    reasoning_effort: medium
+    max_completion_tokens: 2000
+
+# Variants reference profiles
+variants:
+  - variant_id: baseline
+    model_profile: gpt4o_fast
+
+  - variant_id: reasoning
+    model_profile: o3_reasoning
+    agent_overrides:
+      - agent: CardRecommendation
+        model_override:
+          reasoning_effort: low
+
+turns:
+  - turn_id: turn_1
+    user_input: "Help me understand my bill"
+    expect: [get_billing_details]  # Compact syntax
+
+  - turn_id: turn_2
+    user_input: "Can I speak to billing?"
+    expect:
+      handoff: BillingAgent
+      contains: ["transfer", "billing"]
+```
+
+**Legacy Format (Still Supported):**
+
+```yaml
+scenario_name: model_ab_test_legacy
 description: Compare GPT-4o vs GPT-4o-mini
 agent_id: customer_service_agent
 
@@ -170,6 +216,88 @@ turns:
     expected:
       response_contains: ["charges", "breakdown"]
 ```
+
+### Compact Expectation Syntax
+
+The framework supports compact expectations for cleaner YAML:
+
+```yaml
+turns:
+  # Array shorthand - just list tools
+  - turn_id: turn_1
+    user_input: "Check my balance"
+    expect: [verify_identity, get_balance]
+
+  # Object shorthand - multiple expectations
+  - turn_id: turn_2
+    user_input: "Transfer to cards"
+    expect:
+      tools: [verify_identity]
+      handoff: CardAgent
+      contains: ["transfer", "card"]
+      excludes: ["error"]
+      max_latency: 5000
+```
+
+See [Evaluation Scenarios Reference](evaluation-scenarios.md) for full syntax details.
+
+### Hooks System
+
+The framework supports extensible hooks for custom analysis without modifying core code:
+
+```yaml
+scenario_name: custom_analysis
+description: Scenario with custom hooks
+
+hooks:
+  # Called after each turn completes
+  on_turn_complete:
+    - builtin.log_metrics
+    - module: my_analyzers.sentiment
+      function: analyze_response
+
+  # Called after each tool execution
+  on_tool_complete:
+    - builtin.validate_tool_result
+
+  # Called before scoring
+  pre_score:
+    - builtin.aggregate_metrics
+
+turns:
+  - turn_id: turn_1
+    user_input: "Check my balance"
+    expect: [verify_identity]
+```
+
+**Built-in Hooks:**
+
+| Hook | Purpose |
+|------|---------|
+| `builtin.log_metrics` | Log turn metrics to console |
+| `builtin.validate_expectations` | Run expectation checks after each turn |
+| `builtin.capture_reasoning` | Extract reasoning tokens for o-series models |
+| `builtin.validate_tool_result` | Validate tool execution results |
+| `builtin.aggregate_metrics` | Compute aggregate metrics before scoring |
+
+**Custom Hook Example:**
+
+```python
+# my_analyzers/sentiment.py
+from tests.evaluation.hooks import TurnHook, HookResult
+
+class SentimentAnalyzer(TurnHook):
+    """Custom hook to analyze response sentiment."""
+    
+    async def on_turn_complete(self, turn, context) -> HookResult:
+        sentiment = await self._analyze(turn.response_text)
+        return HookResult(
+            success=True,
+            metadata={"sentiment_score": sentiment}
+        )
+```
+
+See `tests/evaluation/hooks/` for the complete hook API.
 
 ### Azure AI Foundry Export
 
@@ -491,10 +619,12 @@ pytest tests/evaluation/test_scenarios.py --submit-to-foundry \
 
 ### Scenario Design
 
-1. **Start simple** - Single turn, single tool expectation
-2. **Add complexity gradually** - Multi-turn, multi-tool scenarios
-3. **Test edge cases** - Invalid inputs, tool failures, handoffs
-4. **Use realistic inputs** - Base on actual user utterances
+1. **Use model profiles** - Define configs once, reuse across variants (70% config reduction)
+2. **Use compact expectations** - `expect: [tools]` is clearer than verbose syntax
+3. **Start simple** - Single turn, single tool expectation
+4. **Add complexity gradually** - Multi-turn, multi-tool scenarios
+5. **Test edge cases** - Invalid inputs, tool failures, handoffs
+6. **Use realistic inputs** - Base on actual user utterances
 
 ### Metrics Interpretation
 

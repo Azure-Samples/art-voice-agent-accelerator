@@ -579,6 +579,6 @@ Planned enhancements:
 
 For questions or issues:
 
-- Review validation tests: `validate_phases.py`
+- Run `pytest tests/evaluation/ -v` to validate installation
 - Check package README for examples
 - Consult architecture documentation above
