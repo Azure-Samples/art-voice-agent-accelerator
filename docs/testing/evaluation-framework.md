@@ -86,6 +86,314 @@ python -m tests.evaluation.cli score \
 | `summary.json` | Aggregated metrics across all turns |
 | `foundry_dataset.jsonl` | Azure AI Foundry compatible format |
 
+---
+
+## Running Evaluations
+
+The framework supports three execution paths depending on your workflow and requirements.
+
+=== "Local Execution"
+
+    **Best for:** Development, debugging, rapid iteration
+
+    ### Prerequisites
+
+    ```bash
+    # Ensure dependencies are installed
+    pip install -e ".[dev]"
+
+    # Set Python path
+    export PYTHONPATH=$(pwd):$PYTHONPATH
+    ```
+
+    ### CLI Commands
+
+    ```bash
+    # Run a single scenario
+    python -m tests.evaluation.cli scenario \
+        --input tests/evaluation/scenarios/session_based/banking_multi_agent.yaml
+
+    # Run A/B comparison
+    python -m tests.evaluation.cli compare \
+        --input tests/evaluation/scenarios/ab_tests/fraud_detection_comparison.yaml
+
+    # Score existing events
+    python -m tests.evaluation.cli score \
+        --input runs/my_run_events.jsonl \
+        --output runs/my_run_scores
+    ```
+
+    ### Pytest Integration
+
+    ```bash
+    # Run all evaluation tests
+    pytest tests/evaluation/ -v
+
+    # Run specific scenario tests
+    pytest tests/evaluation/test_scenarios.py -v -k "banking"
+
+    # With coverage
+    pytest tests/evaluation/ --cov=tests/evaluation --cov-report=html
+    ```
+
+    ### Programmatic Usage
+
+    ```python
+    import asyncio
+    from tests.evaluation.scenario_runner import ScenarioRunner
+
+    async def run_local():
+        runner = ScenarioRunner(
+            scenario_path="tests/evaluation/scenarios/session_based/my_scenario.yaml",
+            output_dir="runs/local_test",
+        )
+        summary = await runner.run()
+        print(f"Tool Precision: {summary.tool_metrics['precision']:.2%}")
+        print(f"Latency P95: {summary.latency_metrics['e2e_p95']:.0f}ms")
+
+    asyncio.run(run_local())
+    ```
+
+    !!! tip "Development Workflow"
+        1. Edit scenario YAML
+        2. Run: `python -m tests.evaluation.cli scenario --input your_scenario.yaml`
+        3. Review `runs/*/summary.json`
+        4. Iterate on agent prompts or tools
+
+=== "CI/CD Pipeline"
+
+    **Best for:** Regression testing, PR validation, automated quality gates
+
+    ### GitHub Actions Example
+
+    ```yaml title=".github/workflows/evaluation.yml"
+    name: Agent Evaluation
+
+    on:
+      pull_request:
+        paths:
+          - 'apps/artagent/backend/registries/agentstore/**'
+          - 'tests/evaluation/scenarios/**'
+      workflow_dispatch:
+
+    jobs:
+      evaluate:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+          
+          - name: Set up Python
+            uses: actions/setup-python@v5
+            with:
+              python-version: '3.11'
+              
+          - name: Install dependencies
+            run: |
+              pip install -e ".[dev]"
+              
+          - name: Run evaluations
+            env:
+              AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+              AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+            run: |
+              pytest tests/evaluation/test_scenarios.py -v \
+                --junitxml=results/evaluation-results.xml
+                
+          - name: Upload results
+            uses: actions/upload-artifact@v4
+            with:
+              name: evaluation-results
+              path: runs/
+              
+          - name: Check thresholds
+            run: |
+              python -m tests.evaluation.cli check-thresholds \
+                --input runs/*/summary.json \
+                --min-precision 0.85 \
+                --max-latency-p95 500
+    ```
+
+    ### Azure DevOps Example
+
+    ```yaml title="azure-pipelines.yml"
+    trigger:
+      branches:
+        include:
+          - main
+      paths:
+        include:
+          - apps/artagent/backend/registries/agentstore/**
+
+    pool:
+      vmImage: 'ubuntu-latest'
+
+    steps:
+      - task: UsePythonVersion@0
+        inputs:
+          versionSpec: '3.11'
+
+      - script: |
+          pip install -e ".[dev]"
+        displayName: 'Install dependencies'
+
+      - script: |
+          pytest tests/evaluation/test_scenarios.py -v \
+            --junitxml=$(Build.ArtifactStagingDirectory)/results.xml
+        displayName: 'Run evaluations'
+        env:
+          AZURE_OPENAI_ENDPOINT: $(AZURE_OPENAI_ENDPOINT)
+          AZURE_OPENAI_API_KEY: $(AZURE_OPENAI_API_KEY)
+
+      - task: PublishTestResults@2
+        inputs:
+          testResultsFormat: 'JUnit'
+          testResultsFiles: '$(Build.ArtifactStagingDirectory)/results.xml'
+    ```
+
+    ### Quality Gates
+
+    Define pass/fail thresholds in your scenario YAML:
+
+    ```yaml
+    scenario_name: pr_validation_test
+    
+    # Quality gates for CI
+    quality_gates:
+      min_tool_precision: 0.85
+      min_tool_recall: 0.80
+      max_latency_p95_ms: 500
+      max_cost_per_turn_usd: 0.05
+      min_groundedness_ratio: 0.90
+    
+    turns:
+      - turn_id: 1
+        user_input: "Check my recent transactions"
+        expect: [verify_identity, get_transactions]
+    ```
+
+    !!! warning "Required Secrets"
+        Ensure these secrets are configured in your CI/CD environment:
+
+        - `AZURE_OPENAI_ENDPOINT`
+        - `AZURE_OPENAI_API_KEY`
+        - `AZURE_SPEECH_KEY` (if testing speech scenarios)
+
+=== "Azure AI Foundry"
+
+    **Best for:** Production validation, semantic metrics, comprehensive reports
+
+    ### Setup
+
+    1. **Create Azure AI Foundry project:**
+       ```bash
+       az ml project create --name voice-agent-evals \
+           --resource-group my-rg \
+           --workspace-name my-workspace
+       ```
+
+    2. **Configure environment:**
+       ```bash
+       export AZURE_AI_FOUNDRY_PROJECT_ENDPOINT="https://<region>.api.azureml.ms"
+       export AZURE_AI_FOUNDRY_PROJECT_NAME="voice-agent-evals"
+       ```
+
+    ### Submit Evaluation
+
+    **Via CLI:**
+
+    ```bash
+    # Run scenario and submit to Foundry
+    python -m tests.evaluation.cli scenario \
+        --input tests/evaluation/scenarios/foundry/production_validation.yaml \
+        --submit-to-foundry
+
+    # Submit existing events
+    python -m tests.evaluation.cli submit \
+        --input runs/my_run_events.jsonl \
+        --endpoint "$AZURE_AI_FOUNDRY_PROJECT_ENDPOINT"
+    ```
+
+    **Programmatic:**
+
+    ```python
+    from tests.evaluation.foundry_exporter import (
+        FoundryExporter,
+        submit_to_foundry,
+    )
+    from pathlib import Path
+
+    # Export events to Foundry format
+    exporter = FoundryExporter()
+    exporter.export_for_foundry(
+        events_path=Path("runs/test/events.jsonl"),
+        output_path=Path("runs/test/foundry_dataset.jsonl"),
+    )
+
+    # Submit to Azure AI Foundry
+    await submit_to_foundry(
+        dataset_path=Path("runs/test/foundry_dataset.jsonl"),
+        project_name="voice-agent-evals",
+        experiment_name="fraud-v2",
+        evaluators=["relevance", "groundedness", "coherence", "fluency"],
+    )
+    ```
+
+    ### Foundry Scenario Configuration
+
+    ```yaml
+    scenario_name: foundry_production_validation
+    description: Production validation with Foundry evaluators
+    agent_id: fraud_detection_agent
+
+    # Azure AI Foundry configuration
+    foundry_export:
+      enabled: true
+      project_name: "voice-agent-evals"
+      experiment_name: "fraud-detection-v2"
+      
+      evaluators:
+        - id: relevance
+          column_mapping:
+            query: user_input
+            response: assistant_response
+        
+        - id: groundedness
+          column_mapping:
+            query: user_input
+            response: assistant_response
+            context: evidence_context
+        
+        - id: coherence
+          column_mapping:
+            response: assistant_response
+        
+        - id: fluency
+          column_mapping:
+            response: assistant_response
+
+    turns:
+      - turn_id: 1
+        user_input: "I need to report fraud on my account"
+        expect: [verify_identity, check_recent_transactions]
+    ```
+
+    ### Foundry Evaluators
+
+    | Evaluator | Description | Use Case |
+    |-----------|-------------|----------|
+    | `relevance` | Response relevance to query | All scenarios |
+    | `groundedness` | Factual grounding in context | Tool-heavy agents |
+    | `coherence` | Logical flow and consistency | Multi-turn conversations |
+    | `fluency` | Natural language quality | Customer-facing agents |
+    | `similarity` | Semantic similarity to expected | Golden response testing |
+
+    !!! info "Foundry vs Local Metrics"
+        **Local metrics** (tool precision, latency) are computed immediately during the run.
+        **Foundry metrics** (relevance, groundedness) are computed asynchronously by Azure AI Foundry
+        using LLM-as-judge for semantic evaluation.
+
+---
+
 ## Scenario YAML Reference
 
 ### Basic Structure

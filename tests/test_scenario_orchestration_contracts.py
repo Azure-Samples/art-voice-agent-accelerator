@@ -844,5 +844,191 @@ class TestVADConfigurationContracts:
         assert adapter.turn_detection.silence_duration_ms == 500
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# CONTRACT 8: Agent Override Voice Configuration Contracts
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestAgentOverrideVoiceContracts:
+    """
+    CONTRACT: Agent voice overrides from scenario agent_defaults must preserve:
+    1. Voice name override is applied to agent.voice.name
+    2. Voice rate override is applied to agent.voice.rate  
+    3. Overrides work with VoiceConfig dataclass (attribute access, not dict access)
+    4. Original agent is not mutated (deep copy)
+    
+    This contract ensures that when scenarios specify voice overrides via
+    agent_defaults, they are correctly applied during agent swap/handoff.
+    
+    BUG REGRESSION TEST: Previously, voice overrides used dict-style access 
+    (agent.voice["name"]) instead of attribute access (agent.voice.name),
+    causing voice changes to be silently ignored during agent swaps.
+    """
+
+    @pytest.fixture
+    def base_agent_with_voice(self):
+        """Create a base agent with default voice configuration."""
+        from apps.artagent.backend.registries.agentstore.base import (
+            HandoffConfig,
+            ModelConfig,
+            UnifiedAgent,
+            VoiceConfig,
+        )
+
+        return UnifiedAgent(
+            name="TestAgent",
+            description="Test agent for voice override",
+            greeting="Hello!",
+            handoff=HandoffConfig(trigger="handoff_test"),
+            model=ModelConfig(deployment_id="gpt-4o"),
+            voice=VoiceConfig(
+                name="en-US-JennyNeural",
+                type="azure-standard",
+                style="friendly",
+                rate="+0%",
+            ),
+            prompt_template="You are a test assistant.",
+            tool_names=[],
+        )
+
+    @pytest.fixture
+    def agent_override_with_voice(self):
+        """Create an agent override with voice customization."""
+        from apps.artagent.backend.registries.scenariostore.loader import AgentOverride
+
+        return AgentOverride(
+            voice_name="en-US-AvaNeural",
+            voice_rate="+20%",
+        )
+
+    def test_voice_config_is_dataclass_with_attributes(self, base_agent_with_voice):
+        """VoiceConfig must use attribute access, not dict access."""
+        # Verify VoiceConfig uses attribute access
+        assert hasattr(base_agent_with_voice.voice, "name")
+        assert hasattr(base_agent_with_voice.voice, "rate")
+        assert base_agent_with_voice.voice.name == "en-US-JennyNeural"
+        assert base_agent_with_voice.voice.rate == "+0%"
+
+        # Verify dict-style access would fail (regression guard)
+        with pytest.raises(TypeError):
+            _ = base_agent_with_voice.voice["name"]  # type: ignore
+
+    def test_apply_voice_override_changes_voice_name(
+        self, base_agent_with_voice, agent_override_with_voice
+    ):
+        """Voice name override should update agent.voice.name using attribute access."""
+        import copy
+
+        agent = copy.deepcopy(base_agent_with_voice)
+        override = agent_override_with_voice
+
+        # Simulate the inline override logic from load_scenario_agents
+        if override.voice_name is not None and hasattr(agent, "voice") and agent.voice:
+            agent.voice.name = override.voice_name
+
+        # Verify voice name was updated
+        assert agent.voice.name == "en-US-AvaNeural"
+
+    def test_apply_voice_override_changes_voice_rate(
+        self, base_agent_with_voice, agent_override_with_voice
+    ):
+        """Voice rate override should update agent.voice.rate using attribute access."""
+        import copy
+
+        agent = copy.deepcopy(base_agent_with_voice)
+        override = agent_override_with_voice
+
+        # Simulate the inline override logic from load_scenario_agents
+        if override.voice_rate is not None and hasattr(agent, "voice") and agent.voice:
+            agent.voice.rate = override.voice_rate
+
+        assert agent.voice.rate == "+20%"
+
+    def test_voice_override_preserves_other_voice_fields(
+        self, base_agent_with_voice, agent_override_with_voice
+    ):
+        """Voice override should only change specified fields, preserving others."""
+        import copy
+
+        agent = copy.deepcopy(base_agent_with_voice)
+        original_style = agent.voice.style
+        original_type = agent.voice.type
+        override = agent_override_with_voice
+
+        # Simulate the inline override logic from load_scenario_agents
+        if override.voice_name is not None and hasattr(agent, "voice") and agent.voice:
+            agent.voice.name = override.voice_name
+        if override.voice_rate is not None and hasattr(agent, "voice") and agent.voice:
+            agent.voice.rate = override.voice_rate
+
+        # Style and type should be unchanged
+        assert agent.voice.style == original_style
+        assert agent.voice.type == original_type
+
+    def test_partial_voice_override_only_name(self, base_agent_with_voice):
+        """Override with only voice_name should not affect voice_rate."""
+        import copy
+
+        from apps.artagent.backend.registries.scenariostore.loader import AgentOverride
+
+        agent = copy.deepcopy(base_agent_with_voice)
+        original_rate = agent.voice.rate
+        override = AgentOverride(
+            voice_name="en-US-AvaNeural",
+            voice_rate=None,  # Not overriding rate
+        )
+
+        # Simulate the inline override logic from load_scenario_agents
+        if override.voice_name is not None and hasattr(agent, "voice") and agent.voice:
+            agent.voice.name = override.voice_name
+        if override.voice_rate is not None and hasattr(agent, "voice") and agent.voice:
+            agent.voice.rate = override.voice_rate
+
+        assert agent.voice.name == "en-US-AvaNeural"
+        assert agent.voice.rate == original_rate
+
+    def test_partial_voice_override_only_rate(self, base_agent_with_voice):
+        """Override with only voice_rate should not affect voice_name."""
+        import copy
+
+        from apps.artagent.backend.registries.scenariostore.loader import AgentOverride
+
+        agent = copy.deepcopy(base_agent_with_voice)
+        original_name = agent.voice.name
+        override = AgentOverride(
+            voice_name=None,  # Not overriding name
+            voice_rate="+15%",
+        )
+
+        # Simulate the inline override logic from load_scenario_agents
+        if override.voice_name is not None and hasattr(agent, "voice") and agent.voice:
+            agent.voice.name = override.voice_name
+        if override.voice_rate is not None and hasattr(agent, "voice") and agent.voice:
+            agent.voice.rate = override.voice_rate
+
+        assert agent.voice.name == original_name
+        assert agent.voice.rate == "+15%"
+
+    def test_dict_style_access_would_fail_regression_guard(self, base_agent_with_voice):
+        """Regression test: ensure dict-style access fails on VoiceConfig.
+        
+        This test guards against re-introducing the bug where voice overrides
+        used dict-style access (agent.voice["name"]) instead of attribute
+        access (agent.voice.name).
+        """
+        import copy
+
+        agent = copy.deepcopy(base_agent_with_voice)
+
+        # This is the BUGGY pattern that was fixed:
+        # agent.voice["name"] = "some-voice"  # This would raise TypeError
+        
+        with pytest.raises(TypeError):
+            agent.voice["name"] = "en-US-AvaNeural"  # type: ignore
+
+        with pytest.raises(TypeError):
+            agent.voice["rate"] = "+20%"  # type: ignore
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

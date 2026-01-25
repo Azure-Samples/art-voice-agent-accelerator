@@ -390,8 +390,8 @@ Now that you're running locally, you can modify agent behavior, add custom tools
 
 | What to Customize | Location | Guide |
 |-------------------|----------|-------|
-| Add a new tool | `apps/artagent/backend/registries/toolstore/` | [Tools Guide](../guides/registries/tools.md) |
-| Create/modify an agent | `apps/artagent/backend/registries/agentstore/` | [Agents Guide](../guides/registries/agents.md) |
-| Define a scenario | `apps/artagent/backend/registries/scenariostore/` | [Scenarios Guide](../guides/registries/scenarios.md) |
+| Add a new tool | `apps/artagent/backend/registries/toolstore/` | [Tools Guide](../architecture/registries/tools.md) |
+| Create/modify an agent | `apps/artagent/backend/registries/agentstore/` | [Agents Guide](../architecture/registries/agents.md) |
+| Define a scenario | `apps/artagent/backend/registries/scenariostore/` | [Scenarios Guide](../architecture/registries/scenarios.md) |
 
-📚 **Full guide:** [Registries Overview](../guides/registries/index.md)
+📚 **Full guide:** [Registries Overview](../architecture/registries/index.md)

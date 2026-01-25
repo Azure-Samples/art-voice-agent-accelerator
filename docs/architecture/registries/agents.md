@@ -2,6 +2,38 @@
 
 Agents are the conversational personas that interact with customers. Each agent has a specific role, personality, and set of tools. This guide explains how to define and configure agents.
 
+---
+
+<div class="grid cards" markdown>
+
+-   :material-fast-forward:{ .lg .middle } **Quick Start**
+
+    ---
+
+    Jump to [Creating a New Agent](#creating-a-new-agent)
+
+-   :material-cog:{ .lg .middle } **Configuration**
+
+    ---
+
+    See [Configuration Reference](#configuration-reference)
+
+-   :material-file-document:{ .lg .middle } **Prompts**
+
+    ---
+
+    Learn [Prompt Templates](#prompt-templates)
+
+-   :material-help-circle:{ .lg .middle } **Troubleshooting**
+
+    ---
+
+    Common issues in [Troubleshooting](#troubleshooting)
+
+</div>
+
+---
+
 ## Overview
 
 Agents are defined in YAML configuration files with an optional Jinja2 prompt template:
@@ -402,8 +434,96 @@ tools:
   - handoff_my_agent  # Add the new handoff
 ```
 
+---
+
+## Voice Mode Configuration
+
+Agents can be configured differently for each voice transport mode:
+
+### VoiceLive Mode
+
+Uses Azure OpenAI Realtime API for ultra-low latency:
+
+```yaml
+voicelive_model:
+  deployment_id: gpt-4o-realtime-preview
+  temperature: 0.8
+  voice: shimmer  # OpenAI native voice
+```
+
+### Cascade Mode
+
+Uses separate STT → LLM → TTS pipeline for more control:
+
+```yaml
+cascade_model:
+  deployment_id: gpt-4o
+  temperature: 0.7
+
+voice:  # Azure TTS voice
+  name: en-US-AriaNeural
+  rate: "-5%"
+  style: chat
+```
+
+### Mode Selection
+
+The mode is selected at runtime based on the API endpoint or WebSocket path:
+
+| Endpoint | Mode | Model Used |
+|----------|------|------------|
+| `/voice/voicelive/ws` | VoiceLive | `voicelive_model` |
+| `/voice/cascade/ws` | Cascade | `cascade_model` |
+| Default | Cascade | `model` |
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+| Problem | Cause | Solution |
+|---------|-------|----------|
+| "Agent not found" | Folder name doesn't match | Ensure folder name under `agentstore/` matches the `name` field |
+| Prompt not rendering | Missing template variables | Check `template_vars` in agent.yaml or scenario |
+| Tools not available | Tool not in `tools` list | Add tool name to agent's `tools` array |
+| Wrong voice | Voice config not loaded | Check `voice.name` is a valid Azure TTS voice |
+| Handoff fails | Missing `handoff.trigger` | Add `handoff.trigger: handoff_<agent>` to agent.yaml |
+| Greeting not playing | Empty or missing greeting | Add `greeting` field to agent.yaml |
+
+### Debug Agent Loading
+
+```python
+from apps.artagent.backend.registries.agentstore import discover_agents, get_agent
+
+# List all discovered agents
+agents = discover_agents()
+print([a.id for a in agents.values()])
+
+# Debug specific agent
+agent = get_agent("Concierge")
+print(f"Tools: {agent.tool_names}")
+print(f"Voice: {agent.voice}")
+print(f"Greeting: {agent.greeting}")
+```
+
+### Validate Prompt Rendering
+
+```python
+agent = get_agent("Concierge")
+
+# Test render with context
+prompt = agent.render_prompt({
+    "caller_name": "Test User",
+    "session_profile": {"full_name": "Test User"},
+})
+print(prompt)
+```
+
+---
+
 ## Next Steps
 
-- [Tools Guide](tools.md) - Learn how to create tools
+- [Tool Development](tools.md) - Learn how to create tools
 - [Scenarios Guide](scenarios.md) - Configure agent availability per scenario
 - [Overview](index.md) - Understand how agents, tools, and scenarios connect

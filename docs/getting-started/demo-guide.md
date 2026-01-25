@@ -582,7 +582,7 @@ BASE_URL=https://<tunnel-url>       # From devtunnel host
     - Try [Load Testing](../operations/load-testing.md)
 
 === "After Advanced"
-    - Create custom scenarios, agents, and tools via code — see the [Registries Guide](../guides/registries/index.md)
+    - Create custom scenarios, agents, and tools via code — see the [Registries Guide](../architecture/registries/index.md)
     - Set up [Production Deployment](../deployment/production.md)
     - Configure [CI/CD Pipelines](../deployment/cicd.md)
     - Implement custom tools and integrations
@@ -593,11 +593,11 @@ BASE_URL=https://<tunnel-url>       # From devtunnel host
 
 | Component | Location | Guide |
 | --------- | -------- | ----- |
-| **Agents** | `apps/artagent/backend/registries/agentstore/` | [Agents Guide](../guides/registries/agents.md) |
-| **Scenarios** | `apps/artagent/backend/registries/scenariostore/` | [Scenarios Guide](../guides/registries/scenarios.md) |
-| **Tools** | `apps/artagent/backend/registries/toolstore/` | [Tools Guide](../guides/registries/tools.md) |
-| **Defaults** | `apps/artagent/backend/registries/agentstore/_defaults.yaml` | [Agents Guide](../guides/registries/agents.md#defaults) |
+| **Agents** | `apps/artagent/backend/registries/agentstore/` | [Agents Guide](../architecture/registries/agents.md) |
+| **Scenarios** | `apps/artagent/backend/registries/scenariostore/` | [Scenarios Guide](../architecture/registries/scenarios.md) |
+| **Tools** | `apps/artagent/backend/registries/toolstore/` | [Tools Guide](../architecture/registries/tools.md) |
+| **Defaults** | `apps/artagent/backend/registries/agentstore/_defaults.yaml` | [Agents Guide](../architecture/registries/agents.md#defaults) |
 
-📚 **Full guide:** [Registries Overview](../guides/registries/index.md) — Learn how to customize agents, tools, and scenarios via code.
+📚 **Full guide:** [Registries Overview](../architecture/registries/index.md) — Learn how to customize agents, tools, and scenarios via code.
 
 <!-- markdownlint-enable MD046 MD032 -->

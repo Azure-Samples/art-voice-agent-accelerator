@@ -2,20 +2,29 @@
 
 > **Complete reference for evaluation scenario YAML files.**
 
+!!! abstract "Quick Links"
+    - [Compact syntax examples](#turn-object) — recommended for most scenarios
+    - [Model profiles](#model-profiles-dry-configuration) — DRY configuration for A/B tests
+    - [Foundry export](#foundry-export-configuration) — Azure AI Foundry integration
+    - [Complete examples](#complete-examples) — copy-paste ready templates
+
 ## File Location
 
 Place scenario files in:
+
 ```
 tests/evaluation/scenarios/
-├── ab_tests/
-│   ├── fraud_detection_comparison.yaml
-│   └── model_performance.yaml
-├── single/
-│   ├── greeting_test.yaml
-│   └── simple_query.yaml
-└── regression/
-    └── golden_scenarios.yaml
+├── ab_tests/           # A/B comparison scenarios
+├── session_based/      # Multi-turn conversation tests
+├── foundry/            # Scenarios with Foundry export
+└── regression/         # Golden test baselines
 ```
+
+!!! tip "Organizing Scenarios"
+    - **ab_tests/**: Model comparison, config tuning
+    - **session_based/**: Multi-agent flows, handoff testing
+    - **foundry/**: Production validation with semantic metrics
+    - **regression/**: CI/CD golden tests
 
 ## Schema
 
@@ -44,61 +53,69 @@ hooks: HooksConfig             # Custom analysis hooks (Phase 2)
 
 Two syntax options are supported - **compact** (recommended) and **full** (verbose):
 
-**Compact Syntax (Recommended):**
+=== "Compact Syntax (Recommended)"
 
-```yaml
-turns:
-  # Array shorthand - just tool names
-  - turn_id: turn_1
-    user_input: "Check my balance"
-    expect: [verify_identity, get_balance]
+    ```yaml
+    turns:
+      # Array shorthand - just tool names
+      - turn_id: turn_1
+        user_input: "Check my balance"
+        expect: [verify_identity, get_balance]
 
-  # Object shorthand - multiple expectation types
-  - turn_id: turn_2
-    user_input: "Transfer to cards team"
-    expect:
-      tools: [verify_identity]
-      handoff: CardAgent
-      contains: ["transferred", "card"]
-      excludes: ["error"]
-      max_latency: 5000
-      no_tools: false
-      no_handoff: false
-      forbidden: [delete_account]
-      min_grounded: 0.7
-```
+      # Object shorthand - multiple expectation types
+      - turn_id: turn_2
+        user_input: "Transfer to cards team"
+        expect:
+          tools: [verify_identity]
+          handoff: CardAgent
+          contains: ["transferred", "card"]
+          excludes: ["error"]
+          max_latency: 5000
+          no_tools: false
+          no_handoff: false
+          forbidden: [delete_account]
+          min_grounded: 0.7
+    ```
 
-**Compact → Full Mapping:**
-| Compact | Full Form |
-|---------|-----------|
-| `expect: [tools]` | `expectations.tools_called: [tools]` |
-| `expect.tools` | `expectations.tools_called` |
-| `expect.handoff` | `expectations.handoff.to_agent` |
-| `expect.contains` | `expectations.response_constraints.must_include` |
-| `expect.excludes` | `expectations.response_constraints.must_not_include` |
-| `expect.max_latency` | `expectations.max_latency_ms` |
-| `expect.no_tools` | empty `tools_called` |
-| `expect.no_handoff` | `expectations.no_handoff: true` |
-| `expect.forbidden` | `expectations.tools_forbidden` |
-| `expect.min_grounded` | `expectations.min_grounded_ratio` |
+    **Compact → Full Mapping:**
 
-**Full Syntax (Verbose):**
+    | Compact | Full Form |
+    |---------|-----------|
+    | `expect: [tools]` | `expectations.tools_called: [tools]` |
+    | `expect.tools` | `expectations.tools_called` |
+    | `expect.handoff` | `expectations.handoff.to_agent` |
+    | `expect.contains` | `expectations.response_constraints.must_include` |
+    | `expect.excludes` | `expectations.response_constraints.must_not_include` |
+    | `expect.max_latency` | `expectations.max_latency_ms` |
+    | `expect.no_tools` | empty `tools_called` |
+    | `expect.no_handoff` | `expectations.no_handoff: true` |
+    | `expect.forbidden` | `expectations.tools_forbidden` |
+    | `expect.min_grounded` | `expectations.min_grounded_ratio` |
 
-```yaml
-turns:
-  - turn_id: int               # Sequential turn number (1-based)
-    user_input: string         # User utterance/message
-    
-    # Optional expectations for this turn
-    expected:
-      tool_calls: [ToolExpectation]
-      response_contains: [string]
-      response_not_contains: [string]
-      max_response_tokens: int
-      min_response_tokens: int
-      handoff_agent: string | null
-      latency_budget_ms: int
-```
+=== "Full Syntax (Verbose)"
+
+    ```yaml
+    turns:
+      - turn_id: int               # Sequential turn number (1-based)
+        user_input: string         # User utterance/message
+        
+        # Optional expectations for this turn
+        expected:
+          tool_calls: [ToolExpectation]
+          response_contains: [string]
+          response_not_contains: [string]
+          max_response_tokens: int
+          min_response_tokens: int
+          handoff_agent: string | null
+          latency_budget_ms: int
+    ```
+
+    !!! note "When to use full syntax"
+        Use the full syntax when you need:
+        
+        - Argument matching on tool calls (`args_contain`, `args_exact`)
+        - Ordered tool expectations (`order` field)
+        - Complex response token constraints
 
 ### ToolExpectation Object
 
@@ -577,22 +594,48 @@ expectations:
 
 ## Validation
 
-Scenarios are validated at load time. Common errors:
+Scenarios are validated at load time.
 
-| Error | Cause | Fix |
-|-------|-------|-----|
-| `Unknown agent_id` | Agent not in registry | Check agent registry |
-| `Invalid turn_id sequence` | Non-sequential IDs | Use 1, 2, 3... |
-| `Unknown tool in expectations` | Tool not registered | Verify tool names |
-| `Invalid variant config` | Missing required fields | Check variant structure |
-| `Foundry evaluator unknown` | Invalid evaluator ID | Use supported IDs |
+!!! failure "Common Validation Errors"
 
-## Tips
+    | Error | Cause | Fix |
+    |-------|-------|-----|
+    | `Unknown agent_id` | Agent not in registry | Check agent registry |
+    | `Invalid turn_id sequence` | Non-sequential IDs | Use 1, 2, 3... |
+    | `Unknown tool in expectations` | Tool not registered | Verify tool names |
+    | `Invalid variant config` | Missing required fields | Check variant structure |
+    | `Foundry evaluator unknown` | Invalid evaluator ID | Use supported IDs |
 
-1. **Use model profiles** - Define once, reuse across variants (70% config reduction)
-2. **Use compact expectations** - `expect: [tools]` is clearer than verbose form
-3. **Start minimal** - Add expectations incrementally
-4. **Use tags** - Group related scenarios for batch runs
-5. **Version scenarios** - Track changes alongside agent changes
-6. **Document intent** - Use description field liberally
-7. **Test locally first** - Run without Foundry export initially
+## Best Practices
+
+!!! success "Recommended Patterns"
+
+    1. **Use model profiles** — Define once, reuse across variants (70% config reduction)
+    2. **Use compact expectations** — `expect: [tools]` is clearer than verbose form
+    3. **Start minimal** — Add expectations incrementally
+    4. **Use tags** — Group related scenarios for batch runs
+    5. **Version scenarios** — Track changes alongside agent changes
+    6. **Document intent** — Use description field liberally
+    7. **Test locally first** — Run without Foundry export initially
+
+!!! example "Scenario Development Workflow"
+
+    ```bash
+    # 1. Create scenario with minimal expectations
+    vim tests/evaluation/scenarios/session_based/my_test.yaml
+
+    # 2. Run locally to see actual behavior
+    python -m tests.evaluation.cli scenario --input tests/evaluation/scenarios/session_based/my_test.yaml
+
+    # 3. Review output and tighten expectations
+    cat runs/my_test/summary.json
+
+    # 4. Add to CI/CD once stable
+    git add tests/evaluation/scenarios/session_based/my_test.yaml
+    ```
+
+## Related Documentation
+
+- [Agent Evaluation Overview](model-evaluation.md) — High-level conceptual guide
+- [Evaluation Framework Reference](evaluation-framework.md) — API and metrics details
+- [Unit & Integration Tests](../operations/testing.md) — Standard pytest testing

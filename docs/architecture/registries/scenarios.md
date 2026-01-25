@@ -2,6 +2,38 @@
 
 Scenarios define which agents are active and how they route to each other for a specific use case. They enable the same agents to behave differently depending on the industry or context.
 
+---
+
+<div class="grid cards" markdown>
+
+-   :material-fast-forward:{ .lg .middle } **Quick Start**
+
+    ---
+
+    Jump to [Creating a New Scenario](#creating-a-new-scenario)
+
+-   :material-transit-connection-variant:{ .lg .middle } **Handoffs**
+
+    ---
+
+    Configure [Handoff Routes](#handoff-configuration)
+
+-   :material-cog:{ .lg .middle } **Agent Overrides**
+
+    ---
+
+    Customize [Agent Defaults](#agent-defaults)
+
+-   :material-help-circle:{ .lg .middle } **Troubleshooting**
+
+    ---
+
+    Common issues in [Troubleshooting](#troubleshooting)
+
+</div>
+
+---
+
 ## Overview
 
 Scenarios are YAML configuration files that:
@@ -397,8 +429,111 @@ The scenario-based approach is recommended because:
 - Easy to add `handoff_condition` prompts
 - Different behaviors per deployment
 
+---
+
+## Environment-Based Configuration
+
+Use different scenarios per environment:
+
+```python
+import os
+from apps.artagent.backend.registries.scenariostore import load_scenario
+
+# Load scenario based on environment
+env = os.getenv("DEPLOYMENT_ENV", "development")
+scenario_map = {
+    "development": "default",
+    "staging": "banking",
+    "production": "banking",
+}
+scenario = load_scenario(scenario_map.get(env, "default"))
+```
+
+Or use App Configuration for dynamic scenario selection:
+
+```yaml
+# appconfig/appconfig.json
+{
+  "azure_appconfig_endpoint": "https://myconfig.azconfig.io",
+  "feature_flags": {
+    "scenario": "banking"
+  }
+}
+```
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+| Problem | Cause | Solution |
+|---------|-------|----------|
+| "Scenario not found" | Missing folder or file | Create `scenariostore/<name>/orchestration.yaml` |
+| Agent not in scenario | Not listed in `agents` | Add agent name to `agents` list |
+| Handoff not working | Missing route definition | Add entry to `handoffs` list |
+| Wrong start agent | `start_agent` misconfigured | Set `start_agent` to valid agent name |
+| Template vars not applied | Wrong field name | Use `template_vars` (not `variables`) |
+| Silent handoff announced | `type: discrete` missing | Set `type: discrete` in handoff config |
+
+### Debug Scenario Loading
+
+```python
+from apps.artagent.backend.registries.scenariostore import (
+    load_scenario,
+    list_scenarios,
+    get_scenario_agents,
+    build_handoff_map_from_scenario,
+)
+
+# List available scenarios
+print(list_scenarios())
+# ['default', 'banking', 'insurance']
+
+# Load and inspect scenario
+scenario = load_scenario("banking")
+print(f"Start agent: {scenario.start_agent}")
+print(f"Agents: {scenario.agents}")
+print(f"Handoffs: {len(scenario.handoffs)}")
+
+# Check handoff routing map
+handoff_map = build_handoff_map_from_scenario("banking")
+print(handoff_map)
+# {'handoff_fraud': 'FraudAgent', 'handoff_invest': 'InvestmentAdvisor', ...}
+```
+
+### Validate Handoff Graph
+
+Check for orphaned agents or missing return routes:
+
+```python
+def validate_handoff_graph(scenario_name: str):
+    scenario = load_scenario(scenario_name)
+    agents = set(scenario.agents)
+    
+    # Check all handoff targets exist
+    for h in scenario.handoffs:
+        if h.to not in agents:
+            print(f"WARNING: Handoff target '{h.to}' not in agents list")
+        if h.from_agent not in agents:
+            print(f"WARNING: Handoff source '{h.from_agent}' not in agents list")
+    
+    # Check all agents have return route
+    start = scenario.start_agent
+    for agent in agents:
+        if agent == start:
+            continue
+        has_return = any(h.from_agent == agent and h.to == start for h in scenario.handoffs)
+        if not has_return:
+            print(f"WARNING: '{agent}' has no return route to '{start}'")
+
+validate_handoff_graph("banking")
+```
+
+---
+
 ## Next Steps
 
-- [Tools Guide](tools.md) - Learn how to create tools
+- [Tool Development](tools.md) - Learn how to create tools
 - [Agents Guide](agents.md) - Learn how to create agents
 - [Overview](index.md) - Understand how everything connects

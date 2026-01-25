@@ -469,7 +469,7 @@ Scenarios define what conversations your agent can handle. Create one to customi
     Begin with a greeting + KB + handoff rule. Add connected auth and fraud detection as you scale and iterate.
 
 !!! info "Prefer Code Over UI?"
-    The Agent Builder and Scenario Builder are great for quick iteration, but you can also configure agents, tools, and scenarios directly in code. See the [Registries Guide](../guides/registries/index.md) for details on [adding custom tools](../guides/registries/tools.md), [creating agents via YAML](../guides/registries/agents.md), and [defining scenarios](../guides/registries/scenarios.md).
+    The Agent Builder and Scenario Builder are great for quick iteration, but you can also configure agents, tools, and scenarios directly in code. See the [Registries Guide](../architecture/registries/index.md) for details on [adding custom tools](../architecture/registries/tools.md), [creating agents via YAML](../architecture/registries/agents.md), and [defining scenarios](../architecture/registries/scenarios.md).
 
 ---
 
@@ -481,7 +481,7 @@ Scenarios define what conversations your agent can handle. Create one to customi
 | **Try the full demo** with agents | [Demo Guide](demo-guide.md) |
 | **Understand the architecture** | [Architecture Overview](../architecture/README.md) |
 | **Add a phone number** for PSTN calls | [Phone Number Setup](../deployment/phone-number-setup.md) |
-| **Customize agents, tools, scenarios** via code | [Registries Guide](../guides/registries/index.md) |
+| **Customize agents, tools, scenarios** via code | [Registries Guide](../architecture/registries/index.md) |
 
 ---
 

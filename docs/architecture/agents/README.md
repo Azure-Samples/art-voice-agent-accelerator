@@ -1,761 +1,823 @@
-# Agent Framework
+# ART Agent Framework
 
-This document describes the **ART Voice Agent Accelerator's custom agent framework** — a purpose-built, YAML-driven agent configuration system designed specifically for real-time voice applications. This framework is **not** the Microsoft Semantic Kernel Agent Framework or Azure AI Agent Service; it is a specialized implementation optimized for low-latency multi-agent orchestration over voice channels.
+:material-clock-fast: **5 min read** · :material-code-braces: **15 min** to create your first agent · :material-file-document: **YAML-first** config
 
-!!! tip "Looking for Industry Examples?"
-    See [Industry Solutions](../../industry/README.md) for complete scenario walkthroughs:
+---
+
+## :material-bullseye: TL;DR — What You Need to Know
+
+!!! success "The Big Picture"
+    **Agents** are AI assistants defined in YAML. **Scenarios** wire them together. **Tools** give them abilities.
     
-    - [Banking](../../industry/banking.md) — Concierge-led private banking
-    - [Insurance](../../industry/insurance.md) — Security-first claims processing
-    - [Healthcare](../../industry/healthcare.md) — Nurse triage and escalation
+    ```
+    Caller → Concierge → [handoff] → FraudAgent → [handoff] → Concierge
+    ```
+
+=== ":material-file-code: Create an Agent"
+
+    ```yaml title="my_agent/agent.yaml"
+    name: MyAgent
+    description: Does something useful
+    
+    handoff:
+      trigger: handoff_my_agent
+    
+    greeting: "Hi, I'm the specialist you need!"
+    
+    tools:
+      - my_tool
+      - handoff_concierge
+    
+    prompts:
+      path: prompt.jinja
+    ```
+
+=== ":material-link-variant: Add to Scenario"
+
+    ```yaml title="banking/orchestration.yaml"
+    handoffs:
+      - from: Concierge
+        to: MyAgent
+        tool: handoff_my_agent
+        type: announced
+    ```
+
+=== ":material-play: Use in Code"
+
+    ```python
+    from registries.agentstore.loader import discover_agents
+    
+    agents = discover_agents()
+    my_agent = agents["MyAgent"]
+    prompt = my_agent.render_prompt({"caller_name": "John"})
+    ```
 
 ---
 
-## Why a Custom Framework?
+## :material-compass: Quick Navigation
 
-The agent framework in this accelerator was designed with specific requirements that differentiate it from general-purpose agent frameworks:
+<div class="grid cards" markdown>
 
-| Requirement | Our Framework | General-Purpose Frameworks |
-|-------------|---------------|---------------------------|
-| **Voice-First** | Native TTS/STT configuration per agent | Requires custom integration |
-| **Sub-Second Handoffs** | In-memory handoff map lookups | Often requires external routing |
-| **Orchestrator-Agnostic** | Works with SpeechCascade & VoiceLive | Typically bound to one runtime |
-| **YAML Configuration** | Declarative, no-code agent definition | Usually code-first |
-| **Session-Level Overrides** | Runtime prompt/voice/tool modification | Static configurations |
-| **Centralized Tool Registry** | Shared tools across all agents | Per-agent tool duplication |
-| **Scenario-Driven Handoffs** | Orchestration logic externalized to scenarios | Embedded in agent code |
+-   :material-account-group:{ .lg .middle } **Agent Reference**
 
-### Key Design Principles
+    ---
 
-1. **Declarative Configuration** — Agents are defined in YAML files, enabling non-developers to modify agent behavior
-2. **Orchestrator Independence** — The same agent definition works with both SpeechCascade (streaming Azure Speech) and VoiceLive (OpenAI Realtime API)
-3. **Hot-Swap Capable** — Session-level overrides allow runtime modification without redeployment
-4. **Inheritance Model** — Defaults cascade from `_defaults.yaml` to individual agents
-5. **Centralized Tools** — Shared tool registry prevents duplication and ensures consistency
-6. **Scenario-Based Orchestration** — Handoff routing is defined in scenarios, not agents, enabling the same agent to behave differently across use cases
+    Browse all pre-built agents
+    
+    [:octicons-arrow-right-24: View Catalog](reference/index.md)
+
+-   :material-transit-connection-variant:{ .lg .middle } **Handoff Strategies**
+
+    ---
+
+    How agents route to each other
+    
+    [:octicons-arrow-right-24: Learn Handoffs](handoffs.md)
+
+-   :material-wrench:{ .lg .middle } **Tool Development**
+
+    ---
+
+    Create custom agent abilities
+    
+    [:octicons-arrow-right-24: Build Tools](../registries/tools.md)
+
+-   :material-map:{ .lg .middle } **Scenarios**
+
+    ---
+
+    Wire agents together for use cases
+    
+    [:octicons-arrow-right-24: Configure Scenarios](../registries/scenarios.md)
+
+</div>
 
 ---
 
-## Architecture Overview
+## :material-head-question: What is this Framework?
 
-The framework follows a **layered architecture** separating agents, scenarios, and tools:
+!!! info "Not Semantic Kernel or Azure AI Agent Service"
+    This is a **custom, voice-optimized framework** built specifically for real-time phone conversations. It prioritizes sub-second latency and YAML configuration over general-purpose flexibility.
+
+### Why Custom?
+
+=== ":material-microphone: Voice-First"
+
+    | Feature | This Framework | General Frameworks |
+    |---------|---------------|-------------------|
+    | TTS/STT config | Built-in per agent | Custom integration |
+    | Handoff latency | ~50ms in-memory | External routing |
+    | Voice personas | YAML-configured | Code required |
+
+=== ":material-cog: YAML-Driven"
+
+    | Feature | This Framework | General Frameworks |
+    |---------|---------------|-------------------|
+    | Agent definition | YAML files | Code-first |
+    | Handoff routing | Scenario files | Embedded in agents |
+    | Runtime overrides | Built-in | Custom |
+
+=== ":material-swap-horizontal: Multi-Orchestrator"
+
+    | Feature | This Framework | General Frameworks |
+    |---------|---------------|-------------------|
+    | SpeechCascade | ✅ Native | ❌ N/A |
+    | VoiceLive | ✅ Native | ❌ N/A |
+    | Same agent YAML | ✅ Both modes | ❌ Separate configs |
+
+??? abstract "Key Design Principles (Advanced)"
+
+    1. **Declarative Configuration** — Agents are defined in YAML files, enabling non-developers to modify agent behavior
+    2. **Orchestrator Independence** — The same agent definition works with both SpeechCascade (streaming Azure Speech) and VoiceLive (OpenAI Realtime API)
+    3. **Hot-Swap Capable** — Session-level overrides allow runtime modification without redeployment
+    4. **Inheritance Model** — Defaults cascade from `_defaults.yaml` to individual agents
+    5. **Centralized Tools** — Shared tool registry prevents duplication and ensures consistency
+    6. **Scenario-Based Orchestration** — Handoff routing is defined in scenarios, not agents, enabling the same agent to behave differently across use cases
+
+---
+
+## :material-layers: How It All Fits Together
+
+!!! tip "Think of it like a Call Center"
+    - **Agents** = Specialists (fraud, investments, customer service)
+    - **Scenarios** = Call routing rules (who transfers to whom)
+    - **Tools** = Skills agents can use (check balance, verify identity)
 
 ```mermaid
-flowchart TB
-    subgraph Scenarios["Scenario Layer (Orchestration)"]
-        banking["banking/<br/>orchestration.yaml"]
-        insurance["insurance/<br/>scenario.yaml"]
-        default["default/<br/>scenario.yaml"]
+flowchart LR
+    subgraph "📞 Caller Interaction"
+        caller[Caller]
     end
-
-    subgraph Agents["Agent Layer (Capabilities)"]
-        defaults["_defaults.yaml<br/>(Base Config)"]
-        concierge["concierge/<br/>agent.yaml<br/>prompt.jinja"]
-        fraud["fraud_agent/<br/>agent.yaml<br/>prompt.jinja"]
-        auth["auth_agent/<br/>agent.yaml"]
-        defaults --> concierge
-        defaults --> fraud
-        defaults --> auth
-    end
-
-    subgraph Loader["Configuration Loading"]
-        agentLoader["Agent Loader<br/>discover_agents()"]
-        scenarioLoader["Scenario Loader<br/>load_scenario()"]
-    end
-
-    subgraph Components["Core Components"]
-        registry["Tool Registry"]
-        session["Session Agent Manager"]
-        handoffMap["Handoff Map<br/>(tool → agent)"]
-    end
-
-    subgraph Orchestrators["Orchestrators"]
-        cascade["CascadeOrchestrator<br/>(Azure Speech Mode)"]
-        live["LiveOrchestrator<br/>(OpenAI Realtime Mode)"]
-    end
-
-    concierge --> agentLoader
-    fraud --> agentLoader
-    auth --> agentLoader
-    banking --> scenarioLoader
-    insurance --> scenarioLoader
     
-    agentLoader --> session
-    scenarioLoader --> handoffMap
-    scenarioLoader -->|"filters & overrides"| session
+    subgraph "🎯 Scenario Layer"
+        scenario["banking/orchestration.yaml<br/><small>Defines routing rules</small>"]
+    end
     
-    session --> cascade
-    session --> live
-    handoffMap --> cascade
-    handoffMap --> live
-    registry --> cascade
-    registry --> live
+    subgraph "🤖 Agent Layer"
+        concierge["Concierge<br/><small>Entry point</small>"]
+        fraud["FraudAgent<br/><small>Specialist</small>"]
+        invest["InvestmentAdvisor<br/><small>Specialist</small>"]
+    end
+    
+    subgraph "🔧 Tool Layer"
+        tools["Tool Registry<br/><small>Shared abilities</small>"]
+    end
+    
+    caller --> scenario
+    scenario --> concierge
+    concierge -->|"handoff_fraud_agent"| fraud
+    concierge -->|"handoff_investment"| invest
+    fraud --> tools
+    invest --> tools
 ```
 
-### Key Insight: Separation of Concerns
+### The Three Layers
 
-| Layer | Responsibility | Location |
-|-------|---------------|----------|
-| **Scenarios** | Define *which* agents participate and *how* handoffs behave | `registries/scenariostore/` |
-| **Agents** | Define *what* an agent does (tools, prompts, voice) | `registries/agentstore/` |
-| **Tools** | Define *capabilities* shared across agents | `registries/toolstore/` |
+| Layer | What It Does | Where It Lives |
+|-------|-------------|----------------|
+| :material-map: **Scenarios** | *Which* agents work together, *how* handoffs behave | `registries/scenariostore/` |
+| :material-robot: **Agents** | *What* each agent does (prompts, voice, tools) | `registries/agentstore/` |
+| :material-wrench: **Tools** | *Capabilities* shared across agents | `registries/toolstore/` |
 
-This separation means:
-- **Agents are reusable** — The same `FraudAgent` can be used in banking or insurance scenarios
-- **Handoff behavior is contextual** — A handoff can be "announced" in one scenario and "discrete" in another
-- **Scenarios are composable** — Mix and match agents for different use cases
+!!! success "Why This Separation Matters"
+    - **Reusable agents** — Same `FraudAgent` works in banking or insurance
+    - **Contextual handoffs** — "announced" in one scenario, "discrete" in another
+    - **Easy customization** — Change routing without touching agent code
 
 ---
 
-## Directory Structure
+## :material-folder-outline: Directory Structure
 
-```text
-apps/artagent/backend/registries/
-├── agentstore/                      # Agent definitions
-│   ├── __init__.py
-│   ├── base.py                      # UnifiedAgent dataclass & HandoffConfig
-│   ├── loader.py                    # discover_agents(), build_handoff_map()
-│   ├── session_manager.py           # Per-session overrides & persistence
-│   ├── _defaults.yaml               # Inherited defaults for all agents
-│   │
-│   ├── concierge/                   # Entry-point agent (Erica)
-│   │   ├── agent.yaml               # Agent configuration
-│   │   └── prompt.jinja             # Jinja2 prompt template
-│   │
-│   ├── fraud_agent/                 # Fraud detection specialist
-│   │   ├── agent.yaml
-│   │   └── prompt.jinja
-│   │
-│   ├── investment_advisor/          # Retirement & investment specialist
-│   │   ├── agent.yaml
-│   │   └── prompt.jinja
-│   │
-│   ├── auth_agent/                  # Authentication specialist
-│   │   └── agent.yaml
-│   │
-│   └── ...                          # Other agents
-│
-├── scenariostore/                   # Scenario definitions
-│   ├── loader.py                    # load_scenario(), get_handoff_config()
-│   │
-│   ├── banking/                     # Banking demo scenario
-│   │   └── orchestration.yaml       # Agent selection & handoff routing
-│   │
-│   ├── insurance/                   # Insurance demo scenario
-│   │   └── scenario.yaml
-│   │
-│   └── default/                     # Default scenario (all agents)
-│       └── scenario.yaml
-│
-└── toolstore/                       # Centralized tool registry
-    ├── __init__.py
-    ├── registry.py                  # Core registration & execution
-    ├── handoffs.py                  # Agent handoff tools
-    ├── auth.py                      # Identity verification tools
-    ├── banking.py                   # Account operations tools
-    ├── fraud.py                     # Fraud detection tools
-    └── ...                          # Other tool modules
-```
+??? example "Click to expand full structure"
+
+    ```text
+    apps/artagent/backend/registries/
+    ├── agentstore/                      # Agent definitions
+    │   ├── __init__.py
+    │   ├── base.py                      # UnifiedAgent dataclass & HandoffConfig
+    │   ├── loader.py                    # discover_agents(), build_handoff_map()
+    │   ├── session_manager.py           # Per-session overrides & persistence
+    │   ├── _defaults.yaml               # Inherited defaults for all agents
+    │   │
+    │   ├── concierge/                   # Entry-point agent (Erica)
+    │   │   ├── agent.yaml               # Agent configuration
+    │   │   └── prompt.jinja             # Jinja2 prompt template
+    │   │
+    │   ├── fraud_agent/                 # Fraud detection specialist
+    │   │   ├── agent.yaml
+    │   │   └── prompt.jinja
+    │   │
+    │   └── ...                          # Other agents
+    │
+    ├── scenariostore/                   # Scenario definitions
+    │   ├── loader.py                    # load_scenario(), get_handoff_config()
+    │   │
+    │   ├── banking/                     # Banking demo scenario
+    │   │   └── orchestration.yaml       # Agent selection & handoff routing
+    │   │
+    │   └── default/                     # Default scenario (all agents)
+    │       └── scenario.yaml
+    │
+    └── toolstore/                       # Centralized tool registry
+        ├── __init__.py
+        ├── registry.py                  # Core registration & execution
+        ├── handoffs.py                  # Agent handoff tools
+        └── ...                          # Other tool modules
+    ```
+
+**Quick reference:**
+
+| You want to... | Look in... |
+|----------------|-----------|
+| Create a new agent | `agentstore/my_agent/` |
+| Change handoff routing | `scenariostore/banking/orchestration.yaml` |
+| Add a new tool | `toolstore/my_tools.py` |
+| Change default voice | `agentstore/_defaults.yaml` |
 
 ---
 
-## Core Components
+## :material-school: Tutorial: Create Your First Agent
 
-### 1. UnifiedAgent Dataclass
+Follow these steps to add a new agent to the system.
 
-The `UnifiedAgent` is the primary configuration object representing an agent. It is orchestrator-agnostic — the same agent definition works with both SpeechCascade and VoiceLive modes.
+### Step 1: Create the Agent Folder
 
-```python
-@dataclass
-class UnifiedAgent:
-    """Orchestrator-agnostic agent configuration."""
-    
-    # Identity
-    name: str                       # Unique agent name (e.g., "FraudAgent")
-    description: str = ""           # Human-readable description
-    
-    # Greetings (Jinja2 templates)
-    greeting: str = ""              # Initial greeting when agent takes over
-    return_greeting: str = ""       # Greeting when returning to this agent
-    
-    # Handoff Configuration
-    handoff: HandoffConfig          # How other agents route to this one
-    
-    # Model Settings
-    model: ModelConfig              # LLM deployment, temperature, etc.
-    
-    # Voice Settings (TTS)
-    voice: VoiceConfig              # Azure TTS voice name, style, rate
-    
-    # Speech Recognition (STT)
-    speech: SpeechConfig            # VAD settings, languages, diarization
-    
-    # Session Settings (VoiceLive-specific)
-    session: Dict[str, Any]         # Realtime API session configuration
-    
-    # Prompt
-    prompt_template: str = ""       # Jinja2 prompt template (system message)
-    
-    # Tools
-    tool_names: List[str]           # References to shared tool registry
-    
-    # Template Variables
-    template_vars: Dict[str, Any]   # Variables for Jinja2 rendering
+```bash
+mkdir -p apps/artagent/backend/registries/agentstore/support_agent
 ```
 
-**Key Methods:**
+### Step 2: Create agent.yaml
 
-| Method | Description |
-|--------|-------------|
-| `get_tools()` | Returns OpenAI-compatible tool schemas from registry |
-| `execute_tool(name, args)` | Executes a tool by name asynchronously |
-| `render_prompt(context)` | Renders Jinja2 prompt with runtime context |
-| `render_greeting(context)` | Renders greeting template for handoffs |
-| `get_handoff_tools()` | Lists handoff tools this agent can call |
+```yaml title="support_agent/agent.yaml" linenums="1"
+name: SupportAgent
+description: Handles technical support questions
 
-### 2. HandoffConfig
-
-Defines how agents route to each other:
-
-```python
-@dataclass
-class HandoffConfig:
-    trigger: str = ""           # Tool name that routes TO this agent
-    is_entry_point: bool = False  # Whether this is the default starting agent
-```
-
-**Example:** The FraudAgent declares `trigger: handoff_fraud_agent`, meaning when any agent calls the `handoff_fraud_agent` tool, control transfers to FraudAgent.
-
-### 3. Configuration Inheritance
-
-Agents inherit from `_defaults.yaml` with per-agent overrides:
-
-```yaml
-# _defaults.yaml
-model:
-  deployment_id: gpt-4o
-  temperature: 0.7
-  max_tokens: 4096
-
-voice:
-  name: en-US-ShimmerTurboMultilingualNeural
-  type: azure-standard
-
-session:
-  modalities: [TEXT, AUDIO]
-  tool_choice: auto
-```
-
-```yaml
-# fraud_agent/agent.yaml - overrides only what's different
-model:
-  temperature: 0.6    # Lower for consistent investigation
-
-voice:
-  name: en-US-OnyxTurboMultilingualNeural  # Different persona
-```
-
----
-
-## Agent Configuration (YAML)
-
-Each agent is defined in an `agent.yaml` file with the following structure:
-
-```yaml
-# concierge/agent.yaml
-name: Concierge
-description: Primary banking assistant - handles most customer needs
-
-# Jinja2 greeting templates
-greeting: |
-  {% if caller_name %}Hi {{ caller_name }}, I'm {{ agent_name | default('Erica') }}.
-  {% else %}Hi, I'm {{ agent_name | default('Erica') }}, your banking assistant.
-  {% endif %}
-
-return_greeting: |
-  Welcome back. Is there anything else I can help with?
-
-# Handoff configuration
+# How other agents route to this one
 handoff:
-  trigger: handoff_concierge    # Tool name other agents call
-  is_entry_point: true          # This is the default starting agent
+  trigger: handoff_support_agent  # (1)!
 
-# Model overrides (inherits from _defaults.yaml)
-model:
-  temperature: 0.7
+# What to say when taking over
+greeting: "Hi, I'm your technical support specialist. How can I help?"
 
-# Voice configuration (Azure TTS)
+# What to say when returning
+return_greeting: "I'm back. What else can I help with?"
+
+# Voice settings (Azure TTS)
 voice:
-  name: en-US-AvaMultilingualNeural
-  rate: "-4%"
+  name: en-US-GuyNeural  # (2)!
+  rate: "-2%"
 
-# Speech recognition settings
-speech:
-  vad_silence_timeout_ms: 800
-  candidate_languages: [en-US, es-ES]
-
-# VoiceLive session configuration
-session:
-  turn_detection:
-    type: azure_semantic_vad
-    silence_duration_ms: 720
-
-# Tools from shared registry
+# Tools this agent can use
 tools:
-  - verify_client_identity
-  - get_account_summary
-  - get_recent_transactions
-  - handoff_fraud_agent
-  - handoff_investment_advisor
-  - escalate_human
+  - search_knowledge_base
+  - create_support_ticket
+  - handoff_concierge  # (3)!
 
-# Prompt file reference
+# Prompt template file
 prompts:
   path: prompt.jinja
 ```
 
-### Prompt Templates
+1. :material-information: Other agents call this tool name to transfer here
+2. :material-microphone: Browse voices at [Azure TTS Gallery](https://speech.microsoft.com/portal/voicegallery)
+3. :material-swap-horizontal: Always include a way to return to the main agent!
 
-Prompts use Jinja2 templating with runtime context injection:
+### Step 3: Create prompt.jinja
 
-```jinja2
-{# prompt.jinja #}
-You are **{{ agent_name | default('Erica') }}**, {{ institution_name }}'s banking concierge.
+```jinja2 title="support_agent/prompt.jinja"
+You are {{ agent_name | default('Alex') }}, a technical support specialist at {{ company_name | default('TechCorp') }}.
+
+## Your Role
+- Help customers troubleshoot technical issues
+- Search the knowledge base for solutions
+- Create support tickets when needed
+- Escalate to human support for complex issues
+
+## Guidelines
+- Be patient and clear in explanations
+- Confirm understanding before proceeding
+- If you can't help, use `handoff_concierge` to return
+
+{% if customer_name %}
+Current customer: {{ customer_name }}
+{% endif %}
+```
+
+### Step 4: Register the Handoff Tool
+
+```python title="registries/toolstore/handoffs.py"
+# Add to existing handoffs.py file
+
+handoff_support_agent_schema = {
+    "name": "handoff_support_agent",
+    "description": "Transfer to technical support specialist",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "issue_summary": {
+                "type": "string",
+                "description": "Brief summary of the technical issue"
+            }
+        },
+        "required": ["issue_summary"]
+    }
+}
+
+async def handoff_support_agent(args: dict) -> dict:
+    return {
+        "handoff": True,
+        "target_agent": "SupportAgent",
+        "message": "Connecting you to technical support...",
+        "handoff_context": {
+            "issue_summary": args.get("issue_summary", "")
+        }
+    }
+
+# Register the tool
+register_tool(
+    name="handoff_support_agent",
+    schema=handoff_support_agent_schema,
+    executor=handoff_support_agent,
+    tags={"handoff"}
+)
+```
+
+### Step 5: Wire Up in a Scenario
+
+```yaml title="scenariostore/default/scenario.yaml"
+# Add to your scenario's handoffs section
+handoffs:
+  - from: Concierge
+    to: SupportAgent
+    tool: handoff_support_agent
+    type: announced  # (1)!
+```
+
+1. :material-bullhorn: `announced` = agent greets user, `discrete` = seamless transition
+
+### Step 6: Test It!
+
+```python
+from registries.agentstore.loader import discover_agents
+
+agents = discover_agents()
+assert "SupportAgent" in agents
+print(f"✅ Found {len(agents)} agents")
+```
+
+---
+
+## :material-cog: Configuration Deep Dive
+
+??? info "UnifiedAgent Dataclass (Advanced)"
+
+    The `UnifiedAgent` is the primary configuration object representing an agent:
+
+    ```python
+    @dataclass
+    class UnifiedAgent:
+        # Identity
+        name: str                       # Unique agent name
+        description: str = ""           # Human-readable description
+        
+        # Greetings (Jinja2 templates)
+        greeting: str = ""              # Initial greeting
+        return_greeting: str = ""       # Greeting when returning
+        
+        # Handoff Configuration
+        handoff: HandoffConfig          # How to route here
+        
+        # Model Settings
+        model: ModelConfig              # LLM deployment, temperature
+        
+        # Voice Settings (TTS)
+        voice: VoiceConfig              # Azure TTS voice name, style, rate
+        
+        # Speech Recognition (STT)
+        speech: SpeechConfig            # VAD settings, languages
+        
+        # Prompt
+        prompt_template: str = ""       # Jinja2 system message
+        
+        # Tools
+        tool_names: List[str]           # References to tool registry
+    ```
+
+    **Key Methods:**
+
+    | Method | What It Does |
+    |--------|-------------|
+    | `get_tools()` | Returns OpenAI-compatible tool schemas |
+    | `execute_tool(name, args)` | Runs a tool asynchronously |
+    | `render_prompt(context)` | Renders Jinja2 prompt with variables |
+    | `render_greeting(context)` | Renders greeting for handoffs |
+
+### Configuration Inheritance
+
+Agents inherit from `_defaults.yaml` — you only override what's different:
+
+=== "_defaults.yaml (Base)"
+
+    ```yaml
+    model:
+      deployment_id: gpt-4o
+      temperature: 0.7
+    
+    voice:
+      name: en-US-ShimmerTurboMultilingualNeural
+    
+    session:
+      modalities: [TEXT, AUDIO]
+    ```
+
+=== "fraud_agent/agent.yaml (Override)"
+
+    ```yaml
+    # Only specify what's different!
+    model:
+      temperature: 0.6  # Lower = more consistent
+    
+    voice:
+      name: en-US-OnyxTurboMultilingualNeural
+    ```
+
+---
+
+## :material-file-cog: Agent YAML Reference
+
+??? example "Full agent.yaml Example (Click to Expand)"
+
+    ```yaml title="concierge/agent.yaml"
+    name: Concierge
+    description: Primary banking assistant - handles most customer needs
+
+    # Jinja2 greeting templates
+    greeting: |
+      {% if caller_name %}Hi {{ caller_name }}, I'm {{ agent_name | default('Erica') }}.
+      {% else %}Hi, I'm {{ agent_name | default('Erica') }}, your banking assistant.
+      {% endif %}
+
+    return_greeting: |
+      Welcome back. Is there anything else I can help with?
+
+    # Handoff configuration
+    handoff:
+      trigger: handoff_concierge
+      is_entry_point: true
+
+    # Model overrides
+    model:
+      temperature: 0.7
+
+    # Voice (Azure TTS)
+    voice:
+      name: en-US-AvaMultilingualNeural
+      rate: "-4%"
+
+    # Speech recognition
+    speech:
+      vad_silence_timeout_ms: 800
+      candidate_languages: [en-US, es-ES]
+
+    # VoiceLive session settings
+    session:
+      turn_detection:
+        type: azure_semantic_vad
+        silence_duration_ms: 720
+
+    # Tools from registry
+    tools:
+      - verify_client_identity
+      - get_account_summary
+      - handoff_fraud_agent
+      - escalate_human
+
+    # Prompt file
+    prompts:
+      path: prompt.jinja
+    ```
+
+### YAML Field Quick Reference
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | ✅ | Unique identifier |
+| `description` | ❌ | Human-readable description |
+| `handoff.trigger` | ✅ | Tool name that routes here |
+| `handoff.is_entry_point` | ❌ | `true` for starting agent |
+| `greeting` | ❌ | Jinja2 template for first greeting |
+| `return_greeting` | ❌ | Greeting when returning |
+| `tools` | ❌ | List of tool names |
+| `prompts.path` | ❌ | Path to prompt.jinja file |
+| `voice.name` | ❌ | Azure TTS voice name |
+| `model.temperature` | ❌ | LLM temperature (0-1) |
+
+### Prompt Templates (Jinja2)
+
+Prompts use [Jinja2](https://jinja.palletsprojects.com/) for dynamic content:
+
+```jinja2 title="prompt.jinja"
+You are **{{ agent_name | default('Erica') }}**, a banking concierge.
 
 {% if session_profile %}
 ## 🔐 Authenticated Session
 **Customer:** {{ session_profile.full_name }}
-**Account Tier:** {{ session_profile.customer_intelligence.relationship_tier }}
+**Tier:** {{ session_profile.relationship_tier }}
 {% endif %}
 
-## Available Actions
+## Your Tools
 {% for tool in tools %}
-- {{ tool.name }}: {{ tool.description }}
+- `{{ tool.name }}`: {{ tool.description }}
 {% endfor %}
 
-## Handoff Routing
-When customer mentions fraud → handoff_fraud_agent
-When customer asks about retirement → handoff_investment_advisor
+## Routing Rules
+- Fraud concerns → use `handoff_fraud_agent`
+- Investment questions → use `handoff_investment_advisor`
 ```
+
+!!! tip "Jinja2 Basics"
+    - `{{ variable }}` — Insert a value
+    - `{% if condition %}...{% endif %}` — Conditional content
+    - `{% for item in list %}...{% endfor %}` — Loop over items
+    - `{{ var | default('fallback') }}` — Fallback if var is missing
 
 ---
 
-## Scenario Configuration
+## :material-transit-connection-variant: Scenario Configuration
 
-Scenarios define **which agents participate** and **how handoffs behave** for a specific use case. This separation allows the same agents to be reused across different scenarios with different orchestration logic.
+Scenarios define **which agents work together** and **how handoffs behave**.
 
-### Why Scenarios?
-
-| Without Scenarios | With Scenarios |
-|-------------------|----------------|
-| Handoff logic embedded in agents | Handoff logic externalized |
-| Same behavior everywhere | Contextual behavior per use case |
-| Changing routes = edit multiple agents | Changing routes = edit one scenario |
-| Tight coupling between agents | Loose coupling, reusable agents |
-
-### Scenario YAML Structure
-
-```yaml
-# registries/scenariostore/banking/orchestration.yaml
-
+```yaml title="scenariostore/banking/orchestration.yaml"
 name: banking
 description: Private banking customer service
 
-# Starting agent for this scenario
+# Starting agent
 start_agent: Concierge
 
-# Agents included (empty = include all discovered agents)
+# Agents included (empty = all)
 agents:
   - Concierge
   - AuthAgent
+  - FraudAgent
   - InvestmentAdvisor
-  - CardRecommendation
 
-# Default handoff behavior for unlisted routes
+# Default handoff type
 handoff_type: announced
 
-# Handoff configurations - directed edges in the agent graph
+# Handoff routing rules
 handoffs:
   - from: Concierge
-    to: AuthAgent
-    tool: handoff_to_auth
-    type: announced           # Auth is sensitive - always greet
+    to: FraudAgent
+    tool: handoff_fraud_agent
+    type: announced       # (1)!
 
   - from: Concierge
     to: InvestmentAdvisor
     tool: handoff_investment_advisor
-    type: discrete            # Seamless handoff
-
-  - from: InvestmentAdvisor
-    to: Concierge
-    tool: handoff_concierge
-    type: discrete            # Returning - seamless
-
-# Template variables applied to all agents
-agent_defaults:
-  company_name: "Private Banking"
-  industry: "banking"
+    type: discrete        # (2)!
 ```
 
-### Handoff Types
+1. :material-bullhorn: **announced** = Target agent greets the user ("Hi, I'm from the Fraud Prevention desk...")
+2. :material-ghost: **discrete** = Seamless transition, no greeting
 
-| Type | Behavior | Use Case |
-|------|----------|----------|
-| `announced` | Target agent greets the user | Sensitive operations, clear transitions |
-| `discrete` | Target agent continues naturally | Seamless specialist routing, returning |
+### Handoff Types at a Glance
 
-### Loading Scenarios
+| Type | User Experience | Use When |
+|------|-----------------|----------|
+| `announced` | "You're now speaking with our fraud specialist..." | Sensitive operations, clear transitions |
+| `discrete` | Conversation continues naturally | Seamless routing, returning to previous agent |
 
-```python
-from registries.scenariostore.loader import (
-    load_scenario,
-    build_handoff_map_from_scenario,
-    get_handoff_config,
-    get_scenario_agents,
-)
-
-# Load scenario configuration
-scenario = load_scenario("banking")
-
-# Build handoff routing map
-handoff_map = build_handoff_map_from_scenario("banking")
-# → {"handoff_fraud_agent": "FraudAgent", ...}
-
-# Get handoff behavior for a specific route
-cfg = get_handoff_config("banking", "Concierge", "handoff_investment_advisor")
-# → HandoffConfig(type="discrete", greet_on_switch=False)
-
-# Get agents with scenario overrides applied
-agents = get_scenario_agents("banking")
-```
-
-For detailed handoff documentation, see [Handoff Strategies](handoffs.md).
+:material-arrow-right: **Learn more:** [Handoff Strategies](handoffs.md)
 
 ---
 
-## Tool Registry
+## :material-magnify: How Agents Are Discovered
 
-Tools are defined once in the central registry and referenced by name across agents.
-
-### Registering a Tool
-
-```python
-# registries/toolstore/fraud.py
-from registries.toolstore.registry import register_tool
-
-analyze_transactions_schema = {
-    "name": "analyze_recent_transactions",
-    "description": "Analyze recent transactions for suspicious patterns",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "client_id": {"type": "string"},
-            "days": {"type": "integer", "default": 30}
-        },
-        "required": ["client_id"]
-    }
-}
-
-async def analyze_recent_transactions(args: Dict[str, Any]) -> Dict[str, Any]:
-    """Analyze transactions for fraud patterns."""
-    client_id = args.get("client_id")
-    days = args.get("days", 30)
-    # ... implementation
-    return {"suspicious_count": 0, "flagged_transactions": []}
-
-# Register at module load
-register_tool(
-    name="analyze_recent_transactions",
-    schema=analyze_transactions_schema,
-    executor=analyze_recent_transactions,
-    tags={"fraud", "analysis"}
-)
-```
-
-### Handoff Tools
-
-Handoff tools are special — they return a standardized payload that orchestrators recognize:
-
-```python
-async def handoff_fraud_agent(args: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "handoff": True,
-        "target_agent": "FraudAgent",
-        "message": "Let me connect you with our fraud specialist.",
-        "handoff_summary": "Fraud investigation: unauthorized charge",
-        "handoff_context": {
-            "client_id": args.get("client_id"),
-            "fraud_type": args.get("fraud_type"),
-            "handoff_timestamp": datetime.utcnow().isoformat()
-        }
-    }
-```
-
----
-
-## Agent Discovery & Handoff Mapping
-
-### Discovering Agents
-
-```python
-from apps.artagent.backend.agents.loader import discover_agents, build_handoff_map
-
-# Auto-discover all agents from the agents/ directory
-agents: Dict[str, UnifiedAgent] = discover_agents()
-# → {"Concierge": UnifiedAgent(...), "FraudAgent": UnifiedAgent(...), ...}
-
-# Build handoff routing map
-handoff_map: Dict[str, str] = build_handoff_map(agents)
-# → {"handoff_concierge": "Concierge", "handoff_fraud_agent": "FraudAgent", ...}
-```
-
-### Using Agents in Orchestrators
-
-```python
-# In CascadeOrchestrator or LiveOrchestrator
-agent = agents[current_agent_name]
-
-# Get OpenAI-compatible tool schemas
-tools = agent.get_tools()
-
-# Render system prompt with runtime context
-system_prompt = agent.render_prompt({
-    "caller_name": "John",
-    "session_profile": session_data,
-    "customer_intelligence": intel_data
-})
-
-# Check if a tool call is a handoff
-if handoff_map.get(tool_name):
-    target_agent = handoff_map[tool_name]
-    # Execute handoff...
-```
-
----
-
-## Session-Level Overrides
-
-The `SessionAgentManager` enables runtime modification of agent configurations without redeployment:
-
-```python
-from apps.artagent.backend.agents.session_manager import SessionAgentManager
-
-# Create session manager
-mgr = SessionAgentManager(
-    session_id="session_123",
-    base_agents=discover_agents(),
-    memo_manager=memo
-)
-
-# Get agent with any session overrides applied
-agent = mgr.get_agent("Concierge")
-
-# Modify prompt at runtime
-mgr.update_agent_prompt("Concierge", "You are now a Spanish-speaking assistant...")
-
-# Modify voice
-mgr.update_agent_voice("Concierge", VoiceConfig(name="es-ES-AlvaroNeural"))
-
-# Modify available tools
-mgr.update_agent_tools("Concierge", ["get_account_summary", "escalate_human"])
-
-# Persist to Redis
-await mgr.persist()
-```
-
-### Use Cases for Runtime Overrides
-
-| Scenario | Override |
-|----------|----------|
-| A/B Testing | Different prompts for experiment variants |
-| Language Switching | Different voice and prompt after language detection |
-| Feature Flags | Enable/disable tools for specific users |
-| Demo Mode | Simplified prompts for demonstrations |
-| Emergency | Disable certain capabilities during incidents |
-
----
-
-## Multi-Agent Handoff Patterns
-
-### Tool-Based Handoffs (VoiceLive)
-
-In VoiceLive mode, handoffs are executed as tool calls. When the LLM calls a handoff tool:
-
-1. Orchestrator detects `handoff: True` in tool result
-2. Session state is updated with `handoff_context`
-3. Active agent switches to target
-4. New agent's prompt is loaded with context
-5. Greeting is spoken (if configured)
+The framework automatically scans for agents at startup:
 
 ```mermaid
 flowchart LR
-    caller["Caller: I think someone stole my card"]
-    concierge["Concierge"]
-    fraud["FraudAgent"]
-    response["You're now speaking with<br/>the Fraud Prevention desk..."]
-
-    caller --> concierge
-    concierge -->|handoff_fraud_agent| fraud
-    fraud --> response
+    A[📁 agentstore/] --> B[🔍 Scan folders]
+    B --> C{Has agent.yaml?}
+    C -->|Yes| D[📄 Parse YAML]
+    C -->|No| E[⏭️ Skip]
+    D --> F[📝 Merge defaults]
+    F --> G[🏗️ Build UnifiedAgent]
+    G --> H[(Agent Registry)]
 ```
 
-### State-Based Handoffs (SpeechCascade)
+### Using the Registry
 
-In SpeechCascade mode, handoffs use the `MemoManager` to persist agent state:
+=== "Get One Agent"
 
-1. Tool execution returns handoff payload
-2. Orchestrator writes to `memo_manager.handoff_pending`
-3. State synchronizes via `sync_to_memo_manager()`
-4. Next turn reads from `memo_manager` and switches agents
+    ```python
+    from registries.agentstore.loader import get_agent
+    
+    concierge = get_agent("Concierge")
+    print(concierge.voice.name)  # "en-US-AvaMultilingualNeural"
+    ```
 
----
+=== "Get All Agents"
 
-## Adding a New Agent
+    ```python
+    from registries.agentstore.loader import discover_agents
+    
+    agents = discover_agents()
+    for name, agent in agents.items():
+        print(f"Agent: {name}, Tools: {len(agent.tool_names)}")
+    ```
 
-1. **Create agent directory:**
+=== "Scenario Agents Only"
 
-   ```bash
-   mkdir apps/artagent/backend/agents/my_agent
-   ```
-
-2. **Create agent.yaml:**
-
-   ```yaml
-   name: MyAgent
-   description: Description of what this agent does
-   
-   handoff:
-     trigger: handoff_my_agent
-   
-   greeting: "You're now speaking with the My Agent specialist."
-   
-   tools:
-     - some_tool
-     - handoff_concierge  # Always include a way back
-   
-   prompts:
-     path: prompt.jinja
-   ```
-
-3. **Create prompt.jinja:**
-
-   ```jinja2
-   You are {{ agent_name }}, a specialist in [domain].
-   
-   ## Your Responsibilities
-   - Task 1
-   - Task 2
-   
-   ## Available Tools
-   {% for tool in tools %}
-   - {{ tool.name }}
-   {% endfor %}
-   ```
-
-4. **Register handoff tool** (if needed by other agents):
-
-   ```python
-   # In tools/handoffs.py
-   register_tool(
-       "handoff_my_agent",
-       handoff_my_agent_schema,
-       handoff_my_agent,
-       is_handoff=True
-   )
-   ```
-
-5. **Add to parent agents' tools:**
-
-   ```yaml
-   # In concierge/agent.yaml
-   tools:
-     - handoff_my_agent  # Now Concierge can route here
-   ```
+    ```python
+    from registries.scenariostore.loader import get_scenario_agents
+    
+    banking_agents = get_scenario_agents("banking")
+    ```
 
 ---
 
-## Comparison with Other Frameworks
+## :material-transit-transfer: Handoff Flow
 
-| Feature | ART Agent Framework | Semantic Kernel Agents | Azure AI Agent Service |
-|---------|---------------------|----------------------|----------------------|
-| Configuration | YAML-first | Code-first | Portal/API |
-| Voice Integration | Native | Plugin required | Limited |
-| Handoff Latency | ~50ms in-memory | Varies | Service call |
-| Session Overrides | Built-in | Custom | Limited |
-| Deployment | Self-hosted | Self-hosted | Managed |
-| Tool Definition | Centralized registry | Per-agent | Per-agent |
-| Multi-orchestrator | SpeechCascade + VoiceLive | Single runtime | Single runtime |
+```mermaid
+sequenceDiagram
+    participant U as 👤 User
+    participant C as 🏦 Concierge
+    participant F as 🕵️ FraudAgent
+    participant T as 🛠️ Tools
 
----
+    U->>C: "I think someone stole my card"
+    C->>T: execute(handoff_fraud_agent)
+    T-->>C: {handoff: true, target: FraudAgent}
+    
+    Note over C,F: Orchestrator triggers switch
+    
+    rect rgb(255, 245, 235)
+        Note right of F: announced type
+        F->>U: "I'm Alex from the Fraud desk..."
+    end
+```
 
-## Best Practices
+??? info "How Handoff Tools Work"
 
-### Agent Design
-
-- **Single Responsibility** — Each agent should have a clear, focused purpose
-- **Clear Handoff Criteria** — Document when to route to each specialist
-- **Return Path** — Always include `handoff_concierge` or equivalent to return to main agent
-- **Minimal Tools** — Only include tools the agent actually needs
-
-### Prompt Engineering
-
-- **Use Jinja2 Conditionals** — Handle missing context gracefully
-- **Provide Examples** — Show expected tool call patterns
-- **Define Boundaries** — Explicitly state what the agent should NOT do
-- **Voice Optimization** — Write for spoken delivery (short sentences, clear numbers)
-
-### Performance
-
-- **Lazy Load Tools** — Tools are loaded on first access, not at startup
-- **Cache Agent Configs** — `discover_agents()` result can be cached
-- **Minimize Handoffs** — Each handoff adds latency; route wisely
-- **Use Discrete Handoffs** — Discrete handoffs are faster (no greeting TTS)
-
-### Scenario Design
-
-- **Start Simple** — Begin with a default scenario, add specialized ones as needed
-- **Explicit Handoffs** — Define all expected routes; don't rely on defaults
-- **Test Both Directions** — Ensure agents can return to their source
-- **Match UX to Type** — Use `announced` for sensitive operations, `discrete` for seamless flow
+    ```python title="registries/toolstore/handoffs.py"
+    async def handoff_fraud_agent(args: dict) -> dict:
+        return {
+            "handoff": True,                    # Signals orchestrator
+            "target_agent": "FraudAgent",       # Where to go
+            "message": "Connecting you now...", # TTS message
+            "handoff_context": {                # Passed to next agent
+                "reason": args.get("reason", "")
+            }
+        }
+    ```
 
 ---
 
-## Related Documentation
+## :material-cogs: Advanced Topics
 
-- [Orchestration](../orchestration/README.md) — How orchestrators use agents
-- [Handoff Strategies](handoffs.md) — Scenario-driven handoff patterns
-- [Session Management](../data/README.md) — State persistence and recovery
-- [Streaming Modes](../speech/README.md) — SpeechCascade vs VoiceLive comparison
+??? abstract "Session-Level Overrides"
+
+    Modify agent configs at runtime without redeployment:
+
+    ```python
+    from registries.agentstore.session_manager import SessionAgentManager
+
+    mgr = SessionAgentManager(
+        session_id="session_123",
+        base_agents=discover_agents()
+    )
+
+    # Change voice at runtime
+    mgr.update_agent_voice("Concierge", VoiceConfig(name="es-ES-AlvaroNeural"))
+
+    # Change available tools
+    mgr.update_agent_tools("Concierge", ["get_account_summary", "escalate_human"])
+    ```
+
+    | Use Case | Override |
+    |----------|----------|
+    | A/B Testing | Different prompts per variant |
+    | Language Switch | New voice after detection |
+    | Feature Flags | Enable/disable tools |
+    | Emergency | Disable capabilities |
+
+??? abstract "Multi-Orchestrator Pattern"
+
+    ```mermaid
+    flowchart TB
+        subgraph "Same Agents, Different Modes"
+            A[📁 Agent YAML] --> B[🎙️ SpeechCascade<br/>Azure Speech]
+            A --> C[⚡ VoiceLive<br/>Realtime API]
+        end
+    ```
+
+    Agents work with both orchestrators — the YAML config is the same!
 
 ---
 
-## Quick Reference
+## :material-frequently-asked-questions: FAQ
 
-### Key Imports
+??? question "How do I add a tool to an existing agent?"
+    Add the tool name to `tools:` in `agent.yaml`:
+    ```yaml
+    tools:
+      - existing_tool
+      - my_new_tool  # ← Add here
+    ```
+
+??? question "Can multiple agents share the same tool?"
+    Yes — tools are in a central registry. Add the name to any agent's `tools:` list.
+
+??? question "What if two agents have the same name?"
+    The loader raises an error. Agent names must be unique.
+
+??? question "How do I change the default voice for all agents?"
+    Edit `registries/agentstore/_defaults.yaml`:
+    ```yaml
+    voice:
+      name: en-US-JennyNeural  # New default
+    ```
+
+---
+
+## :material-check-all: Best Practices
+
+<div class="grid" markdown>
+
+!!! success "Do"
+    - **Single Responsibility** — One clear focus per agent
+    - **Return Path** — Always include `handoff_concierge` or equivalent
+    - **Minimal Tools** — Only what the agent actually needs
+    - **Write for Voice** — Short sentences, spell out numbers
+
+!!! failure "Don't"
+    - **Don't overcomplicate** — Start simple, add agents as needed
+    - **Don't forget context** — Pass handoff_context between agents
+    - **Don't skip testing** — Verify handoff round-trips work
+    - **Don't nest too deep** — Max 2-3 handoff hops from entry
+
+</div>
+
+---
+
+## :material-link-variant: Related Documentation
+
+<div class="grid cards" markdown>
+
+-   :material-transit-connection:{ .lg .middle } **Handoff Strategies**
+
+    ---
+
+    Deep dive into handoff types and graph design
+
+    [:octicons-arrow-right-24: Learn more](handoffs.md)
+
+-   :material-hammer-wrench:{ .lg .middle } **Tool Development**
+
+    ---
+
+    Build custom tools for agents
+
+    [:octicons-arrow-right-24: Create tools](../registries/tools.md)
+
+-   :material-pencil-ruler:{ .lg .middle } **Scenario Design**
+
+    ---
+
+    Configure multi-agent workflows
+
+    [:octicons-arrow-right-24: Design scenarios](../registries/scenarios.md)
+
+-   :material-text-box-search:{ .lg .middle } **Prompt Engineering**
+
+    ---
+
+    Best practices for agent prompts
+
+    [:octicons-arrow-right-24: Write prompts](prompts.md)
+
+</div>
+
+---
+
+## :material-keyboard: Quick Reference
 
 ```python
 # Agent loading
-from registries.agentstore.loader import discover_agents, build_handoff_map
+from registries.agentstore.loader import discover_agents, get_agent
 
-# Scenario loading
-from registries.scenariostore.loader import (
-    load_scenario,
-    build_handoff_map_from_scenario,
-    get_handoff_config,
-    get_scenario_agents,
-)
+# Scenario loading  
+from registries.scenariostore.loader import load_scenario, get_scenario_agents
 
 # Tool registry
 from registries.toolstore.registry import execute_tool, get_tools_for_agent
 ```
 
-### Common Operations
-
 | Task | Code |
 |------|------|
 | Load all agents | `agents = discover_agents()` |
-| Load scenario | `scenario = load_scenario("banking")` |
-| Get handoff map | `handoff_map = build_handoff_map_from_scenario("banking")` |
-| Check handoff type | `cfg = get_handoff_config("banking", "Concierge", "handoff_fraud")` |
-| Render agent prompt | `prompt = agent.render_prompt(context)` |
-| Get agent tools | `tools = agent.get_tools()` |
+| Load one agent | `agent = get_agent("Concierge")` |
+| Get handoff map | `build_handoff_map_from_scenario("banking")` |
+| Render prompt | `agent.render_prompt(context)` |
+| Get agent tools | `agent.get_tools()` |

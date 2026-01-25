@@ -1,23 +1,167 @@
-# Model Evaluation Framework
+# Agent Evaluation Overview
 
-Evaluate voice agent orchestration quality without modifying production code.
+:material-brain: Evaluate voice agent quality without modifying production code using scenario-driven testing, A/B comparisons, and Azure AI Foundry integration.
 
-## Overview
+!!! tip "Quick Links"
+    - **Deep dive**: [Evaluation Framework Reference](evaluation-framework.md)
+    - **Scenario syntax**: [Scenario YAML Reference](evaluation-scenarios.md)
+    - **Interactive**: [Evaluation Notebook](https://github.com/Azure-Samples/art-voice-agent-accelerator/tree/main/samples/labs/dev/evaluation_framework_validation.ipynb)
 
-The evaluation framework provides tools to measure agent performance across multiple dimensions:
+---
 
-- **Tool Calls**: Precision, recall, efficiency
-- **Groundedness**: Response accuracy against evidence
-- **Latency**: E2E and TTFT percentiles
-- **Verbosity**: Token usage and conciseness
-- **Cost**: Per-model token usage and estimated costs
+## Why Evaluate?
 
-### Key Features
+Voice agents combine multiple AI components (STT, LLM, TTS) where quality issues can compound. The evaluation framework helps you:
 
-- **Zero production changes** - Uses wrapper pattern, no code modifications
-- **API-aware** - Handles both Chat Completions and Responses API
-- **Comprehensive metrics** - 6 categories of evaluation metrics
-- **Simple outputs** - JSONL events and JSON summaries
+- :material-check-circle: **Validate tool usage** — Ensure agents call the right tools at the right time
+- :material-shield-check: **Measure groundedness** — Verify responses align with retrieved evidence
+- :material-speedometer: **Track latency** — Monitor E2E and time-to-first-token performance
+- :material-currency-usd: **Control costs** — Compare token usage across model configurations
+- :material-ab-testing: **A/B test models** — Compare GPT-4o vs GPT-4o-mini, tune temperature, etc.
+
+---
+
+## Evaluation Dimensions
+
+<div class="grid cards" markdown>
+
+-   :material-wrench:{ .lg .middle } **Tool Metrics**
+
+    ---
+
+    Precision, recall, and efficiency of tool invocations
+
+-   :material-text-box-check:{ .lg .middle } **Groundedness**
+
+    ---
+
+    Response accuracy against evidence and context
+
+-   :material-timer:{ .lg .middle } **Latency**
+
+    ---
+
+    E2E P50/P95/P99 and time-to-first-token
+
+-   :material-text-short:{ .lg .middle } **Verbosity**
+
+    ---
+
+    Token budget compliance and conciseness
+
+-   :material-currency-usd:{ .lg .middle } **Cost Analysis**
+
+    ---
+
+    Per-model token usage and estimated spend
+
+-   :material-swap-horizontal:{ .lg .middle } **Handoff Accuracy**
+
+    ---
+
+    Correct agent routing and transitions
+
+</div>
+
+---
+
+## Three Ways to Run Evaluations
+
+The framework supports multiple execution environments to fit your workflow:
+
+=== ":material-laptop: Local Development"
+
+    Run evaluations on your machine during development:
+
+    ```bash
+    # Interactive exploration
+    jupyter notebook samples/labs/dev/evaluation_framework_validation.ipynb
+
+    # Pytest (recommended for CI integration)
+    pytest tests/evaluation/test_scenarios.py -v
+
+    # CLI for single scenarios
+    python -m tests.evaluation.cli scenario \
+        --input tests/evaluation/scenarios/session_based/banking_multi_agent.yaml
+    ```
+
+    **Best for:** Rapid iteration, debugging, scenario development
+
+=== ":material-cog: CI/CD Pipeline"
+
+    Automate evaluations in GitHub Actions or Azure DevOps:
+
+    ```yaml
+    # .github/workflows/evaluation.yml
+    name: Agent Evaluation
+
+    on:
+      pull_request:
+        paths:
+          - 'apps/artagent/backend/registries/**'
+          - 'tests/evaluation/scenarios/**'
+
+    jobs:
+      evaluate:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+          - uses: actions/setup-python@v5
+            with:
+              python-version: '3.11'
+          
+          - name: Install dependencies
+            run: pip install -e ".[dev]"
+          
+          - name: Run evaluations
+            run: pytest tests/evaluation/test_scenarios.py -v -m evaluation
+            env:
+              AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+              AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          
+          - name: Upload results
+            uses: actions/upload-artifact@v4
+            with:
+              name: evaluation-results
+              path: runs/
+    ```
+
+    **Best for:** Regression detection, PR validation, automated quality gates
+
+=== ":material-cloud: Azure AI Foundry"
+
+    Submit to cloud evaluation for AI-powered metrics:
+
+    ```bash
+    # Via pytest
+    pytest tests/evaluation/test_scenarios.py --submit-to-foundry
+
+    # Via CLI
+    python -m tests.evaluation.cli submit \
+        --input runs/my_run/foundry_eval.jsonl \
+        --endpoint "$AZURE_AI_FOUNDRY_PROJECT_ENDPOINT"
+    ```
+
+    **Foundry adds these evaluators:**
+
+    | Evaluator | Description |
+    |-----------|-------------|
+    | `relevance` | Response relevance to query |
+    | `coherence` | Logical flow and consistency |
+    | `fluency` | Natural language quality |
+    | `groundedness` | Factual grounding (semantic) |
+
+    **Best for:** Production validation, comprehensive quality reports, semantic metrics
+
+---
+
+## Key Design Principles
+
+!!! success "Zero-Touch Instrumentation"
+    The evaluation framework uses the **wrapper pattern** to record events without modifying production code. Your orchestrator works exactly the same — the wrapper just records what happens.
+
+!!! info "Composition Over Inheritance"
+    The `EvaluationOrchestratorWrapper` composes around your orchestrator rather than requiring inheritance. This keeps production code clean.
 
 !!! warning "Production Isolation"
     This package should **never** be imported in production code. Import guards prevent usage when `ENV=production`.

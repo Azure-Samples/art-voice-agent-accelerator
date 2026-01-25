@@ -2,6 +2,40 @@
 
 The registries system is the heart of agent configuration in the ART Voice Agent Accelerator. It provides a modular, YAML-driven approach to defining agents, tools, and scenarios.
 
+---
+
+## Quick Navigation
+
+<div class="grid cards" markdown>
+
+-   :material-wrench:{ .lg .middle } **Tools**
+
+    ---
+
+    Functions agents can call (verification, account lookups, handoffs)
+
+    [:octicons-arrow-right-24: Tool Development](tools.md) · [:octicons-arrow-right-24: Tool Reference](tool-catalog.md)
+
+-   :material-robot:{ .lg .middle } **Agents**
+
+    ---
+
+    Conversational personas with prompts, voices, and personalities
+
+    [:octicons-arrow-right-24: Agents Guide](agents.md)
+
+-   :material-sitemap:{ .lg .middle } **Scenarios**
+
+    ---
+
+    Deployment configurations that wire agents together
+
+    [:octicons-arrow-right-24: Scenarios Guide](scenarios.md)
+
+</div>
+
+---
+
 ## The Three Layers
 
 ```mermaid
@@ -24,7 +58,7 @@ flowchart TB
         S2[Insurance]
     end
     
-    T1 & T2 & T3 --> A1
+    T1 & T2 --> A1
     T3 --> A2
     T4 --> A3
     
@@ -242,6 +276,37 @@ flowchart LR
 - **Announced**: Target agent greets customer
 - **Discrete**: Silent transition, conversation continues naturally
 
+#### Generic vs Custom Handoff Tools
+
+The framework provides a **generic handoff tool** that works for basic routing between agents. However, defining **custom handoff tools** like `handoff_fraud` or `handoff_invest` gives you better control over the agent context during transitions:
+
+| Approach               | Use Case                                                                                          |
+|------------------------|---------------------------------------------------------------------------------------------------|
+| **Generic handoff**    | Simple routing where no special context is needed                                                 |
+| **Custom handoff tool** | When you need to pass specific context, validate conditions, or customize the transition behavior |
+
+Custom handoff tools allow you to:
+
+- **Control context transfer**: Specify exactly what information passes to the target agent
+- **Add validation logic**: Check preconditions before allowing the handoff
+- **Customize parameters**: Define tool-specific arguments the LLM must provide (e.g., reason for transfer, urgency level)
+
+```python
+# Example: Custom handoff with context control
+schema = {
+    "name": "handoff_fraud_agent",
+    "description": "Transfer to fraud specialist with case details",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "fraud_type": {"type": "string", "description": "Type of suspected fraud"},
+            "urgency": {"type": "string", "enum": ["low", "medium", "high"]}
+        },
+        "required": ["fraud_type"]
+    }
+}
+```
+
 ### Tool Registration
 
 Tools self-register when imported:
@@ -351,4 +416,43 @@ from apps.artagent.backend.registries.scenariostore import (
     get_handoff_instructions,         # Get prompt instructions
     build_handoff_map_from_scenario,  # Build routing map
 )
+```
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+| Problem | Cause | Solution |
+|---------|-------|----------|
+| "Agent not found" | Agent folder missing or misspelled | Check `agentstore/` folder name matches `id` in agent.yaml |
+| "Tool not found" | Tool not imported during init | Add import to `toolstore/__init__.py` |
+| "Handoff failed" | Route not defined in scenario | Add `handoffs` entry in `orchestration.yaml` |
+| Template rendering error | Missing variable in context | Add variable to `template_vars` or `agent_defaults` |
+| Agent using wrong voice | Voice config not loaded | Check `voice` section in agent.yaml |
+
+### Debug Commands
+
+```bash
+# List all registered tools
+python -c "from apps.artagent.backend.registries.toolstore import list_tools; print(list_tools())"
+
+# List all discovered agents  
+python -c "from apps.artagent.backend.registries.agentstore import discover_agents; print([a.id for a in discover_agents()])"
+
+# List available scenarios
+python -c "from apps.artagent.backend.registries.scenariostore import list_scenarios; print(list_scenarios())"
+```
+
+### Validation
+
+Run the test suite to validate your registries:
+
+```bash
+# Test all registries
+pytest tests/test_registries*.py -v
+
+# Test specific registry
+pytest tests/test_agentstore.py -v
 ```

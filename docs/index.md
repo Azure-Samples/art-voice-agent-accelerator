@@ -121,7 +121,8 @@ graph TB
     end
     
     Phone --> ACS
-    Browser --> ACS 
+    Browser --> Apps
+    Browser --> ACS
     Teams --> ACS
     ACS <--> Speech
     ACS <--> Apps
