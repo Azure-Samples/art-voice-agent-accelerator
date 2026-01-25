@@ -126,77 +126,86 @@ jobs:
 
       - name: 🔍 Discover Scenarios
         id: discover
+        shell: python
         run: |
-          TIER="${{ steps.config.outputs.tier }}"
-          FILTER="${{ inputs.scenario_filter || '*' }}"
+          import json
+          import os
+          from pathlib import Path
+          
+          tier = "${{ steps.config.outputs.tier }}"
+          filter_pattern = "${{ inputs.scenario_filter || '*' }}"
           
           # Define scenario directories per tier
-          declare -A TIER_DIRS
-          TIER_DIRS[smoke]="tests/evaluation/scenarios/smoke"
-          TIER_DIRS[regression]="tests/evaluation/scenarios/session_based tests/evaluation/scenarios/smoke"
-          TIER_DIRS[ab_tests]="tests/evaluation/scenarios/ab_tests"
-          TIER_DIRS[all]="tests/evaluation/scenarios"
+          tier_dirs = {
+              "smoke": ["tests/evaluation/scenarios/smoke"],
+              "regression": ["tests/evaluation/scenarios/session_based", "tests/evaluation/scenarios/smoke"],
+              "ab_tests": ["tests/evaluation/scenarios/ab_tests"],
+              "all": ["tests/evaluation/scenarios"],
+          }
           
-          # Create smoke directory if it doesn't exist (with a placeholder)
-          mkdir -p tests/evaluation/scenarios/smoke
+          # Create smoke directory if it doesn't exist
+          Path("tests/evaluation/scenarios/smoke").mkdir(parents=True, exist_ok=True)
           
-          # Find scenarios
-          SCENARIOS="[]"
-          COUNT=0
+          scenarios = []
           
-          for DIR in ${TIER_DIRS[$TIER]}; do
-            if [ -d "$DIR" ]; then
-              for file in $(find "$DIR" -name "${FILTER}.yaml" -type f 2>/dev/null | head -20); do
-                # Extract scenario info
-                NAME=$(basename "$file" .yaml)
-                TYPE="scenario"
-                
-                # Check if it's a comparison (has variants)
-                if grep -q "^variants:" "$file" 2>/dev/null; then
-                  TYPE="comparison"
-                fi
-                
-                SCENARIOS=$(echo "$SCENARIOS" | jq -c ". + [{\"name\": \"$NAME\", \"path\": \"$file\", \"type\": \"$TYPE\"}]")
-                COUNT=$((COUNT + 1))
-              done
-            fi
-          done
+          for dir_path in tier_dirs.get(tier, ["tests/evaluation/scenarios/smoke"]):
+              p = Path(dir_path)
+              if p.exists():
+                  for yaml_file in p.rglob(f"{filter_pattern}.yaml" if filter_pattern != "*" else "*.yaml"):
+                      name = yaml_file.stem
+                      stype = "scenario"
+                      
+                      # Check if it's a comparison (has variants:)
+                      content = yaml_file.read_text()
+                      if "variants:" in content:
+                          stype = "comparison"
+                      
+                      scenarios.append({
+                          "name": name,
+                          "path": str(yaml_file),
+                          "type": stype
+                      })
+                      
+                      if len(scenarios) >= 20:
+                          break
           
-          # Estimate cost (rough: $0.05-0.20 per scenario)
-          if [ "$TIER" == "ab_tests" ]; then
-            COST_PER=$(echo "scale=2; 0.50" | bc)  # Comparisons run multiple variants
-          else
-            COST_PER=$(echo "scale=2; 0.10" | bc)
-          fi
-          ESTIMATED=$(echo "scale=2; $COUNT * $COST_PER" | bc)
+          count = len(scenarios)
+          cost_per = 0.50 if tier == "ab_tests" else 0.10
+          estimated = round(count * cost_per, 2)
           
-          echo "scenarios=$SCENARIOS" >> $GITHUB_OUTPUT
-          echo "count=$COUNT" >> $GITHUB_OUTPUT
-          echo "estimated_cost=$ESTIMATED" >> $GITHUB_OUTPUT
+          # Write outputs
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"scenarios={json.dumps(scenarios)}\n")
+              f.write(f"count={count}\n")
+              f.write(f"estimated_cost={estimated}\n")
           
-          echo "📊 Found $COUNT scenarios"
-          echo "💰 Estimated cost: \$$ESTIMATED"
+          print(f"📊 Found {count} scenarios")
+          print(f"💰 Estimated cost: ${estimated}")
 
       - name: 📋 Discovery Summary
+        shell: python
         run: |
-          echo "## 🔍 Scenario Discovery" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Environment | ${{ steps.config.outputs.environment }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Tier | ${{ steps.config.outputs.tier }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Scenarios Found | ${{ steps.discover.outputs.count }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Estimated Cost | \$${{ steps.discover.outputs.estimated_cost }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Trigger | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          import json
+          import os
           
-          # List scenarios
-          if [ "${{ steps.discover.outputs.count }}" -gt "0" ]; then
-            echo "### Scenarios to Run" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            echo '${{ steps.discover.outputs.scenarios }}' | jq -r '.[] | "- \(.name) (\(.type))"' >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          fi
+          scenarios_json = '''${{ steps.discover.outputs.scenarios }}'''
+          scenarios = json.loads(scenarios_json) if scenarios_json else []
+          
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("## 🔍 Scenario Discovery\n\n")
+              f.write("| Setting | Value |\n")
+              f.write("|---------|-------|\n")
+              f.write("| Environment | ${{ steps.config.outputs.environment }} |\n")
+              f.write("| Tier | ${{ steps.config.outputs.tier }} |\n")
+              f.write("| Scenarios Found | ${{ steps.discover.outputs.count }} |\n")
+              f.write("| Estimated Cost | $${{ steps.discover.outputs.estimated_cost }} |\n")
+              f.write("| Trigger | ${{ github.event_name }} |\n\n")
+              
+              if scenarios:
+                  f.write("### Scenarios to Run\n```\n")
+                  for s in scenarios:
+                      f.write(f"- {s['name']} ({s['type']})\n")
+                  f.write("```\n")
 
   # ============================================================================
   # JOB: Run Evaluations
@@ -315,85 +324,85 @@ jobs:
 
       - name: 🎯 Run Evaluations
         id: run
+        shell: python
         run: |
-          SCENARIOS='${{ needs.setup.outputs.scenarios }}'
-          TIER="${{ needs.setup.outputs.tier }}"
-          MODEL_OVERRIDE="${{ inputs.model_variant }}"
-          FOUNDRY_EXPORT="${{ inputs.output_to_foundry }}"
+          import json
+          import subprocess
+          import time
+          import os
           
-          TOTAL=0
-          PASSED=0
-          FAILED=0
-          RESULTS="[]"
+          scenarios = json.loads('''${{ needs.setup.outputs.scenarios }}''')
+          tier = "${{ needs.setup.outputs.tier }}"
           
-          echo "🚀 Starting $TIER evaluation run..."
-          echo ""
+          total = 0
+          passed = 0
+          failed = 0
+          results = []
           
-          # Process each scenario
-          for row in $(echo "$SCENARIOS" | jq -r '.[] | @base64'); do
-            _jq() {
-              echo "${row}" | base64 --decode | jq -r ${1}
-            }
-            
-            NAME=$(_jq '.name')
-            PATH=$(_jq '.path')
-            TYPE=$(_jq '.type')
-            
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "🎯 Running: $NAME ($TYPE)"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            
-            TOTAL=$((TOTAL + 1))
-            START_TIME=$(date +%s)
-            
-            # Run evaluation
-            if [ "$TYPE" == "comparison" ]; then
-              CMD="python -m tests.evaluation.cli compare --input $PATH --output runs/results/$NAME"
-            else
-              CMD="python -m tests.evaluation.cli scenario --input $PATH --output runs/results/$NAME"
-            fi
-            
-            # Execute
-            set +e
-            OUTPUT=$(eval "$CMD" 2>&1)
-            EXIT_CODE=$?
-            set -e
-            
-            END_TIME=$(date +%s)
-            DURATION=$((END_TIME - START_TIME))
-            
-            # Determine status
-            if [ $EXIT_CODE -eq 0 ]; then
-              STATUS="passed"
-              PASSED=$((PASSED + 1))
-              echo "✅ $NAME completed in ${DURATION}s"
-            else
-              STATUS="failed"
-              FAILED=$((FAILED + 1))
-              echo "❌ $NAME failed (exit $EXIT_CODE)"
-              echo "$OUTPUT" | tail -20
-            fi
-            
-            # Collect result
-            RESULT="{\"name\": \"$NAME\", \"type\": \"$TYPE\", \"status\": \"$STATUS\", \"duration_s\": $DURATION, \"exit_code\": $EXIT_CODE}"
-            RESULTS=$(echo "$RESULTS" | jq -c ". + [$RESULT]")
-            
-            echo ""
-          done
+          print(f"🚀 Starting {tier} evaluation run...")
+          print()
           
-          # Save results metadata
-          echo "$RESULTS" > runs/artifacts/results.json
+          for scenario in scenarios:
+              name = scenario["name"]
+              path = scenario["path"]
+              stype = scenario["type"]
+              
+              print("━" * 50)
+              print(f"🎯 Running: {name} ({stype})")
+              print("━" * 50)
+              
+              total += 1
+              start_time = time.time()
+              
+              # Build command
+              if stype == "comparison":
+                  cmd = f"python -m tests.evaluation.cli compare --input {path} --output runs/results/{name}"
+              else:
+                  cmd = f"python -m tests.evaluation.cli scenario --input {path} --output runs/results/{name}"
+              
+              # Execute
+              result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+              exit_code = result.returncode
+              
+              duration = int(time.time() - start_time)
+              
+              if exit_code == 0:
+                  status = "passed"
+                  passed += 1
+                  print(f"✅ {name} completed in {duration}s")
+              else:
+                  status = "failed"
+                  failed += 1
+                  print(f"❌ {name} failed (exit {exit_code})")
+                  # Print last 20 lines of output
+                  output = result.stdout + result.stderr
+                  print("\n".join(output.split("\n")[-20:]))
+              
+              results.append({
+                  "name": name,
+                  "type": stype,
+                  "status": status,
+                  "duration_s": duration,
+                  "exit_code": exit_code
+              })
+              print()
+          
+          # Save results
+          os.makedirs("runs/artifacts", exist_ok=True)
+          with open("runs/artifacts/results.json", "w") as f:
+              json.dump(results, f, indent=2)
           
           # Set outputs
-          echo "total=$TOTAL" >> $GITHUB_OUTPUT
-          echo "passed=$PASSED" >> $GITHUB_OUTPUT
-          echo "failed=$FAILED" >> $GITHUB_OUTPUT
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"total={total}\n")
+              f.write(f"passed={passed}\n")
+              f.write(f"failed={failed}\n")
           
-          echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📊 EVALUATION COMPLETE"
-          echo "   Total: $TOTAL | Passed: $PASSED | Failed: $FAILED"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          print()
+          print("━" * 50)
+          print("📊 EVALUATION COMPLETE")
+          print(f"   Total: {total} | Passed: {passed} | Failed: {failed}")
+          print("━" * 50)
 
       - name: 📊 Generate Results Report
         if: always()
