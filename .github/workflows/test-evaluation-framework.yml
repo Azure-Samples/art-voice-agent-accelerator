@@ -5,13 +5,13 @@ on:
     branches: [main, staging]
     paths:
       - 'tests/evaluation/**'
-      - '.github/workflows/test-evaluation.yml'
+      - '.github/workflows/test-evaluation-framework.yml'
   pull_request:
     branches: [main, staging]
     paths:
       - 'tests/evaluation/**'
       - 'src/**'
-      - '.github/workflows/test-evaluation.yml'
+      - '.github/workflows/test-evaluation-framework.yml'
   workflow_dispatch:
     inputs:
       run_all_tests:

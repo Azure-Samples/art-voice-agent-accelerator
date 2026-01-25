@@ -1,0 +1,509 @@
+name: 🎯 Scenario Evaluation
+
+on:
+  # Manual trigger for on-demand evaluations
+  workflow_dispatch:
+    inputs:
+      scenario_tier:
+        description: 'Scenario tier to run'
+        required: true
+        default: 'smoke'
+        type: choice
+        options:
+          - smoke      # 2-3 critical paths (~$0.10-0.50)
+          - regression # Broader coverage (~$1-5)
+          - ab_tests   # Model comparisons (~$2-10)
+          - all        # Everything (~$5-20)
+      scenario_filter:
+        description: 'Scenario file pattern (e.g., fraud_*, banking_*)'
+        required: false
+        default: '*'
+        type: string
+      model_variant:
+        description: 'Override model for all scenarios'
+        required: false
+        type: choice
+        options:
+          - (use scenario default)
+          - gpt-4o
+          - gpt-4o-mini
+          - o1-preview
+          - o3-mini
+      output_to_foundry:
+        description: 'Export results to Azure AI Foundry'
+        required: false
+        default: false
+        type: boolean
+
+  # Scheduled smoke tests (weekly by default, can adjust)
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly Monday 6am UTC
+
+  # Run on release branches (optional quality gate)
+  push:
+    branches:
+      - main
+    paths:
+      - 'registries/agentstore/**'
+      - 'registries/scenariostore/**'
+      - 'src/aoai/**'
+      - 'tests/evaluation/scenarios/**'
+      - '.github/workflows/evaluate-scenarios.yml'
+
+env:
+  CI: true
+  PYTHONDONTWRITEBYTECODE: 1
+  PYTHONUNBUFFERED: 1
+  # Cost tracking
+  EVAL_STARTED_AT: ${{ github.run_id }}
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+
+jobs:
+  # ============================================================================
+  # JOB: Setup & Discovery
+  # ============================================================================
+  setup:
+    name: 🔍 Discover Scenarios
+    runs-on: ubuntu-latest
+    outputs:
+      scenarios: ${{ steps.discover.outputs.scenarios }}
+      scenario_count: ${{ steps.discover.outputs.count }}
+      estimated_cost: ${{ steps.discover.outputs.estimated_cost }}
+      tier: ${{ steps.config.outputs.tier }}
+      
+    steps:
+      - name: 🛒 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: ⚙️ Determine Configuration
+        id: config
+        run: |
+          # Determine tier from input or default for scheduled/push
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            TIER="${{ inputs.scenario_tier }}"
+          elif [ "${{ github.event_name }}" == "schedule" ]; then
+            TIER="smoke"
+          else
+            TIER="smoke"  # Push to main: just smoke tests
+          fi
+          
+          echo "tier=$TIER" >> $GITHUB_OUTPUT
+          echo "📊 Running tier: $TIER"
+
+      - name: 🔍 Discover Scenarios
+        id: discover
+        run: |
+          TIER="${{ steps.config.outputs.tier }}"
+          FILTER="${{ inputs.scenario_filter || '*' }}"
+          
+          # Define scenario directories per tier
+          declare -A TIER_DIRS
+          TIER_DIRS[smoke]="tests/evaluation/scenarios/smoke"
+          TIER_DIRS[regression]="tests/evaluation/scenarios/session_based tests/evaluation/scenarios/smoke"
+          TIER_DIRS[ab_tests]="tests/evaluation/scenarios/ab_tests"
+          TIER_DIRS[all]="tests/evaluation/scenarios"
+          
+          # Create smoke directory if it doesn't exist (with a placeholder)
+          mkdir -p tests/evaluation/scenarios/smoke
+          
+          # Find scenarios
+          SCENARIOS="[]"
+          COUNT=0
+          
+          for DIR in ${TIER_DIRS[$TIER]}; do
+            if [ -d "$DIR" ]; then
+              for file in $(find "$DIR" -name "${FILTER}.yaml" -type f 2>/dev/null | head -20); do
+                # Extract scenario info
+                NAME=$(basename "$file" .yaml)
+                TYPE="scenario"
+                
+                # Check if it's a comparison (has variants)
+                if grep -q "^variants:" "$file" 2>/dev/null; then
+                  TYPE="comparison"
+                fi
+                
+                SCENARIOS=$(echo "$SCENARIOS" | jq -c ". + [{\"name\": \"$NAME\", \"path\": \"$file\", \"type\": \"$TYPE\"}]")
+                COUNT=$((COUNT + 1))
+              done
+            fi
+          done
+          
+          # Estimate cost (rough: $0.05-0.20 per scenario)
+          if [ "$TIER" == "ab_tests" ]; then
+            COST_PER=$(echo "scale=2; 0.50" | bc)  # Comparisons run multiple variants
+          else
+            COST_PER=$(echo "scale=2; 0.10" | bc)
+          fi
+          ESTIMATED=$(echo "scale=2; $COUNT * $COST_PER" | bc)
+          
+          echo "scenarios=$SCENARIOS" >> $GITHUB_OUTPUT
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+          echo "estimated_cost=$ESTIMATED" >> $GITHUB_OUTPUT
+          
+          echo "📊 Found $COUNT scenarios"
+          echo "💰 Estimated cost: \$$ESTIMATED"
+
+      - name: 📋 Discovery Summary
+        run: |
+          echo "## 🔍 Scenario Discovery" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Tier | ${{ steps.config.outputs.tier }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Scenarios Found | ${{ steps.discover.outputs.count }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Estimated Cost | \$${{ steps.discover.outputs.estimated_cost }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Trigger | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # List scenarios
+          if [ "${{ steps.discover.outputs.count }}" -gt "0" ]; then
+            echo "### Scenarios to Run" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo '${{ steps.discover.outputs.scenarios }}' | jq -r '.[] | "- \(.name) (\(.type))"' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # ============================================================================
+  # JOB: Run Evaluations
+  # ============================================================================
+  evaluate:
+    name: 🎯 Run Evaluations
+    runs-on: ubuntu-latest
+    needs: setup
+    if: needs.setup.outputs.scenario_count != '0'
+    
+    env:
+      # Azure credentials (from repository secrets)
+      AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+      AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+      AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
+      AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
+      # Optional: App Config
+      AZURE_APPCONFIG_ENDPOINT: ${{ secrets.AZURE_APPCONFIG_ENDPOINT }}
+      # Optional: AI Foundry
+      AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: ${{ secrets.AZURE_AI_FOUNDRY_PROJECT_ENDPOINT }}
+      
+    steps:
+      - name: 🛒 Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🐍 Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 📦 Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: 🔧 Install dependencies
+        run: |
+          uv pip install --system -e ".[dev]"
+
+      - name: 🔐 Validate Azure Credentials
+        id: validate
+        run: |
+          MISSING=""
+          
+          if [ -z "$AZURE_OPENAI_ENDPOINT" ]; then
+            MISSING="${MISSING}AZURE_OPENAI_ENDPOINT "
+          fi
+          
+          if [ -z "$AZURE_OPENAI_API_KEY" ]; then
+            MISSING="${MISSING}AZURE_OPENAI_API_KEY "
+          fi
+          
+          if [ -n "$MISSING" ]; then
+            echo "❌ Missing required secrets: $MISSING"
+            echo "valid=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          echo "valid=true" >> $GITHUB_OUTPUT
+          echo "✅ Azure credentials validated"
+
+      - name: 📁 Create Output Directories
+        run: |
+          mkdir -p runs/results
+          mkdir -p runs/artifacts
+          mkdir -p runs/foundry
+
+      - name: 🎯 Run Evaluations
+        id: run
+        run: |
+          SCENARIOS='${{ needs.setup.outputs.scenarios }}'
+          TIER="${{ needs.setup.outputs.tier }}"
+          MODEL_OVERRIDE="${{ inputs.model_variant }}"
+          FOUNDRY_EXPORT="${{ inputs.output_to_foundry }}"
+          
+          TOTAL=0
+          PASSED=0
+          FAILED=0
+          RESULTS="[]"
+          
+          echo "🚀 Starting $TIER evaluation run..."
+          echo ""
+          
+          # Process each scenario
+          for row in $(echo "$SCENARIOS" | jq -r '.[] | @base64'); do
+            _jq() {
+              echo "${row}" | base64 --decode | jq -r ${1}
+            }
+            
+            NAME=$(_jq '.name')
+            PATH=$(_jq '.path')
+            TYPE=$(_jq '.type')
+            
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "🎯 Running: $NAME ($TYPE)"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            
+            TOTAL=$((TOTAL + 1))
+            START_TIME=$(date +%s)
+            
+            # Run evaluation
+            if [ "$TYPE" == "comparison" ]; then
+              CMD="python -m tests.evaluation.cli compare --input $PATH --output runs/results/$NAME"
+            else
+              CMD="python -m tests.evaluation.cli scenario --input $PATH --output runs/results/$NAME"
+            fi
+            
+            # Execute
+            set +e
+            OUTPUT=$(eval "$CMD" 2>&1)
+            EXIT_CODE=$?
+            set -e
+            
+            END_TIME=$(date +%s)
+            DURATION=$((END_TIME - START_TIME))
+            
+            # Determine status
+            if [ $EXIT_CODE -eq 0 ]; then
+              STATUS="passed"
+              PASSED=$((PASSED + 1))
+              echo "✅ $NAME completed in ${DURATION}s"
+            else
+              STATUS="failed"
+              FAILED=$((FAILED + 1))
+              echo "❌ $NAME failed (exit $EXIT_CODE)"
+              echo "$OUTPUT" | tail -20
+            fi
+            
+            # Collect result
+            RESULT="{\"name\": \"$NAME\", \"type\": \"$TYPE\", \"status\": \"$STATUS\", \"duration_s\": $DURATION, \"exit_code\": $EXIT_CODE}"
+            RESULTS=$(echo "$RESULTS" | jq -c ". + [$RESULT]")
+            
+            echo ""
+          done
+          
+          # Save results metadata
+          echo "$RESULTS" > runs/artifacts/results.json
+          
+          # Set outputs
+          echo "total=$TOTAL" >> $GITHUB_OUTPUT
+          echo "passed=$PASSED" >> $GITHUB_OUTPUT
+          echo "failed=$FAILED" >> $GITHUB_OUTPUT
+          
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📊 EVALUATION COMPLETE"
+          echo "   Total: $TOTAL | Passed: $PASSED | Failed: $FAILED"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      - name: 📊 Generate Results Report
+        if: always()
+        run: |
+          python << 'EOF'
+          import json
+          import os
+          from pathlib import Path
+          
+          results_dir = Path("runs/results")
+          artifacts_dir = Path("runs/artifacts")
+          
+          # Collect all summaries
+          all_summaries = []
+          all_comparisons = []
+          
+          for summary_file in results_dir.rglob("summary.json"):
+              with open(summary_file) as f:
+                  data = json.load(f)
+                  data["_source"] = str(summary_file.relative_to(results_dir))
+                  all_summaries.append(data)
+          
+          for comparison_file in results_dir.rglob("comparison.json"):
+              with open(comparison_file) as f:
+                  data = json.load(f)
+                  data["_source"] = str(comparison_file.relative_to(results_dir))
+                  all_comparisons.append(data)
+          
+          # Save aggregated results
+          report = {
+              "run_id": os.environ.get("GITHUB_RUN_ID", "local"),
+              "tier": os.environ.get("TIER", "unknown"),
+              "summaries": all_summaries,
+              "comparisons": all_comparisons,
+              "summary_count": len(all_summaries),
+              "comparison_count": len(all_comparisons),
+          }
+          
+          with open(artifacts_dir / "aggregated_results.json", "w") as f:
+              json.dump(report, f, indent=2)
+          
+          print(f"📊 Aggregated {len(all_summaries)} summaries, {len(all_comparisons)} comparisons")
+          EOF
+        env:
+          TIER: ${{ needs.setup.outputs.tier }}
+
+      - name: 📝 Generate Markdown Summary
+        if: always()
+        run: |
+          echo "## 🎯 Scenario Evaluation Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Total Scenarios | ${{ steps.run.outputs.total }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ✅ Passed | ${{ steps.run.outputs.passed }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ❌ Failed | ${{ steps.run.outputs.failed }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tier | ${{ needs.setup.outputs.tier }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Estimated Cost | \$${{ needs.setup.outputs.estimated_cost }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Add detailed results if available
+          if [ -f "runs/artifacts/aggregated_results.json" ]; then
+            echo "### 📋 Detailed Results" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # Parse and display scenario results
+            python << 'EOF' >> $GITHUB_STEP_SUMMARY
+          import json
+          from pathlib import Path
+          
+          try:
+              with open("runs/artifacts/aggregated_results.json") as f:
+                  data = json.load(f)
+              
+              # Scenario summaries
+              if data.get("summaries"):
+                  print("#### Single Scenarios")
+                  print("")
+                  print("| Scenario | Precision | Recall | P95 Latency | Cost |")
+                  print("|----------|-----------|--------|-------------|------|")
+                  for s in data["summaries"]:
+                      name = s.get("scenario_name", "unknown")
+                      prec = s.get("tool_metrics", {}).get("precision", 0)
+                      recall = s.get("tool_metrics", {}).get("recall", 0)
+                      p95 = s.get("latency_metrics", {}).get("e2e_p95_ms", 0)
+                      cost = s.get("cost_analysis", {}).get("estimated_cost_usd", 0)
+                      print(f"| {name} | {prec:.1%} | {recall:.1%} | {p95:.0f}ms | ${cost:.4f} |")
+                  print("")
+              
+              # Comparisons
+              if data.get("comparisons"):
+                  print("#### A/B Comparisons")
+                  print("")
+                  for c in data["comparisons"]:
+                      name = c.get("comparison_name", "unknown")
+                      print(f"**{name}**")
+                      print("")
+                      print("| Variant | Model | Precision | Recall | P95 Latency | Cost/Turn |")
+                      print("|---------|-------|-----------|--------|-------------|-----------|")
+                      for vid, vdata in c.get("variants", {}).items():
+                          model = vdata.get("primary_model", "unknown")
+                          metrics = vdata.get("metrics", {})
+                          prec = metrics.get("tool_precision", 0)
+                          recall = metrics.get("tool_recall", 0)
+                          p95 = metrics.get("latency_p95_ms", 0)
+                          cost = metrics.get("cost_per_turn_usd", 0)
+                          print(f"| {vid} | {model} | {prec:.1%} | {recall:.1%} | {p95:.0f}ms | ${cost:.4f} |")
+                      print("")
+                      
+                      # Winners
+                      if c.get("comparison"):
+                          print("**Winners:**")
+                          for metric, winner in c["comparison"].items():
+                              if metric.startswith("winner_"):
+                                  clean_metric = metric.replace("winner_", "")
+                                  print(f"- {clean_metric}: **{winner}**")
+                          print("")
+          except Exception as e:
+              print(f"Error generating summary: {e}")
+          EOF
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📁 Full results available in workflow artifacts." >> $GITHUB_STEP_SUMMARY
+
+      - name: 📤 Upload Results Artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evaluation-results-${{ github.run_number }}
+          path: |
+            runs/results/
+            runs/artifacts/
+          retention-days: 30
+
+      - name: 📤 Upload Foundry Export (if enabled)
+        uses: actions/upload-artifact@v4
+        if: always() && inputs.output_to_foundry == true
+        with:
+          name: foundry-export-${{ github.run_number }}
+          path: runs/**/foundry_eval.jsonl
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: ✅ Check Results
+        if: always()
+        run: |
+          FAILED="${{ steps.run.outputs.failed }}"
+          
+          if [ "$FAILED" -gt "0" ]; then
+            echo "❌ $FAILED scenario(s) failed"
+            exit 1
+          fi
+          
+          echo "✅ All scenarios passed!"
+
+  # ============================================================================
+  # JOB: Summary Report
+  # ============================================================================
+  summary:
+    name: 📊 Evaluation Summary
+    runs-on: ubuntu-latest
+    needs: [setup, evaluate]
+    if: always()
+    
+    steps:
+      - name: 📊 Generate Final Summary
+        run: |
+          echo "# 🎯 Evaluation Run Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Overview" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Tier | ${{ needs.setup.outputs.tier }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Scenarios | ${{ needs.setup.outputs.scenario_count }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Setup | ${{ needs.setup.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Evaluation | ${{ needs.evaluate.result == 'success' && '✅' || (needs.evaluate.result == 'skipped' && '⏭️' || '❌') }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- 📁 Download **evaluation-results** artifact for detailed JSON outputs" >> $GITHUB_STEP_SUMMARY
+          echo "- 📊 Check comparison.json files for A/B test winners" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔍 Review individual scenario summaries in results/" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📖 See [Evaluation Framework Docs](https://azure-samples.github.io/art-voice-agent-accelerator/testing/model-evaluation/) for details." >> $GITHUB_STEP_SUMMARY

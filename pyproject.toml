@@ -36,7 +36,7 @@ dependencies = [
     "starlette>=0.27.0",
     "redis>=5.0.0",
     "redis-entraid>=1.0.0",
-    "aiohttp>=3.9.0",
+    "aiohttp>=3.13.3",
     "python-multipart>=0.0.6",
     "pyjwt",
     # Azure services
@@ -67,7 +67,8 @@ dependencies = [
     "opentelemetry-instrumentation-urllib==0.58b0",
     "opentelemetry-instrumentation-urllib3==0.58b0",
     # Azure + misc
-    "azure-core>=1.29.0",
+    "azure-core>=1.38.0",
+    "urllib3>=2.6.3",
     "colorama>=0.4.6",
     # AI and OpenAI integration
     "openai>=1.50.0",
