@@ -114,6 +114,7 @@ jobs:
 
       - name: 🧪 Run Evaluation Tests
         run: |
+          set -o pipefail
           pytest tests/evaluation/ \
             -v \
             --tb=short \
