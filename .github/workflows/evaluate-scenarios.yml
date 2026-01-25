@@ -71,6 +71,7 @@ permissions:
   contents: read
   pull-requests: write
   actions: read
+  id-token: write  # Required for OIDC authentication with Azure
 
 jobs:
   # ============================================================================
@@ -193,21 +194,28 @@ jobs:
     environment: ${{ inputs.environment || 'dev' }}
     
     env:
-      # Azure credentials - endpoints from environment vars (set by deploy), keys from secrets
+      # Azure endpoints from environment vars (set by deploy)
       AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT || secrets.AZURE_OPENAI_ENDPOINT }}
-      AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
-      AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
       AZURE_SPEECH_REGION: ${{ vars.AZURE_SPEECH_REGION || secrets.AZURE_SPEECH_REGION }}
-      # Optional: App Config
       AZURE_APPCONFIG_ENDPOINT: ${{ vars.AZURE_APPCONFIG_ENDPOINT || secrets.AZURE_APPCONFIG_ENDPOINT }}
-      # Optional: AI Foundry
       AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: ${{ vars.AZURE_AI_FOUNDRY_PROJECT_ENDPOINT || secrets.AZURE_AI_FOUNDRY_PROJECT_ENDPOINT }}
+      # Use OIDC - DefaultAzureCredential will use the logged-in identity
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       
     steps:
       - name: 🛒 Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: 🔐 Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: 🐍 Setup Python 3.11
         uses: actions/setup-python@v5
@@ -223,7 +231,7 @@ jobs:
         run: |
           uv pip install --system -e ".[dev]"
 
-      - name: 🔐 Validate Azure Credentials
+      - name: 🔐 Validate Azure Configuration
         id: validate
         run: |
           MISSING=""
@@ -232,18 +240,22 @@ jobs:
             MISSING="${MISSING}AZURE_OPENAI_ENDPOINT "
           fi
           
-          if [ -z "$AZURE_OPENAI_API_KEY" ]; then
-            MISSING="${MISSING}AZURE_OPENAI_API_KEY "
+          if [ -z "$AZURE_CLIENT_ID" ]; then
+            MISSING="${MISSING}AZURE_CLIENT_ID "
+          fi
+          
+          if [ -z "$AZURE_TENANT_ID" ]; then
+            MISSING="${MISSING}AZURE_TENANT_ID "
           fi
           
           if [ -n "$MISSING" ]; then
-            echo "❌ Missing required secrets: $MISSING"
+            echo "❌ Missing required configuration: $MISSING"
             echo "valid=false" >> $GITHUB_OUTPUT
             exit 1
           fi
           
           echo "valid=true" >> $GITHUB_OUTPUT
-          echo "✅ Azure credentials validated"
+          echo "✅ Azure OIDC configuration validated"
 
       - name: 📁 Create Output Directories
         run: |
