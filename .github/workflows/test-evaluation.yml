@@ -359,7 +359,7 @@ jobs:
           echo "- **Generators**: Turn templates and dynamic content generation" >> $GITHUB_STEP_SUMMARY
           echo "- **Metrics**: Pluggable metrics (tool precision, latency, cost, etc.)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "📖 See [Evaluation Framework Docs](../../docs/testing/model-evaluation.md) for details." >> $GITHUB_STEP_SUMMARY
+          echo "📖 See [Evaluation Framework Docs](https://azure-samples.github.io/art-voice-agent-accelerator/testing/model-evaluation/) for details." >> $GITHUB_STEP_SUMMARY
 
       - name: ✅ Check Results
         run: |
