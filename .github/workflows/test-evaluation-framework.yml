@@ -119,9 +119,6 @@ jobs:
             -v \
             --tb=short \
             --junitxml=reports/evaluation-tests.xml \
-            --cov=tests/evaluation \
-            --cov-report=xml:reports/coverage.xml \
-            --cov-report=term-missing \
             -m "not evaluation" \
             2>&1 | tee reports/test-output.txt
         env:
@@ -162,19 +159,8 @@ jobs:
           name: test-results
           path: |
             reports/evaluation-tests.xml
-            reports/coverage.xml
             reports/test-output.txt
           retention-days: 30
-
-      - name: 📈 Upload Coverage to Codecov
-        uses: codecov/codecov-action@v4
-        if: always()
-        with:
-          files: reports/coverage.xml
-          flags: evaluation
-          name: evaluation-coverage
-          fail_ci_if_error: false
-        continue-on-error: true
 
   # ============================================================================
   # JOB: Schema Validation
