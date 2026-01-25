@@ -52,6 +52,7 @@ on:
   push:
     branches:
       - main
+      - staging
     paths:
       - 'registries/agentstore/**'
       - 'registries/scenariostore/**'
