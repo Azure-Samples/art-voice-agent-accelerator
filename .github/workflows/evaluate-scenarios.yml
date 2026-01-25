@@ -7,27 +7,26 @@ on:
       environment:
         description: 'Environment to use for Azure credentials'
         required: true
-        default: 'dev'
+        default: 'staging'
         type: choice
         options:
           - dev
           - staging
           - prod
-      scenario_tier:
-        description: 'Scenario tier to run'
+      scenario_selection:
+        description: 'Which scenarios to run'
         required: true
         default: 'smoke'
         type: choice
         options:
-          - smoke      # 2-3 critical paths (~$0.10-0.50)
-          - regression # Broader coverage (~$1-5)
-          - ab_tests   # Model comparisons (~$2-10)
-          - all        # Everything (~$5-20)
-      scenario_filter:
-        description: 'Scenario file pattern (e.g., fraud_*, banking_*)'
-        required: false
-        default: '*'
-        type: string
+          - smoke                           # Quick validation (~$0.10)
+          - session_based                   # Full session tests (~$1-2)
+          - ab_tests                        # Model comparisons (~$2-5)
+          - all                             # Everything (~$5-10)
+          - basic_identity_verification     # Single: smoke test
+          - banking_multi_agent             # Single: multi-agent banking
+          - all_agents_discovery            # Single: discover all agents
+          - fraud_detection_comparison      # Single: A/B fraud detection
       model_variant:
         description: 'Override model for all scenarios'
         required: false
@@ -44,27 +43,14 @@ on:
         default: false
         type: boolean
 
-  # Scheduled smoke tests (weekly by default, can adjust)
+  # Scheduled smoke tests (weekly)
   schedule:
     - cron: '0 6 * * 1'  # Weekly Monday 6am UTC
-
-  # Run on release branches (optional quality gate)
-  push:
-    branches:
-      - main
-      - staging
-    paths:
-      - 'registries/agentstore/**'
-      - 'registries/scenariostore/**'
-      - 'src/aoai/**'
-      - 'tests/evaluation/scenarios/**'
-      - '.github/workflows/evaluate-scenarios.yml'
 
 env:
   CI: true
   PYTHONDONTWRITEBYTECODE: 1
   PYTHONUNBUFFERED: 1
-  # Cost tracking
   EVAL_STARTED_AT: ${{ github.run_id }}
 
 permissions:
@@ -84,7 +70,7 @@ jobs:
       scenarios: ${{ steps.discover.outputs.scenarios }}
       scenario_count: ${{ steps.discover.outputs.count }}
       estimated_cost: ${{ steps.discover.outputs.estimated_cost }}
-      tier: ${{ steps.config.outputs.tier }}
+      selection: ${{ steps.config.outputs.selection }}
       environment: ${{ steps.config.outputs.environment }}
       
     steps:
@@ -101,27 +87,19 @@ jobs:
         run: |
           # Determine tier from input or default for scheduled/push
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            TIER="${{ inputs.scenario_tier }}"
+            SELECTION="${{ inputs.scenario_selection }}"
             ENV="${{ inputs.environment }}"
           elif [ "${{ github.event_name }}" == "schedule" ]; then
-            TIER="smoke"
-            ENV="dev"
+            SELECTION="smoke"
+            ENV="staging"
           else
-            TIER="smoke"  # Push: just smoke tests
-            # Determine environment from branch
-            BRANCH="${{ github.ref_name }}"
-            if [ "$BRANCH" == "main" ]; then
-              ENV="prod"
-            elif [ "$BRANCH" == "staging" ]; then
-              ENV="staging"
-            else
-              ENV="dev"
-            fi
+            SELECTION="smoke"
+            ENV="dev"
           fi
           
-          echo "tier=$TIER" >> $GITHUB_OUTPUT
+          echo "selection=$SELECTION" >> $GITHUB_OUTPUT
           echo "environment=$ENV" >> $GITHUB_OUTPUT
-          echo "📊 Running tier: $TIER"
+          echo "📊 Running: $SELECTION"
           echo "🌍 Environment: $ENV"
 
       - name: 🔍 Discover Scenarios
@@ -132,46 +110,62 @@ jobs:
           import os
           from pathlib import Path
           
-          tier = "${{ steps.config.outputs.tier }}"
-          filter_pattern = "${{ inputs.scenario_filter || '*' }}"
+          selection = "${{ steps.config.outputs.selection }}"
           
-          # Define scenario directories per tier
+          # Map of individual scenario names to their paths
+          single_scenarios = {
+              "basic_identity_verification": "tests/evaluation/scenarios/smoke/basic_identity_verification.yaml",
+              "banking_multi_agent": "tests/evaluation/scenarios/session_based/banking_multi_agent.yaml",
+              "all_agents_discovery": "tests/evaluation/scenarios/session_based/all_agents_discovery.yaml",
+              "fraud_detection_comparison": "tests/evaluation/scenarios/ab_tests/fraud_detection_comparison.yaml",
+          }
+          
+          # Map of tier names to directories
           tier_dirs = {
               "smoke": ["tests/evaluation/scenarios/smoke"],
-              "regression": ["tests/evaluation/scenarios/session_based", "tests/evaluation/scenarios/smoke"],
+              "session_based": ["tests/evaluation/scenarios/session_based"],
               "ab_tests": ["tests/evaluation/scenarios/ab_tests"],
               "all": ["tests/evaluation/scenarios"],
           }
           
-          # Create smoke directory if it doesn't exist
-          Path("tests/evaluation/scenarios/smoke").mkdir(parents=True, exist_ok=True)
-          
           scenarios = []
           
-          for dir_path in tier_dirs.get(tier, ["tests/evaluation/scenarios/smoke"]):
-              p = Path(dir_path)
-              if p.exists():
-                  for yaml_file in p.rglob(f"{filter_pattern}.yaml" if filter_pattern != "*" else "*.yaml"):
-                      name = yaml_file.stem
-                      stype = "scenario"
-                      
-                      # Check if it's a comparison (has variants:)
-                      content = yaml_file.read_text()
-                      if "variants:" in content:
-                          stype = "comparison"
-                      
-                      scenarios.append({
-                          "name": name,
-                          "path": str(yaml_file),
-                          "type": stype
-                      })
-                      
-                      if len(scenarios) >= 20:
-                          break
+          # Check if it's a single scenario selection
+          if selection in single_scenarios:
+              path = Path(single_scenarios[selection])
+              if path.exists():
+                  content = path.read_text()
+                  stype = "comparison" if "variants:" in content else "scenario"
+                  scenarios.append({
+                      "name": selection,
+                      "path": str(path),
+                      "type": stype
+                  })
+              else:
+                  print(f"⚠️ Scenario not found: {path}")
+          else:
+              # It's a tier selection - discover all scenarios in the directories
+              for dir_path in tier_dirs.get(selection, ["tests/evaluation/scenarios/smoke"]):
+                  p = Path(dir_path)
+                  if p.exists():
+                      for yaml_file in p.rglob("*.yaml"):
+                          name = yaml_file.stem
+                          content = yaml_file.read_text()
+                          stype = "comparison" if "variants:" in content else "scenario"
+                          
+                          scenarios.append({
+                              "name": name,
+                              "path": str(yaml_file),
+                              "type": stype
+                          })
+                          
+                          if len(scenarios) >= 20:
+                              break
           
           count = len(scenarios)
-          cost_per = 0.50 if tier == "ab_tests" else 0.10
-          estimated = round(count * cost_per, 2)
+          # Estimate cost based on scenario types
+          cost_estimate = sum(0.50 if s["type"] == "comparison" else 0.10 for s in scenarios)
+          estimated = round(cost_estimate, 2)
           
           # Write outputs
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
@@ -180,6 +174,8 @@ jobs:
               f.write(f"estimated_cost={estimated}\n")
           
           print(f"📊 Found {count} scenarios")
+          for s in scenarios:
+              print(f"  - {s['name']} ({s['type']})")
           print(f"💰 Estimated cost: ${estimated}")
 
       - name: 📋 Discovery Summary
@@ -196,7 +192,7 @@ jobs:
               f.write("| Setting | Value |\n")
               f.write("|---------|-------|\n")
               f.write("| Environment | ${{ steps.config.outputs.environment }} |\n")
-              f.write("| Tier | ${{ steps.config.outputs.tier }} |\n")
+              f.write("| Selection | ${{ steps.config.outputs.selection }} |\n")
               f.write("| Scenarios Found | ${{ steps.discover.outputs.count }} |\n")
               f.write("| Estimated Cost | $${{ steps.discover.outputs.estimated_cost }} |\n")
               f.write("| Trigger | ${{ github.event_name }} |\n\n")
@@ -332,14 +328,14 @@ jobs:
           import os
           
           scenarios = json.loads('''${{ needs.setup.outputs.scenarios }}''')
-          tier = "${{ needs.setup.outputs.tier }}"
+          selection = "${{ needs.setup.outputs.selection }}"
           
           total = 0
           passed = 0
           failed = 0
           results = []
           
-          print(f"🚀 Starting {tier} evaluation run...")
+          print(f"🚀 Starting {selection} evaluation run...")
           print()
           
           for scenario in scenarios:
@@ -434,7 +430,7 @@ jobs:
           # Save aggregated results
           report = {
               "run_id": os.environ.get("GITHUB_RUN_ID", "local"),
-              "tier": os.environ.get("TIER", "unknown"),
+              "selection": os.environ.get("SELECTION", "unknown"),
               "summaries": all_summaries,
               "comparisons": all_comparisons,
               "summary_count": len(all_summaries),
@@ -447,7 +443,7 @@ jobs:
           print(f"📊 Aggregated {len(all_summaries)} summaries, {len(all_comparisons)} comparisons")
           EOF
         env:
-          TIER: ${{ needs.setup.outputs.tier }}
+          SELECTION: ${{ needs.setup.outputs.selection }}
 
       - name: 📝 Generate Markdown Summary
         if: always()
@@ -459,7 +455,7 @@ jobs:
           echo "| Total Scenarios | ${{ steps.run.outputs.total }} |" >> $GITHUB_STEP_SUMMARY
           echo "| ✅ Passed | ${{ steps.run.outputs.passed }} |" >> $GITHUB_STEP_SUMMARY
           echo "| ❌ Failed | ${{ steps.run.outputs.failed }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Tier | ${{ needs.setup.outputs.tier }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Selection | ${{ needs.setup.outputs.selection }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Estimated Cost | \$${{ needs.setup.outputs.estimated_cost }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
@@ -577,7 +573,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Tier | ${{ needs.setup.outputs.tier }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Selection | ${{ needs.setup.outputs.selection }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Scenarios | ${{ needs.setup.outputs.scenario_count }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Setup | ${{ needs.setup.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Evaluation | ${{ needs.evaluate.result == 'success' && '✅' || (needs.evaluate.result == 'skipped' && '⏭️' || '❌') }} |" >> $GITHUB_STEP_SUMMARY
