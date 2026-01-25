@@ -199,10 +199,11 @@ jobs:
       AZURE_SPEECH_REGION: ${{ vars.AZURE_SPEECH_REGION || secrets.AZURE_SPEECH_REGION }}
       AZURE_APPCONFIG_ENDPOINT: ${{ vars.AZURE_APPCONFIG_ENDPOINT || secrets.AZURE_APPCONFIG_ENDPOINT }}
       AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: ${{ vars.AZURE_AI_FOUNDRY_PROJECT_ENDPOINT || secrets.AZURE_AI_FOUNDRY_PROJECT_ENDPOINT }}
-      # Use OIDC - DefaultAzureCredential will use the logged-in identity
-      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      # Azure credentials (from secrets, same as deploy template)
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
       
     steps:
       - name: 🛒 Checkout
@@ -210,12 +211,46 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: 🔍 Detect Authentication Method
+        id: detect-auth
+        run: |
+          if [ -z "${{ env.AZURE_CLIENT_SECRET }}" ]; then
+            echo "use_oidc=true" >> $GITHUB_OUTPUT
+            echo "📌 Using OIDC authentication"
+          else
+            echo "use_oidc=false" >> $GITHUB_OUTPUT
+            echo "📌 Using Service Principal authentication"
+          fi
+
       - name: 🔐 Azure Login (OIDC)
+        if: steps.detect-auth.outputs.use_oidc == 'true'
         uses: azure/login@v2
+        id: azure-login-oidc
+        continue-on-error: true
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: 🔐 Azure Login (Service Principal)
+        if: steps.detect-auth.outputs.use_oidc == 'false'
+        uses: azure/login@v2
+        id: azure-login-sp
+        with:
+          creds: '{"clientId":"${{ env.AZURE_CLIENT_ID }}","clientSecret":"${{ env.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ env.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ env.AZURE_TENANT_ID }}"}'
+
+      - name: ✅ Verify Authentication
+        id: auth-check
+        run: |
+          OIDC_SUCCESS="${{ steps.azure-login-oidc.outcome }}"
+          SP_SUCCESS="${{ steps.azure-login-sp.outcome }}"
+          
+          if [ "$OIDC_SUCCESS" = "success" ] || [ "$SP_SUCCESS" = "success" ]; then
+            echo "✅ Authentication successful"
+          else
+            echo "❌ Authentication failed"
+            exit 1
+          fi
 
       - name: 🐍 Setup Python 3.11
         uses: actions/setup-python@v5
@@ -255,7 +290,7 @@ jobs:
           fi
           
           echo "valid=true" >> $GITHUB_OUTPUT
-          echo "✅ Azure OIDC configuration validated"
+          echo "✅ Azure configuration validated"
 
       - name: 📁 Create Output Directories
         run: |
