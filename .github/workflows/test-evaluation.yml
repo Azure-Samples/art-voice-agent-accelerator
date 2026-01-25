@@ -214,9 +214,10 @@ jobs:
           from tests.evaluation.schemas import (
               ModelProfile,
               TurnEvent,
-              ScenarioConfig,
-              ComparisonConfig,
+              TurnScore,
               RunSummary,
+              ScenarioExpectations,
+              SessionAgentConfig,
           )
           
           print('✅ All schema imports successful')
@@ -290,45 +291,25 @@ jobs:
               TurnEvent,
               ToolCall,
               HandoffEvent,
-              ScenarioConfig,
-              ComparisonConfig,
+              ScenarioExpectations,
               RunSummary,
               TurnScore,
-              
-              # Hooks
-              TurnHook,
-              PreScoreHook,
-              HookRegistry,
-              
-              # Generators
-              TurnGenerator,
-              TurnExpander,
-              GeneratorRegistry,
-              turn_generator,
-              
-              # Metrics
-              MetricPlugin,
-              MetricResult,
-              MetricRegistry,
-              metric_plugin,
               
               # Core
               EventRecorder,
               MetricsScorer,
+              HookRegistry,
           )
+          
+          # Import additional schemas from submodule
+          from tests.evaluation.schemas import SessionAgentConfig
           
           print('✅ All module imports successful')
           print('')
           
           # Verify registries can be instantiated
           hook_registry = HookRegistry()
-          print(f'✅ HookRegistry created with {len(hook_registry._hooks)} built-in hooks')
-          
-          gen_registry = GeneratorRegistry()
-          print(f'✅ GeneratorRegistry created with {len(gen_registry._generators)} built-in generators')
-          
-          metric_registry = MetricRegistry()
-          print(f'✅ MetricRegistry created with {len(metric_registry._metrics)} built-in metrics')
+          print(f'✅ HookRegistry created')
           
           print('')
           print('🎉 All module integrations verified!')
@@ -344,10 +325,9 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Module | Components |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|------------|" >> $GITHUB_STEP_SUMMARY
-          echo "| schemas | ModelProfile, TurnEvent, ScenarioConfig |" >> $GITHUB_STEP_SUMMARY
-          echo "| hooks | TurnHook, PreScoreHook, HookRegistry |" >> $GITHUB_STEP_SUMMARY
-          echo "| generators | TurnGenerator, TurnExpander, GeneratorRegistry |" >> $GITHUB_STEP_SUMMARY
-          echo "| metrics | MetricPlugin, MetricResult, MetricRegistry |" >> $GITHUB_STEP_SUMMARY
+          echo "| schemas | ModelProfile, TurnEvent, ScenarioExpectations |" >> $GITHUB_STEP_SUMMARY
+          echo "| hooks | HookRegistry |" >> $GITHUB_STEP_SUMMARY
+          echo "| core | EventRecorder, MetricsScorer |" >> $GITHUB_STEP_SUMMARY
 
   # ============================================================================
   # JOB: Summary
