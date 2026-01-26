@@ -111,8 +111,7 @@ nav:
     - Unit & Integration Tests: operations/testing.md
     - Agent Evaluation:
       - Overview: testing/model-evaluation.md
-      - Framework Reference: testing/evaluation-framework.md
-      - Scenario YAML Reference: testing/evaluation-scenarios.md
+      - Evaluation Framework: testing/evaluation.md
     - Load Testing: operations/load-testing.md
   - Operations:
     - Monitoring: operations/monitoring.md

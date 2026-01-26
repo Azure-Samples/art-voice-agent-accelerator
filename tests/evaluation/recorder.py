@@ -261,6 +261,21 @@ class EventRecorder:
                 )
                 self._evidence_blobs.append(evidence)
 
+        # Finalize any incomplete tool calls (on_tool_end callback may not have fired)
+        finalized_tool_calls = []
+        for tc in self._tool_calls.values():
+            if tc.get("status") == "pending" or "end_ts" not in tc:
+                # Tool call started but never completed - finalize with current timestamp
+                tc["end_ts"] = timestamp
+                tc["duration_ms"] = (timestamp - tc["start_ts"]) * 1000
+                tc["status"] = "incomplete"
+                tc["result_hash"] = hashlib.sha256(b"<incomplete>").hexdigest()[:16]
+                tc["result_summary"] = "<tool callback not received>"
+                logger.warning(
+                    f"Tool call incomplete | tool={tc['name']} - finalizing with defaults"
+                )
+            finalized_tool_calls.append(ToolCall(**tc))
+
         # Build TurnEvent
         event = TurnEvent(
             session_id=self.run_id,
@@ -280,7 +295,7 @@ class EventRecorder:
             response_tokens=response_tokens,
             input_tokens=input_tokens,
             reasoning_tokens=reasoning_tokens,
-            tool_calls=[ToolCall(**tc) for tc in self._tool_calls.values()],
+            tool_calls=finalized_tool_calls,
             evidence_blobs=self._evidence_blobs,
             handoff=self._handoff,
             eval_model_config=model_config or self._default_model_config(),
