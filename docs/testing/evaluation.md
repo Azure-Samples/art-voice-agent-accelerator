@@ -5,30 +5,29 @@ Simplified evaluation framework for testing voice agent scenarios.
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        CLI (run / submit)                          │
-└───────────────────────────────┬─────────────────────────────────────┘
-                                │
-            ┌───────────────────┴───────────────────┐
-            ▼                                       ▼
-┌─────────────────────┐                 ┌─────────────────────┐
-│   ScenarioRunner    │                 │  ComparisonRunner   │
-│   (single YAML)     │◀────────────────│   (A/B tests)       │
-└─────────┬───────────┘                 └─────────────────────┘
-          │                              Creates ScenarioRunner
-          │                              per variant
-          ▼
-┌─────────────────────┐     ┌───────────────────┐
-│ EvaluationOrchest-  │────▶│   EventRecorder   │
-│ ratorWrapper        │     │  (JSONL writer)   │
-│ (event capture)     │     └───────────────────┘
-└─────────┬───────────┘
-          │
-          ▼
-┌─────────────────────┐     ┌───────────────────┐
-│   MetricsScorer     │────▶│  FoundryExporter  │
-│ (precision/recall)  │     │  (cloud eval)     │
-└─────────────────────┘     └───────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│                      CLI (run / submit)                       │
+└─────────────────────────────┬─────────────────────────────────┘
+                              │
+          ┌───────────────────┴───────────────────┐
+          ▼                                       ▼
+┌───────────────────────┐               ┌───────────────────────┐
+│    ScenarioRunner     │               │   ComparisonRunner    │
+│    (single YAML)      │◀──────────────│     (A/B tests)       │
+└───────────┬───────────┘               └───────────────────────┘
+            │                            Creates ScenarioRunner
+            │                            per variant
+            ▼
+┌───────────────────────┐     ┌───────────────────────┐
+│  EvalOrchestratorWrap │────▶│     EventRecorder     │
+│    (event capture)    │     │    (JSONL writer)     │
+└───────────┬───────────┘     └───────────────────────┘
+            │
+            ▼
+┌───────────────────────┐     ┌───────────────────────┐
+│    MetricsScorer      │────▶│    FoundryExporter    │
+│  (precision/recall)   │     │     (cloud eval)      │
+└───────────────────────┘     └───────────────────────┘
 ```
 
 ## Core Components
@@ -255,10 +254,10 @@ The `ComparisonRunner` orchestrates A/B tests:
 1. **Load comparison YAML** - Parses variants, turns, and thresholds
 2. **Resolve model profiles** - Expands `model_profile` references to `agent_overrides`
 3. **For each variant:**
-   - Creates a temporary scenario file
-   - Instantiates a `ScenarioRunner` with variant-specific model overrides
-   - Runs all turns and records events
-   - Generates per-variant summary
+    - Creates a temporary scenario file
+    - Instantiates a `ScenarioRunner` with variant-specific model overrides
+    - Runs all turns and records events
+    - Generates per-variant summary
 4. **Compare results** - Aggregates metrics and determines winners per metric
 5. **Output comparison report** - Saves `comparison.json` with detailed breakdown
 
