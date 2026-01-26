@@ -77,6 +77,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -434,6 +435,11 @@ async def test_session_scenario_e2e(
                 f"❌ No foundry_eval.jsonl found in {scenario_output}. "
                 f"Ensure scenario YAML has 'foundry_export.enabled: true'"
             )
+        
+        data_path = foundry_files[0]
+        config_path = data_path.parent / "evaluators_config.json"
+        eval_name = f"eval_{scenario_output.name}_{int(time.time())}"
+        
         result = await submit_to_foundry(
             data_path=data_path,
             evaluators_config_path=config_path if config_path.exists() else None,

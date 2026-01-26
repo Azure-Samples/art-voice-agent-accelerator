@@ -124,14 +124,68 @@ def submit_to_foundry_flag(request: pytest.FixtureRequest) -> bool:
     return request.config.getoption("--submit-to-foundry")
 
 
+def _load_azd_env_file() -> dict[str, str]:
+    """Load the azd environment file (.azure/<env>/.env) if it exists.
+    
+    Also constructs ai_foundry_project_endpoint from account_endpoint + project_id
+    if not directly available.
+    """
+    env_name = os.environ.get("AZURE_ENV_NAME", "")
+    if not env_name:
+        return {}
+    
+    azd_env_path = _project_root / ".azure" / env_name / ".env"
+    if not azd_env_path.exists():
+        return {}
+    
+    values = {}
+    with open(azd_env_path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, _, value = line.partition("=")
+                # Remove quotes if present
+                value = value.strip().strip('"').strip("'")
+                values[key] = value
+    
+    # If ai_foundry_project_endpoint not present, construct from available values
+    # This is a fallback until Terraform is re-provisioned
+    if "ai_foundry_project_endpoint" not in values:
+        account_endpoint = values.get("ai_foundry_account_endpoint", "")
+        project_id = values.get("ai_foundry_project_id", "")
+        
+        if account_endpoint and project_id:
+            # Extract project name from resource ID
+            # Format: /subscriptions/.../projects/<project-name>
+            if "/projects/" in project_id:
+                project_name = project_id.split("/projects/")[-1]
+                
+                # Extract resource name from account endpoint
+                # Input: https://artagentz8kttnsmaif.cognitiveservices.azure.com/
+                # Output resource name: artagentz8kttnsmaif
+                import re
+                match = re.match(r"https://([^.]+)\.", account_endpoint)
+                if match:
+                    resource_name = match.group(1)
+                    # Construct the project endpoint in the format expected by Azure AI Evaluations SDK
+                    # Format: https://{resource_name}.services.ai.azure.com/api/projects/{project_name}
+                    constructed_endpoint = f"https://{resource_name}.services.ai.azure.com/api/projects/{project_name}"
+                    values["ai_foundry_project_endpoint"] = constructed_endpoint
+                    print(f"ℹ Constructed Foundry endpoint: {constructed_endpoint}", file=sys.stderr)
+    
+    return values
+
+
 @pytest.fixture(scope="session")
 def foundry_endpoint(request: pytest.FixtureRequest) -> str | None:
-    """Get Foundry endpoint from CLI, environment, or app config.
+    """Get Foundry endpoint from CLI, environment, azd env, or app config.
     
     Resolution order:
     1. CLI option --foundry-endpoint
-    2. Environment variable AZURE_AI_FOUNDRY_PROJECT_ENDPOINT (set by App Config bootstrap)
-    3. Direct import from config module (fallback)
+    2. Environment variable AZURE_AI_FOUNDRY_PROJECT_ENDPOINT
+    3. azd env file (.azure/<env>/.env) - ai_foundry_project_endpoint
+    4. App Config lookup
+    5. Direct import from config module
     """
     # 1. CLI option takes precedence
     cli_endpoint = request.config.getoption("--foundry-endpoint")
@@ -139,27 +193,34 @@ def foundry_endpoint(request: pytest.FixtureRequest) -> str | None:
         return cli_endpoint
 
     # 2. Environment variable (App Config bootstrap populates os.environ)
-    # This is checked AFTER bootstrap_appconfig() runs at module init
-    env_endpoint = os.environ.get("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT")
-    if env_endpoint:
+    env_endpoint = os.environ.get("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT", "")
+    if env_endpoint and env_endpoint.startswith("https://"):
         return env_endpoint
 
-    # 3. Try get_config_value for dynamic lookup from App Configuration
+    # 3. Load from azd env file directly (.azure/<env>/.env)
+    # This is the most reliable source after Terraform provisioning
+    azd_values = _load_azd_env_file()
+    azd_endpoint = azd_values.get("ai_foundry_project_endpoint", "")
+    if azd_endpoint and azd_endpoint.startswith("https://"):
+        return azd_endpoint
+
+    # 4. Try get_config_value for dynamic lookup from App Configuration
     try:
         from apps.artagent.backend.config import get_config_value
         config_endpoint = get_config_value(
             "azure/ai-foundry/project-endpoint", 
             "AZURE_AI_FOUNDRY_PROJECT_ENDPOINT"
         )
-        if config_endpoint:
+        # Only accept valid HTTPS URLs (ignore error messages and empty strings)
+        if config_endpoint and config_endpoint.startswith("https://"):
             return config_endpoint
     except (ImportError, Exception):
         pass
 
-    # 4. Final fallback: direct import (for when settings loaded from .env.local)
+    # 5. Final fallback: direct import (for when settings loaded from .env.local)
     try:
         from apps.artagent.backend.config import AZURE_AI_FOUNDRY_PROJECT_ENDPOINT
-        if AZURE_AI_FOUNDRY_PROJECT_ENDPOINT:
+        if AZURE_AI_FOUNDRY_PROJECT_ENDPOINT and AZURE_AI_FOUNDRY_PROJECT_ENDPOINT.startswith("https://"):
             return AZURE_AI_FOUNDRY_PROJECT_ENDPOINT
     except ImportError:
         pass

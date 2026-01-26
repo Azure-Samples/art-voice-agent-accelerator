@@ -174,4 +174,20 @@ thresholds:
 
 # Optional: Foundry export
 foundry_export:
-  enabled: false
+  enabled: true
+  output_filename: foundry_eval.jsonl
+  context_source: evidence
+  evaluators:
+    - id: builtin.relevance
+      init_params:
+        deployment_name: gpt-4o
+      data_mapping:
+        query: "${data.query}"
+        response: "${data.response}"
+        context: "${data.context}"
+    - id: builtin.coherence
+      init_params:
+        deployment_name: gpt-4o
+      data_mapping:
+        query: "${data.query}"
+        response: "${data.response}"
