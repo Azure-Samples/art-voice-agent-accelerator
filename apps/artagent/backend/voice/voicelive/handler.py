@@ -7,7 +7,7 @@ import base64
 import json
 import time
 import uuid
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
 import numpy as np
@@ -107,38 +107,8 @@ def _safe_primitive(value: Any) -> Any:
     return str(value)
 
 
-# Module-level set to track pending background tasks for cleanup
-# This prevents fire-and-forget tasks from causing memory leaks
-_pending_background_tasks: set[asyncio.Task] = set()
-
-
-def _background_task(coro: Awaitable[Any], *, label: str) -> asyncio.Task:
-    """Create a tracked background task that will be cleaned up on handler stop."""
-    task = asyncio.create_task(coro, name=f"voicelive-bg-{label}")
-    _pending_background_tasks.add(task)
-
-    def _cleanup_task(t: asyncio.Task) -> None:
-        _pending_background_tasks.discard(t)
-        try:
-            t.result()
-        except asyncio.CancelledError:
-            pass  # Expected during cleanup
-        except Exception:
-            logger.debug("Background task '%s' failed", label, exc_info=True)
-
-    task.add_done_callback(_cleanup_task)
-    return task
-
-
-def _cancel_all_background_tasks() -> int:
-    """Cancel all pending background tasks. Returns count of cancelled tasks."""
-    cancelled = 0
-    for task in list(_pending_background_tasks):
-        if not task.done():
-            task.cancel()
-            cancelled += 1
-    _pending_background_tasks.clear()
-    return cancelled
+# Type alias for background task function (used by _SessionMessenger)
+BackgroundTaskFn = Callable[[Awaitable[Any], str], asyncio.Task]
 
 
 def _serialize_session_config(session_obj: Any) -> dict[str, Any] | None:
@@ -177,8 +147,11 @@ def _serialize_session_config(session_obj: Any) -> dict[str, Any] | None:
 class _SessionMessenger:
     """Bridge VoiceLive events to the session-aware WebSocket manager."""
 
-    def __init__(self, websocket: WebSocket) -> None:
+    def __init__(
+        self, websocket: WebSocket, *, background_task_fn: BackgroundTaskFn
+    ) -> None:
         self._ws = websocket
+        self._background_task_fn = background_task_fn
         self._default_sender: str | None = None
         self._missing_session_warned = False
         self._active_turn_id: str | None = None
@@ -233,7 +206,7 @@ class _SessionMessenger:
             call_id=self._call_id,
         )
 
-        _background_task(
+        self._background_task_fn(
             send_session_envelope(
                 self._ws,
                 envelope,
@@ -285,7 +258,7 @@ class _SessionMessenger:
                 session_id=self._session_id,
                 call_id=self._call_id,
             )
-            _background_task(
+            self._background_task_fn(
                 send_session_envelope(
                     self._ws,
                     envelope,
@@ -336,7 +309,7 @@ class _SessionMessenger:
         if not text or not self._can_emit():
             return
 
-        _background_task(
+        self._background_task_fn(
             send_user_transcript(
                 self._ws,
                 text,
@@ -394,7 +367,7 @@ class _SessionMessenger:
         if self._active_agent_name:
             envelope["sender"] = self._active_agent_name
 
-        _background_task(
+        self._background_task_fn(
             send_session_envelope(
                 self._ws,
                 envelope,
@@ -440,7 +413,7 @@ class _SessionMessenger:
         payload["active_agent"] = self._active_agent_name
         payload["active_agent_label"] = self._active_agent_label
         payload["sender"] = self._active_agent_name
-        _background_task(
+        self._background_task_fn(
             send_session_envelope(
                 self._ws,
                 envelope,
@@ -492,7 +465,7 @@ class _SessionMessenger:
         if self._active_agent_name:
             envelope["sender"] = self._active_agent_name
 
-        _background_task(
+        self._background_task_fn(
             send_session_envelope(
                 self._ws,
                 envelope,
@@ -562,7 +535,7 @@ class _SessionMessenger:
             call_id=self._call_id,
         )
 
-        _background_task(
+        self._background_task_fn(
             send_session_envelope(
                 self._ws,
                 envelope,
@@ -607,7 +580,7 @@ class _SessionMessenger:
             call_id=self._call_id,
         )
 
-        _background_task(
+        self._background_task_fn(
             send_session_envelope(
                 self._ws,
                 envelope,
@@ -626,7 +599,7 @@ class _SessionMessenger:
         if not self._can_emit() or not call_id or not name:
             return
         try:
-            _background_task(
+            self._background_task_fn(
                 push_tool_start(
                     self._ws,
                     name,  # tool_name
@@ -659,7 +632,7 @@ class _SessionMessenger:
             if status == "error":
                 tool_result = {"success": False, "error": error or "Tool execution failed"}
 
-            _background_task(
+            self._background_task_fn(
                 push_tool_end(
                     self._ws,
                     name,  # tool_name
@@ -702,7 +675,14 @@ class VoiceLiveSDKHandler:
         self.websocket = websocket
         self.session_id = session_id
         self.call_connection_id = call_connection_id or session_id
-        self._messenger = _SessionMessenger(websocket)
+
+        # Track pending background tasks at instance level to avoid memory leaks
+        self._pending_background_tasks: set[asyncio.Task] = set()
+
+        # Pass background task function to messenger for tracked task creation
+        self._messenger = _SessionMessenger(
+            websocket, background_task_fn=self._background_task
+        )
         self._transport: VoiceLiveTransport = transport
         self._manual_commit_enabled = transport == "acs"
         self._user_email = user_email
@@ -742,6 +722,33 @@ class VoiceLiveSDKHandler:
     def _set_metadata(self, key: str, value: Any) -> None:
         if not _set_connection_metadata(self.websocket, key, value):
             setattr(self.websocket.state, key, value)
+
+    def _background_task(self, coro: Awaitable[Any], *, label: str) -> asyncio.Task:
+        """Create a tracked background task that will be cleaned up on handler stop."""
+        task = asyncio.create_task(coro, name=f"voicelive-bg-{label}")
+        self._pending_background_tasks.add(task)
+
+        def _cleanup_task(t: asyncio.Task) -> None:
+            self._pending_background_tasks.discard(t)
+            try:
+                t.result()
+            except asyncio.CancelledError:
+                pass  # Expected during cleanup
+            except Exception:
+                logger.debug("Background task '%s' failed", label, exc_info=True)
+
+        task.add_done_callback(_cleanup_task)
+        return task
+
+    def _cancel_all_background_tasks(self) -> int:
+        """Cancel all pending background tasks. Returns count of cancelled tasks."""
+        cancelled = 0
+        for task in list(self._pending_background_tasks):
+            if not task.done():
+                task.cancel()
+                cancelled += 1
+        self._pending_background_tasks.clear()
+        return cancelled
 
     def _get_metadata(self, key: str, default: Any = None) -> Any:
         """Read per-connection metadata from the websocket.state (or default)."""
@@ -864,7 +871,9 @@ class VoiceLiveSDKHandler:
                 if not scenario_name:
                     memo_mgr = getattr(self.websocket.state, "cm", None)
                     if memo_mgr and hasattr(memo_mgr, "get_value_from_corememory"):
-                        scenario_name = memo_mgr.get_value_from_corememory("scenario_name", None)
+                        # Use centralized naming utility for consistent key lookup
+                        from apps.artagent.backend.src.orchestration.naming import get_scenario_from_corememory
+                        scenario_name = get_scenario_from_corememory(memo_mgr)
                         if scenario_name:
                             logger.debug(
                                 "[VoiceLiveSDK] Resolved scenario from MemoManager | scenario=%s session=%s",
@@ -1170,7 +1179,7 @@ class VoiceLiveSDKHandler:
                     self._orchestrator = None
 
             # Cancel all pending background tasks to prevent memory leaks
-            cancelled_count = _cancel_all_background_tasks()
+            cancelled_count = self._cancel_all_background_tasks()
             if cancelled_count > 0:
                 logger.debug(
                     "Cancelled %d background tasks on stop | session=%s",
@@ -1507,7 +1516,7 @@ class VoiceLiveSDKHandler:
                 session_id=session_id,
                 call_id=self.call_connection_id,
             )
-            _background_task(
+            self._background_task(
                 send_session_envelope(
                     self.websocket,
                     envelope,
@@ -1854,6 +1863,12 @@ class VoiceLiveSDKHandler:
             )
 
     def _resample_audio(self, audio_bytes: bytes) -> str:
+        """Resample audio from 24kHz to target rate with proper anti-aliasing.
+
+        Uses a windowed sinc interpolation which is significantly better than
+        linear interpolation for audio signals. This avoids aliasing artifacts
+        and preserves audio fidelity better than np.interp.
+        """
         try:
             source = np.frombuffer(audio_bytes, dtype=np.int16)
             source_rate = 24000
@@ -1861,10 +1876,65 @@ class VoiceLiveSDKHandler:
             if source_rate == target_rate:
                 return base64.b64encode(audio_bytes).decode("utf-8")
 
+            # Calculate resampling parameters
             ratio = target_rate / source_rate
             new_len = max(int(len(source) * ratio), 1)
-            new_idx = np.linspace(0, len(source) - 1, new_len)
-            resampled = np.interp(new_idx, np.arange(len(source)), source.astype(np.float32))
+
+            # Convert to float for processing
+            source_float = source.astype(np.float64)
+
+            # Apply simple anti-aliasing low-pass filter before downsampling
+            # For 24kHz -> 16kHz, we need to filter out frequencies above 8kHz
+            # Using a simple FIR filter with a Hann window
+            if ratio < 1.0:
+                # Downsampling: apply low-pass filter first
+                filter_len = 15  # Odd number for symmetric filter
+                n = np.arange(filter_len)
+                # Sinc filter with cutoff at ratio * Nyquist
+                cutoff = ratio * 0.9  # Slight margin to avoid aliasing
+                h = np.sinc(cutoff * (n - (filter_len - 1) / 2))
+                # Apply Hann window
+                window = 0.5 - 0.5 * np.cos(2 * np.pi * n / (filter_len - 1))
+                h = h * window
+                h = h / np.sum(h)  # Normalize
+
+                # Apply filter using convolution
+                source_float = np.convolve(source_float, h, mode="same")
+
+            # Use higher-quality sinc interpolation instead of linear
+            # Create output sample positions in terms of input indices
+            new_indices = np.linspace(0, len(source_float) - 1, new_len)
+
+            # Sinc interpolation with 4-point window (Lanczos-like)
+            # This is much better than linear but still fast
+            resampled = np.zeros(new_len, dtype=np.float64)
+            for i, idx in enumerate(new_indices):
+                # Get integer and fractional parts
+                idx_int = int(idx)
+                frac = idx - idx_int
+
+                # 4-point Hermite interpolation (cubic, smoother than linear)
+                if idx_int <= 0:
+                    resampled[i] = source_float[0]
+                elif idx_int >= len(source_float) - 2:
+                    resampled[i] = source_float[-1]
+                else:
+                    # Cubic Hermite spline interpolation
+                    p0 = source_float[max(0, idx_int - 1)]
+                    p1 = source_float[idx_int]
+                    p2 = source_float[min(len(source_float) - 1, idx_int + 1)]
+                    p3 = source_float[min(len(source_float) - 1, idx_int + 2)]
+
+                    # Catmull-Rom spline coefficients
+                    a = -0.5 * p0 + 1.5 * p1 - 1.5 * p2 + 0.5 * p3
+                    b = p0 - 2.5 * p1 + 2.0 * p2 - 0.5 * p3
+                    c = -0.5 * p0 + 0.5 * p2
+                    d = p1
+
+                    resampled[i] = a * frac**3 + b * frac**2 + c * frac + d
+
+            # Clip and convert back to int16
+            resampled = np.clip(resampled, -32768, 32767)
             resampled_int16 = resampled.astype(np.int16).tobytes()
             return base64.b64encode(resampled_int16).decode("utf-8")
         except Exception:

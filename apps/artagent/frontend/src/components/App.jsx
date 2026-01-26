@@ -1298,6 +1298,10 @@ function RealTimeVoiceApp() {
 
   // Initialize playback audio context and worklet (call on user gesture)
   const initializeAudioPlayback = async () => {
+    if (playbackAudioContextRef.current?.state === "closed") {
+      playbackAudioContextRef.current = null;
+      pcmSinkRef.current = null;
+    }
     if (playbackAudioContextRef.current) return; // Already initialized
     if (audioInitFailedRef.current) return; // Already failed, don't retry
     if (audioInitAttemptedRef.current) return; // Already attempting
@@ -3707,18 +3711,27 @@ function RealTimeVoiceApp() {
                   <button
                     key={id}
                     onClick={async () => {
+                      let templateStartAgent = null;
                       // Apply industry template to session on backend
                       try {
-                        await fetch(
+                        const response = await fetch(
                           `${API_BASE_URL}/api/v1/scenario-builder/session/${sessionId}/apply-template?template_id=${encodeURIComponent(id)}`,
                           { method: 'POST' }
                         );
+                        if (response.ok) {
+                          const data = await response.json();
+                          templateStartAgent = data?.scenario?.start_agent || null;
+                        }
                         appendLog(`${icon} Applied ${label} template to session ${sessionId}`);
                       } catch (err) {
                         appendLog(`Failed to apply template: ${err.message}`);
                       }
                       
                       setSessionScenario(id);
+                      if (templateStartAgent) {
+                        currentAgentRef.current = templateStartAgent;
+                        setSelectedAgentName(templateStartAgent);
+                      }
                       setShowScenarioMenu(false);
                       appendLog(`${icon} Switched to ${label} for session ${sessionId}`);
                       
@@ -3806,17 +3819,29 @@ function RealTimeVoiceApp() {
                         <button
                           key={scenarioKey}
                           onClick={async () => {
-                            // Set active scenario on backend
+                            let scenarioStartAgent = scenario.start_agent || scenario.agents?.[0] || null;
+                            // Set active scenario on backend and get the confirmed start_agent
                             try {
-                              await fetch(
+                              const response = await fetch(
                                 `${API_BASE_URL}/api/v1/scenario-builder/session/${sessionId}/active?scenario_name=${encodeURIComponent(scenario.name)}`,
                                 { method: 'POST' }
                               );
+                              if (response.ok) {
+                                const data = await response.json();
+                                // Use backend-confirmed start_agent if available
+                                if (data.scenario?.start_agent) {
+                                  scenarioStartAgent = data.scenario.start_agent;
+                                }
+                              }
                             } catch (err) {
                               appendLog(`Failed to set active scenario: ${err.message}`);
                             }
                             
                             setSessionScenario(scenarioKey);
+                            if (scenarioStartAgent) {
+                              currentAgentRef.current = scenarioStartAgent;
+                              setSelectedAgentName(scenarioStartAgent);
+                            }
                             setShowScenarioMenu(false);
                             appendLog(`${scenarioIcon} Switched to Custom Scenario: ${scenario.name}`);
                             
@@ -3890,20 +3915,42 @@ function RealTimeVoiceApp() {
                   </>
                 )}
 
-                <div style={{
-                  marginTop: '8px',
-                  padding: '8px 10px 6px',
-                  borderRadius: '10px',
-                  background: 'rgba(148,163,184,0.08)',
-                  color: '#475569',
-                  fontSize: '11px',
-                  lineHeight: 1.4,
-                  border: '1px dashed rgba(148,163,184,0.35)',
-                }}>
-                  {sessionScenarioConfig?.scenarios?.length > 0 
-                    ? 'Switch between scenarios for this session'
-                    : 'Create a custom scenario in the Scenario Builder'}
-                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBuilderInitialMode('scenarios');
+                    setShowAgentScenarioBuilder(true);
+                    setShowScenarioMenu(false);
+                  }}
+                  style={{
+                    width: '100%',
+                    marginTop: sessionScenarioConfig?.scenarios?.length > 0 ? '10px' : '6px',
+                    padding: '10px 14px',
+                    borderRadius: '10px',
+                    border: '1px dashed rgba(59,130,246,0.35)',
+                    background: 'linear-gradient(135deg, rgba(59,130,246,0.08), rgba(37,99,235,0.06))',
+                    color: '#1d4ed8',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                    textAlign: 'left',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'linear-gradient(135deg, rgba(59,130,246,0.16), rgba(37,99,235,0.12))';
+                    e.currentTarget.style.borderColor = 'rgba(59,130,246,0.55)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'linear-gradient(135deg, rgba(59,130,246,0.08), rgba(37,99,235,0.06))';
+                    e.currentTarget.style.borderColor = 'rgba(59,130,246,0.35)';
+                  }}
+                >
+                  <span style={{ fontSize: '16px' }}>➕</span>
+                  <span>Create custom scenario…</span>
+                </button>
               </div>
             )}
           </div>
@@ -4343,13 +4390,13 @@ function RealTimeVoiceApp() {
       sessionProfile={activeSessionProfile}
       onAgentCreated={(agentConfig) => {
         appendLog(`✨ Dynamic agent created: ${agentConfig.name}`);
-        appendSystemMessage(`🤖 Agent "${agentConfig.name}" is now active`, {
+        appendSystemMessage(`🤖 Agent "${agentConfig.name}" created and available`, {
           tone: "success",
           statusCaption: `Tools: ${agentConfig.tools?.length || 0} · Voice: ${agentConfig.voice?.name || 'default'}`,
-          statusLabel: "Agent Active",
+          statusLabel: "Agent Created",
         });
-        // Set the created agent as the active agent
-        setSelectedAgentName(agentConfig.name);
+        // Note: Do NOT auto-select the created agent to prevent unintended scenario changes
+        // User can explicitly select the agent if they want to use it
         fetchSessionAgentConfig();
         // Refresh agent inventory to include the new session agent
         setAgentInventory((prev) => {
@@ -4437,12 +4484,13 @@ function RealTimeVoiceApp() {
       }
       onAgentCreated={(agentConfig) => {
         appendLog(`✨ Dynamic agent created: ${agentConfig.name}`);
-        appendSystemMessage(`🤖 Agent "${agentConfig.name}" is now active`, {
+        appendSystemMessage(`🤖 Agent "${agentConfig.name}" created and available`, {
           tone: "success",
           statusCaption: `Tools: ${agentConfig.tools?.length || 0} · Voice: ${agentConfig.voice?.name || 'default'}`,
-          statusLabel: "Agent Active",
+          statusLabel: "Agent Created",
         });
-        setSelectedAgentName(agentConfig.name);
+        // Note: Do NOT auto-select the created agent to prevent unintended scenario changes
+        // User can explicitly select the agent if they want to use it
         fetchSessionAgentConfig();
         setAgentInventory((prev) => {
           if (!prev) return prev;

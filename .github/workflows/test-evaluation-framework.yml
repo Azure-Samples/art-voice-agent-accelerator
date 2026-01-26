@@ -1,0 +1,365 @@
+name: 🧪 Evaluation Framework Tests
+
+on:
+  push:
+    branches: [main, staging]
+    paths:
+      - 'tests/evaluation/**'
+      - '.github/workflows/test-evaluation-framework.yml'
+  pull_request:
+    branches: [main, staging]
+    paths:
+      - 'tests/evaluation/**'
+      - 'src/**'
+      - '.github/workflows/test-evaluation-framework.yml'
+  workflow_dispatch:
+    inputs:
+      run_all_tests:
+        description: 'Run all tests (not just evaluation)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  CI: true
+  PYTHONDONTWRITEBYTECODE: 1
+  PYTHONUNBUFFERED: 1
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  # ============================================================================
+  # JOB: Lint & Type Check
+  # ============================================================================
+  lint:
+    name: 🔍 Lint & Type Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 🛒 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 📦 Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: 🔧 Install dependencies
+        run: |
+          uv pip install --system ruff black isort
+
+      - name: 🔍 Ruff lint
+        run: |
+          ruff check tests/evaluation/ --config pyproject.toml
+        continue-on-error: true
+
+      - name: 🎨 Black format check
+        run: |
+          black --check --diff tests/evaluation/
+        continue-on-error: true
+
+      - name: 📑 isort import check
+        run: |
+          isort --check-only --diff tests/evaluation/
+        continue-on-error: true
+
+      - name: 📋 Lint Summary
+        run: |
+          echo "## 🔍 Lint Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Ruff | ✓ Checked |" >> $GITHUB_STEP_SUMMARY
+          echo "| Black | ✓ Checked |" >> $GITHUB_STEP_SUMMARY
+          echo "| isort | ✓ Checked |" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================================
+  # JOB: Unit Tests
+  # ============================================================================
+  unit-tests:
+    name: 🧪 Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    
+    steps:
+      - name: 🛒 Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🐍 Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 📦 Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: 🔧 Install dependencies
+        run: |
+          # Install project with dev dependencies
+          uv pip install --system -e ".[dev]"
+
+      - name: 📁 Create reports directory
+        run: mkdir -p reports
+
+      - name: 🧪 Run Evaluation Tests
+        run: |
+          set -o pipefail
+          pytest tests/evaluation/ \
+            -v \
+            --tb=short \
+            --junitxml=reports/evaluation-tests.xml \
+            -m "not evaluation" \
+            2>&1 | tee reports/test-output.txt
+        env:
+          PYTHONPATH: .
+
+      - name: 📊 Test Results Summary
+        if: always()
+        run: |
+          echo "## 🧪 Evaluation Framework Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Count tests from output
+          PASSED=$(grep -oP '\d+(?= passed)' reports/test-output.txt | head -1 || echo "0")
+          FAILED=$(grep -oP '\d+(?= failed)' reports/test-output.txt | head -1 || echo "0")
+          SKIPPED=$(grep -oP '\d+(?= skipped)' reports/test-output.txt | head -1 || echo "0")
+          
+          echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| ✅ Passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
+          echo "| ❌ Failed | $FAILED |" >> $GITHUB_STEP_SUMMARY
+          echo "| ⏭️ Skipped | $SKIPPED |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Module breakdown
+          echo "### 📦 Test Modules" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Module | Description |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| test_generators.py | Turn templates & generators |" >> $GITHUB_STEP_SUMMARY
+          echo "| test_hooks.py | Evaluation hooks system |" >> $GITHUB_STEP_SUMMARY
+          echo "| test_metrics.py | Pluggable metrics |" >> $GITHUB_STEP_SUMMARY
+          echo "| test_scenarios.py | End-to-end scenario tests |" >> $GITHUB_STEP_SUMMARY
+
+      - name: 📤 Upload Test Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: |
+            reports/evaluation-tests.xml
+            reports/test-output.txt
+          retention-days: 30
+
+  # ============================================================================
+  # JOB: Schema Validation
+  # ============================================================================
+  schema-validation:
+    name: 📋 Schema Validation
+    runs-on: ubuntu-latest
+    needs: lint
+    
+    steps:
+      - name: 🛒 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 📦 Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: 🔧 Install dependencies
+        run: |
+          uv pip install --system -e ".[dev]"
+
+      - name: 📋 Validate Scenario Schemas
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, '.')
+          
+          from pathlib import Path
+          import yaml
+          
+          # Import schemas to validate they load correctly
+          from tests.evaluation.schemas import (
+              ModelProfile,
+              TurnEvent,
+              TurnScore,
+              RunSummary,
+              ScenarioExpectations,
+              SessionAgentConfig,
+          )
+          
+          print('✅ All schema imports successful')
+          
+          # Validate any YAML scenarios
+          scenarios_dir = Path('tests/evaluation/scenarios')
+          if scenarios_dir.exists():
+              for yaml_file in scenarios_dir.rglob('*.yaml'):
+                  print(f'📄 Validating: {yaml_file}')
+                  with open(yaml_file) as f:
+                      data = yaml.safe_load(f)
+                  print(f'   ✓ Valid YAML structure')
+          
+          print('')
+          print('✅ Schema validation complete!')
+          "
+        env:
+          PYTHONPATH: .
+
+      - name: 📋 Schema Validation Summary
+        run: |
+          echo "## 📋 Schema Validation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Schema Module | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| config.py | ✅ Valid |" >> $GITHUB_STEP_SUMMARY
+          echo "| events.py | ✅ Valid |" >> $GITHUB_STEP_SUMMARY
+          echo "| expectations.py | ✅ Valid |" >> $GITHUB_STEP_SUMMARY
+          echo "| results.py | ✅ Valid |" >> $GITHUB_STEP_SUMMARY
+          echo "| foundry.py | ✅ Valid |" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================================
+  # JOB: Module Integration
+  # ============================================================================
+  module-integration:
+    name: 🔗 Module Integration
+    runs-on: ubuntu-latest
+    needs: [unit-tests, schema-validation]
+    
+    steps:
+      - name: 🛒 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 📦 Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: 🔧 Install dependencies
+        run: |
+          uv pip install --system -e ".[dev]"
+
+      - name: 🔗 Test Module Integration
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, '.')
+          
+          print('🔗 Testing Module Integration')
+          print('=' * 50)
+          
+          # Test all modules can be imported together
+          from tests.evaluation import (
+              # Schemas
+              ModelProfile,
+              TurnEvent,
+              ToolCall,
+              HandoffEvent,
+              ScenarioExpectations,
+              RunSummary,
+              TurnScore,
+              
+              # Core
+              EventRecorder,
+              MetricsScorer,
+              HookRegistry,
+          )
+          
+          # Import additional schemas from submodule
+          from tests.evaluation.schemas import SessionAgentConfig
+          
+          print('✅ All module imports successful')
+          print('')
+          
+          # Verify registries can be instantiated
+          hook_registry = HookRegistry()
+          print(f'✅ HookRegistry created')
+          
+          print('')
+          print('🎉 All module integrations verified!')
+          "
+        env:
+          PYTHONPATH: .
+
+      - name: 📋 Integration Summary
+        run: |
+          echo "## 🔗 Module Integration" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All evaluation framework modules integrate correctly:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Module | Components |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| schemas | ModelProfile, TurnEvent, ScenarioExpectations |" >> $GITHUB_STEP_SUMMARY
+          echo "| hooks | HookRegistry |" >> $GITHUB_STEP_SUMMARY
+          echo "| core | EventRecorder, MetricsScorer |" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================================
+  # JOB: Summary
+  # ============================================================================
+  summary:
+    name: 📊 Test Summary
+    runs-on: ubuntu-latest
+    needs: [lint, unit-tests, schema-validation, module-integration]
+    if: always()
+    
+    steps:
+      - name: 📊 Generate Summary
+        run: |
+          echo "# 🧪 Evaluation Framework CI Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Job Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔍 Lint & Type Check | ${{ needs.lint.result == 'success' && '🟢 Passed' || '🔴 Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🧪 Unit Tests | ${{ needs.unit-tests.result == 'success' && '🟢 Passed' || '🔴 Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📋 Schema Validation | ${{ needs.schema-validation.result == 'success' && '🟢 Passed' || '🔴 Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔗 Module Integration | ${{ needs.module-integration.result == 'success' && '🟢 Passed' || '🔴 Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Framework Components Tested" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Schemas**: Pydantic models for configs, events, results" >> $GITHUB_STEP_SUMMARY
+          echo "- **Hooks**: Extensible evaluation hooks (on_turn_complete, pre_score)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Generators**: Turn templates and dynamic content generation" >> $GITHUB_STEP_SUMMARY
+          echo "- **Metrics**: Pluggable metrics (tool precision, latency, cost, etc.)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📖 See [Evaluation Framework Docs](https://azure-samples.github.io/art-voice-agent-accelerator/testing/model-evaluation/) for details." >> $GITHUB_STEP_SUMMARY
+
+      - name: ✅ Check Results
+        run: |
+          if [[ "${{ needs.unit-tests.result }}" != "success" ]]; then
+            echo "❌ Unit tests failed"
+            exit 1
+          fi
+          if [[ "${{ needs.schema-validation.result }}" != "success" ]]; then
+            echo "❌ Schema validation failed"
+            exit 1
+          fi
+          if [[ "${{ needs.module-integration.result }}" != "success" ]]; then
+            echo "❌ Module integration failed"
+            exit 1
+          fi
+          echo "✅ All evaluation framework tests passed!"

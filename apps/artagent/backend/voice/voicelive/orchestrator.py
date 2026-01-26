@@ -69,6 +69,7 @@ if TYPE_CHECKING:
     from src.stateful.state_managment import MemoManager
 
 from apps.artagent.backend.registries.agentstore.base import UnifiedAgent
+from apps.artagent.backend.src.orchestration.naming import agent_key, find_agent_by_name
 
 from apps.artagent.backend.src.utils.tracing import (
     create_service_dependency_attrs,
@@ -282,8 +283,12 @@ class LiveOrchestrator:
             except AttributeError:
                 logger.debug("Messenger does not support set_active_agent", exc_info=True)
 
-        if self.active not in self.agents:
+        # Use case-insensitive lookup for start agent validation
+        actual_key, _ = find_agent_by_name(self.agents, self.active)
+        if actual_key is None:
             raise ValueError(f"Start agent '{self.active}' not found in registry")
+        # Normalize active to the actual key in agents dict
+        self.active = actual_key
 
         # Initialize the tool registry
         initialize_tools()
@@ -1278,6 +1283,14 @@ class LiveOrchestrator:
                 has_handoff = bool(system_vars.get("handoff_context"))
                 switch_span.set_attribute("voicelive.is_handoff", has_handoff)
 
+                # For handoffs, clear the last assistant message to prevent the new agent
+                # from thinking IT said the old agent's handoff statement (e.g., "I'll connect you
+                # to our card specialist"). This prevents the new agent from trying to repeat
+                # or complete the handoff.
+                if has_handoff:
+                    self._last_assistant_message = None
+                    logger.debug("[Agent Switch] Cleared last assistant message for handoff")
+
                 # For handoffs, DON'T use the handoff_message as a greeting.
                 # The handoff_message is meant for the OLD agent to say ("I'll connect you to...")
                 # but by the time we're here, the session has switched to the NEW agent.
@@ -1669,21 +1682,16 @@ class LiveOrchestrator:
                     except Exception:
                         logger.debug("Tool end messenger notification failed", exc_info=True)
 
-                # After handoff, send tool result back to model
-                # The session update from _switch_to already applied the new agent's config
-                try:
-                    handoff_output = FunctionCallOutputItem(
-                        call_id=call_id,
-                        output=(
-                            json.dumps(result)
-                            if isinstance(result, dict)
-                            else json.dumps({"success": True})
-                        ),
-                    )
-                    await self.conn.conversation.item.create(item=handoff_output)
-                    logger.debug("Created handoff tool output for call_id=%s", call_id)
-                except Exception as item_err:
-                    logger.warning("Failed to create handoff tool output: %s", item_err)
+                # NOTE: We intentionally do NOT send the handoff tool output back to the model.
+                # The old agent's tool call was an internal action that triggered the switch.
+                # Sending the output to the new agent's session would confuse it - the new
+                # agent would see a tool call it didn't make and might try to "complete" it.
+                # Instead, we trigger the new agent's response cleanly via additional_instructions.
+                logger.debug(
+                    "[Handoff] Skipping tool output injection | "
+                    "call_id=%s | The new agent will respond via additional_instructions",
+                    call_id,
+                )
 
                 # Trigger the new agent to respond naturally as itself
                 # Build context about the handoff for the new agent's instruction
@@ -1702,57 +1710,57 @@ class LiveOrchestrator:
                 # Get handoff mode from context (set by build_handoff_system_vars)
                 greet_on_switch = ctx.get("greet_on_switch", True)
 
-                # Schedule response trigger after a brief delay to let session settle.
-                # The new agent will respond naturally to the context.
-                # NOTE: For announced handoffs, the greeting is already handled by
-                # _select_pending_greeting() which renders the agent's greeting template.
-                # This response trigger just prompts the agent to address the user's request.
-                async def _trigger_handoff_response():
-                    await asyncio.sleep(0.25)
-                    try:
-                        from azure.ai.voicelive.models import (
-                            ClientEventResponseCreate,
-                            ResponseCreateParams,
+                # Trigger the new agent to respond immediately (no background task)
+                # The agent's system prompt already contains discrete/announced handoff instructions
+                # via is_handoff and greet_on_switch template variables.
+                #
+                # CRITICAL: Use additional_instructions (which APPENDS to system prompt)
+                # instead of ResponseCreateParams(instructions=...) which OVERRIDES it!
+                # The agent's prompt template has discrete handoff behavior built in.
+                try:
+                    # Build additional instruction to append (not override) the system prompt
+                    if greet_on_switch:
+                        # Announced mode: greeting will be spoken, then address request
+                        additional_instruction = (
+                            f'The customer\'s request: "{user_question}". '
+                            f"Address their request directly after your greeting."
+                        )
+                        if handoff_summary:
+                            additional_instruction += f" Context: {handoff_summary}"
+                    else:
+                        # Discrete mode: system prompt already has discrete handoff instructions
+                        # Just provide the user's question as context - don't override behavior
+                        additional_instruction = (
+                            f'The customer\'s request: "{user_question}". '
+                            f"Respond immediately without any greeting or introduction."
                         )
 
-                        # Build instruction based on handoff mode
-                        # NOTE: Greeting is handled separately by _select_pending_greeting()
-                        # which uses the agent's greeting/return_greeting from agent.yaml.
-                        # Here we just instruct the agent on how to handle the conversation.
-                        if greet_on_switch:
-                            # Announced mode: greeting already rendered from agent.yaml
-                            # Just instruct agent to address the request after greeting
-                            handoff_instruction = (
-                                f'The customer\'s request: "{user_question}". '
-                                f"Address their request directly after your greeting."
-                            )
-                            if handoff_summary:
-                                handoff_instruction += f" Context: {handoff_summary}"
-                        else:
-                            # Discrete mode: silent handoff, no announcement, no greeting
-                            handoff_instruction = (
-                                f'The customer\'s request: "{user_question}". '
-                                f"Address their request directly. "
-                                f"Do NOT announce that you are a different agent or mention any transfer. "
-                                f"Continue the conversation naturally as if seamless."
-                            )
-                            if handoff_summary:
-                                handoff_instruction += f" Context: {handoff_summary}"
-
-                        await self.conn.send(
-                            ClientEventResponseCreate(
-                                response=ResponseCreateParams(
-                                    instructions=handoff_instruction,
-                                )
-                            )
+                    # Trigger response synchronously - no fire-and-forget background task
+                    # This ensures the handoff response is reliably triggered
+                    #
+                    # Use conn.response.create() with additional_instructions parameter
+                    # This APPENDS to the session's system prompt rather than overriding it
+                    with tracer.start_as_current_span(
+                        "voicelive.handoff.response_create",
+                        kind=trace.SpanKind.SERVER,
+                        attributes=create_service_dependency_attrs(
+                            source_service="voicelive_orchestrator",
+                            target_service="azure_voicelive",
+                            call_connection_id=self.call_connection_id,
+                            session_id=(
+                                getattr(self.messenger, "session_id", None) if self.messenger else None
+                            ),
+                        ),
+                    ):
+                        await self.conn.response.create(
+                            additional_instructions=additional_instruction
                         )
-                        logger.info(
-                            "[Handoff] Triggered new agent '%s' | greet=%s", target, greet_on_switch
-                        )
-                    except Exception as e:
-                        logger.warning("[Handoff] Failed to trigger response: %s", e)
-
-                asyncio.create_task(_trigger_handoff_response(), name=f"handoff-response-{target}")
+                    logger.info(
+                        "[Handoff] Triggered new agent '%s' | greet=%s | question=%s",
+                        target, greet_on_switch, user_question[:50] if user_question else "none"
+                    )
+                except Exception as e:
+                    logger.warning("[Handoff] Failed to trigger response: %s", e)
 
                 tool_span.set_status(trace.StatusCode.OK)
                 return True

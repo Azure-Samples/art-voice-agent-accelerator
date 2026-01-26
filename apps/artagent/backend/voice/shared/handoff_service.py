@@ -83,6 +83,8 @@ except ImportError:
 
     logger = logging.getLogger("voice.shared.handoff_service")
 
+from apps.artagent.backend.src.orchestration.naming import find_agent_by_name
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DATA CLASSES
@@ -459,8 +461,9 @@ class HandoffService:
                     error=f"No target agent configured for handoff tool: {tool_name}",
                 )
 
-        # Validate target agent exists
-        if target_agent not in self._agents:
+        # Validate target agent exists (case-insensitive)
+        actual_key, _ = find_agent_by_name(self._agents, target_agent)
+        if actual_key is None:
             logger.warning(
                 "Handoff target '%s' not in agent registry | tool=%s",
                 target_agent,
@@ -473,6 +476,8 @@ class HandoffService:
                 target_agent=target_agent,
                 error=f"Target agent '{target_agent}' not found in registry",
             )
+        # Use the actual key from the registry
+        target_agent = actual_key
 
         # Step 2: Get handoff config from scenario (if not already set for generic)
         if handoff_cfg is None:

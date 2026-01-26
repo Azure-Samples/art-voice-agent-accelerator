@@ -406,7 +406,6 @@ function FlowNode({
   agent,
   isStart,
   isSelected,
-  isSessionAgent,
   position,
   onSelect,
   onAddHandoff,
@@ -414,12 +413,8 @@ function FlowNode({
   onViewDetails,
   outgoingCount,
 }) {
-  // Color scheme: start > session > active
-  const colorScheme = isStart 
-    ? colors.start 
-    : isSessionAgent 
-      ? colors.session 
-      : colors.active;
+  // Color scheme: start > active (no session distinction)
+  const colorScheme = isStart ? colors.start : colors.active;
   
   return (
     <Paper
@@ -459,26 +454,6 @@ function FlowNode({
             height: 22,
             fontSize: 10,
             fontWeight: 700,
-          }}
-        />
-      )}
-
-      {/* Session agent badge */}
-      {isSessionAgent && !isStart && (
-        <Chip
-          icon={<AutoFixHighIcon sx={{ fontSize: 12 }} />}
-          label="CUSTOM"
-          size="small"
-          sx={{
-            position: 'absolute',
-            top: -12,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            height: 22,
-            fontSize: 10,
-            fontWeight: 700,
-            backgroundColor: colors.session.border,
-            color: '#fff',
           }}
         />
       )}
@@ -560,8 +535,8 @@ function FlowNode({
         </IconButton>
       </Tooltip>
 
-      {/* Edit button for session agents (left side) */}
-      {isSessionAgent && onEditAgent && (
+      {/* Edit button (left side) - available for all agents */}
+      {onEditAgent && (
         <Tooltip title="Edit agent in Agent Builder">
           <IconButton
             size="small"
@@ -577,11 +552,11 @@ function FlowNode({
               width: 28,
               height: 28,
               backgroundColor: '#fff',
-              border: `2px solid ${colors.session.border}`,
+              border: `2px solid ${colors.active.border}`,
               boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
               '&:hover': {
-                backgroundColor: colors.session.bg,
-                borderColor: colors.session.avatar,
+                backgroundColor: colors.active.bg,
+                borderColor: colors.active.avatar,
               },
             }}
           >
@@ -1322,6 +1297,36 @@ function HandoffEditorDialog({ open, onClose, handoff, agents, scenarioAgents = 
                 ? 'Target agent will greet/announce the transfer'
                 : 'Silent handoff - agent continues conversation naturally'}
             </Typography>
+            {/* Detailed behavior explanation */}
+            <Paper 
+              variant="outlined" 
+              sx={{ 
+                mt: 1.5, 
+                p: 1.5, 
+                borderRadius: '8px', 
+                bgcolor: type === 'announced' ? 'rgba(139, 92, 246, 0.05)' : 'rgba(245, 158, 11, 0.05)',
+                borderColor: type === 'announced' ? 'rgba(139, 92, 246, 0.2)' : 'rgba(245, 158, 11, 0.2)'
+              }}
+            >
+              <Typography variant="caption" sx={{ fontWeight: 600, display: 'block', mb: 0.5 }}>
+                {type === 'announced' ? '🔊 Announced Behavior:' : '🔇 Discrete Behavior:'}
+              </Typography>
+              {type === 'announced' ? (
+                <Typography variant="caption" color="text.secondary" component="div">
+                  • Target agent speaks their <strong>greeting</strong> message on arrival<br/>
+                  • User hears a clear transition (e.g., "Hi, I'm the Fraud Specialist...")<br/>
+                  • Best for: First-time routing, specialist introductions, formal transfers<br/>
+                  • Creates explicit "I'm transferring you" experience
+                </Typography>
+              ) : (
+                <Typography variant="caption" color="text.secondary" component="div">
+                  • Target agent uses <strong>return_greeting</strong> (or continues silently)<br/>
+                  • Seamless transition - user may not notice the switch<br/>
+                  • Best for: Returning to previous agent, internal escalations<br/>
+                  • Creates natural conversational flow without interruption
+                </Typography>
+              )}
+            </Paper>
           </Box>
 
           {/* Share context */}
@@ -1703,8 +1708,8 @@ function AgentDetailDialog({ open, onClose, agent, allAgents, handoffs }) {
   const legacyHandoffTools = legacyTools.filter(t => t.startsWith('handoff_'));
   const legacyRegularTools = legacyTools.filter(t => !t.startsWith('handoff_'));
 
-  // Agent color based on type
-  const agentColor = agent.is_session_agent ? colors.session : colors.active;
+  // Agent color - unified styling
+  const agentColor = colors.active;
 
   return (
     <Dialog
@@ -1732,19 +1737,6 @@ function AgentDetailDialog({ open, onClose, agent, allAgents, handoffs }) {
               <Typography variant="h6" sx={{ fontWeight: 600 }}>
                 {agent.name}
               </Typography>
-              {agent.is_session_agent && (
-                <Chip
-                  icon={<AutoFixHighIcon sx={{ fontSize: 12 }} />}
-                  label="Custom"
-                  size="small"
-                  sx={{
-                    height: 22,
-                    fontSize: 10,
-                    backgroundColor: colors.session.bg,
-                    color: colors.session.avatar,
-                  }}
-                />
-              )}
             </Stack>
             <Typography variant="body2" color="text.secondary">
               {agent.description || 'No description provided'}
@@ -2117,27 +2109,13 @@ function StartAgentSelector({ agents, selectedStart, onSelect }) {
                   sx={{ 
                     width: 24, 
                     height: 24, 
-                    bgcolor: agent.is_session_agent ? colors.session.avatar : colors.start.avatar, 
+                    bgcolor: colors.active.avatar, 
                     fontSize: 12 
                   }}
                 >
                   {agent.name?.[0]}
                 </Avatar>
                 <span>{agent.name}</span>
-                {agent.is_session_agent && (
-                  <Chip
-                    icon={<AutoFixHighIcon sx={{ fontSize: 10 }} />}
-                    label="Custom"
-                    size="small"
-                    sx={{
-                      height: 18,
-                      fontSize: 9,
-                      ml: 1,
-                      backgroundColor: colors.session.bg,
-                      color: colors.session.avatar,
-                    }}
-                  />
-                )}
               </Stack>
             </MenuItem>
           ))}
@@ -2153,10 +2131,6 @@ function StartAgentSelector({ agents, selectedStart, onSelect }) {
 
 function AgentListSidebar({ agents, graphAgents, onAddToGraph, onEditAgent, onCreateAgent }) {
   const ungraphedAgents = agents.filter((a) => !graphAgents.includes(a.name));
-  
-  // Separate static and session agents
-  const staticAgents = ungraphedAgents.filter((a) => !a.is_session_agent);
-  const sessionAgents = ungraphedAgents.filter((a) => a.is_session_agent);
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -2172,13 +2146,13 @@ function AgentListSidebar({ agents, graphAgents, onAddToGraph, onEditAgent, onCr
             sx={{
               py: 1,
               borderStyle: 'dashed',
-              borderColor: colors.session.border,
-              color: colors.session.avatar,
+              borderColor: colors.active.border,
+              color: colors.active.avatar,
               fontWeight: 600,
               fontSize: 12,
               '&:hover': {
                 borderStyle: 'solid',
-                backgroundColor: colors.session.bg,
+                backgroundColor: colors.active.bg,
               },
             }}
           >
@@ -2209,274 +2183,140 @@ function AgentListSidebar({ agents, graphAgents, onAddToGraph, onEditAgent, onCr
         </Box>
       ) : (
         <Box sx={{ flex: 1, overflowY: 'auto', py: 1 }}>
-          {/* Built-in Agents Section */}
-          {staticAgents.length > 0 && (
-            <Box sx={{ mb: 2 }}>
-              <Box sx={{ 
-                px: 1.5, 
-                py: 0.75, 
-                display: 'flex', 
-                alignItems: 'center', 
-                gap: 0.5,
-                backgroundColor: 'rgba(139, 92, 246, 0.06)',
-                borderLeft: '3px solid',
-                borderColor: colors.active.avatar,
-              }}>
-                <SmartToyIcon sx={{ fontSize: 14, color: colors.active.avatar }} />
-                <Typography 
-                  variant="caption" 
+          {/* Available Agents Section - unified, no session vs built-in distinction */}
+          <Box>
+            <Box sx={{ 
+              px: 1.5, 
+              py: 0.75, 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: 0.5,
+              backgroundColor: 'rgba(139, 92, 246, 0.06)',
+              borderLeft: '3px solid',
+              borderColor: colors.active.avatar,
+            }}>
+              <SmartToyIcon sx={{ fontSize: 14, color: colors.active.avatar }} />
+              <Typography 
+                variant="caption" 
+                sx={{ 
+                  fontWeight: 700, 
+                  color: colors.active.avatar,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px',
+                  fontSize: 10,
+                }}
+              >
+                Available Agents
+              </Typography>
+              <Chip 
+                label={ungraphedAgents.length} 
+                size="small" 
+                sx={{ 
+                  ml: 'auto', 
+                  height: 18, 
+                  fontSize: 10,
+                  bgcolor: 'rgba(139, 92, 246, 0.1)',
+                  color: colors.active.avatar,
+                  fontWeight: 600,
+                }} 
+              />
+            </Box>
+            <List sx={{ py: 0.5 }}>
+              {ungraphedAgents.map((agent) => (
+                <ListItem
+                  key={agent.name}
+                  disablePadding
                   sx={{ 
-                    fontWeight: 700, 
-                    color: colors.active.avatar,
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.5px',
-                    fontSize: 10,
+                    px: 1,
+                    '&:hover': {
+                      backgroundColor: 'rgba(139, 92, 246, 0.04)',
+                    },
                   }}
                 >
-                  Built-in Agents
-                </Typography>
-                <Chip 
-                  label={staticAgents.length} 
-                  size="small" 
-                  sx={{ 
-                    ml: 'auto', 
-                    height: 18, 
-                    fontSize: 10,
-                    bgcolor: 'rgba(139, 92, 246, 0.1)',
-                    color: colors.active.avatar,
-                    fontWeight: 600,
-                  }} 
-                />
-              </Box>
-              <List sx={{ py: 0.5 }}>
-                {staticAgents.map((agent) => (
-                  <ListItem
-                    key={agent.name}
-                    disablePadding
+                  <ListItemButton
+                    onClick={() => onAddToGraph(agent)}
                     sx={{ 
+                      py: 1, 
                       px: 1,
-                      '&:hover': {
-                        backgroundColor: 'rgba(139, 92, 246, 0.04)',
-                      },
+                      borderRadius: '8px',
+                      minHeight: 48,
                     }}
                   >
-                    <ListItemButton
-                      onClick={() => onAddToGraph(agent)}
-                      sx={{ 
-                        py: 1, 
-                        px: 1,
-                        borderRadius: '8px',
-                        minHeight: 48,
-                      }}
-                    >
-                      <ListItemAvatar sx={{ minWidth: 40 }}>
-                        <Avatar 
-                          sx={{ 
-                            width: 32, 
-                            height: 32, 
-                            bgcolor: colors.active.avatar, 
-                            fontSize: 13,
-                            fontWeight: 600,
-                          }}
-                        >
-                          {agent.name?.[0]}
-                        </Avatar>
-                      </ListItemAvatar>
-                      <ListItemText
-                        primary={agent.name}
-                        secondary={agent.description || 'Click to set as start'}
-                        primaryTypographyProps={{ 
-                          variant: 'body2', 
+                    <ListItemAvatar sx={{ minWidth: 40 }}>
+                      <Avatar 
+                        sx={{ 
+                          width: 32, 
+                          height: 32, 
+                          bgcolor: colors.active.avatar, 
                           fontSize: 13,
-                          fontWeight: 500,
-                          sx: { lineHeight: 1.3 },
+                          fontWeight: 600,
                         }}
-                        secondaryTypographyProps={{ 
-                          variant: 'caption', 
-                          fontSize: 10,
-                          sx: { 
-                            lineHeight: 1.2,
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                          },
-                        }}
-                      />
-                      <Stack direction="row" spacing={0.5} sx={{ ml: 0.5 }}>
-                        {onEditAgent && (
-                          <Tooltip title="Customize">
-                            <IconButton 
-                              size="small" 
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onEditAgent(agent, null);
-                              }}
-                              sx={{ 
-                                width: 28, 
-                                height: 28,
-                                '&:hover': { backgroundColor: 'rgba(139, 92, 246, 0.1)' },
-                              }}
-                            >
-                              <EditIcon sx={{ fontSize: 14, color: colors.active.avatar }} />
-                            </IconButton>
-                          </Tooltip>
-                        )}
-                        <Tooltip title="Add to graph">
+                      >
+                        {agent.name?.[0]}
+                      </Avatar>
+                    </ListItemAvatar>
+                    <ListItemText
+                      primary={agent.name}
+                      secondary={agent.description || 'Click to add to graph'}
+                      primaryTypographyProps={{ 
+                        variant: 'body2', 
+                        fontSize: 13,
+                        fontWeight: 500,
+                        sx: { lineHeight: 1.3 },
+                      }}
+                      secondaryTypographyProps={{ 
+                        variant: 'caption', 
+                        fontSize: 10,
+                        sx: { 
+                          lineHeight: 1.2,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        },
+                      }}
+                    />
+                    <Stack direction="row" spacing={0.5} sx={{ ml: 0.5 }}>
+                      {onEditAgent && (
+                        <Tooltip title="Edit">
                           <IconButton 
                             size="small" 
                             onClick={(e) => {
                               e.stopPropagation();
-                              onAddToGraph(agent);
+                              onEditAgent(agent, null);
                             }}
                             sx={{ 
                               width: 28, 
                               height: 28,
-                              backgroundColor: 'rgba(139, 92, 246, 0.08)',
-                              '&:hover': { backgroundColor: 'rgba(139, 92, 246, 0.15)' },
+                              '&:hover': { backgroundColor: 'rgba(139, 92, 246, 0.1)' },
                             }}
                           >
-                            <AddIcon sx={{ fontSize: 16, color: colors.active.avatar }} />
+                            <EditIcon sx={{ fontSize: 14, color: colors.active.avatar }} />
                           </IconButton>
                         </Tooltip>
-                      </Stack>
-                    </ListItemButton>
-                  </ListItem>
-                ))}
-              </List>
-            </Box>
-          )}
-
-          {/* Custom Agents Section */}
-          {sessionAgents.length > 0 && (
-            <Box>
-              <Box sx={{ 
-                px: 1.5, 
-                py: 0.75, 
-                display: 'flex', 
-                alignItems: 'center', 
-                gap: 0.5,
-                backgroundColor: 'rgba(245, 158, 11, 0.06)',
-                borderLeft: '3px solid',
-                borderColor: colors.session.border,
-              }}>
-                <AutoFixHighIcon sx={{ fontSize: 14, color: colors.session.avatar }} />
-                <Typography 
-                  variant="caption" 
-                  sx={{ 
-                    fontWeight: 700, 
-                    color: colors.session.avatar,
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.5px',
-                    fontSize: 10,
-                  }}
-                >
-                  Custom Agents
-                </Typography>
-                <Chip 
-                  label={sessionAgents.length} 
-                  size="small" 
-                  sx={{ 
-                    ml: 'auto', 
-                    height: 18, 
-                    fontSize: 10,
-                    bgcolor: 'rgba(245, 158, 11, 0.1)',
-                    color: colors.session.avatar,
-                    fontWeight: 600,
-                  }} 
-                />
-              </Box>
-              <List sx={{ py: 0.5 }}>
-                {sessionAgents.map((agent) => (
-                  <ListItem
-                    key={agent.name}
-                    disablePadding
-                    sx={{ 
-                      px: 1,
-                      '&:hover': {
-                        backgroundColor: 'rgba(245, 158, 11, 0.04)',
-                      },
-                    }}
-                  >
-                    <ListItemButton
-                      onClick={() => onAddToGraph(agent)}
-                      sx={{ 
-                        py: 1, 
-                        px: 1,
-                        borderRadius: '8px',
-                        minHeight: 48,
-                      }}
-                    >
-                      <ListItemAvatar sx={{ minWidth: 40 }}>
-                        <Avatar 
+                      )}
+                      <Tooltip title="Add to graph">
+                        <IconButton 
+                          size="small" 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onAddToGraph(agent);
+                          }}
                           sx={{ 
-                            width: 32, 
-                            height: 32, 
-                            bgcolor: colors.session.avatar, 
-                            fontSize: 13,
-                            fontWeight: 600,
+                            width: 28, 
+                            height: 28,
+                            backgroundColor: 'rgba(139, 92, 246, 0.08)',
+                            '&:hover': { backgroundColor: 'rgba(139, 92, 246, 0.15)' },
                           }}
                         >
-                          {agent.name?.[0]}
-                        </Avatar>
-                      </ListItemAvatar>
-                      <ListItemText
-                        primary={agent.name}
-                        secondary={agent.session_id ? `Session: ${agent.session_id.slice(0, 8)}...` : 'Custom agent'}
-                        primaryTypographyProps={{ 
-                          variant: 'body2', 
-                          fontSize: 13,
-                          fontWeight: 500,
-                          sx: { lineHeight: 1.3 },
-                        }}
-                        secondaryTypographyProps={{ 
-                          variant: 'caption', 
-                          fontSize: 10,
-                          sx: { lineHeight: 1.2 },
-                        }}
-                      />
-                      <Stack direction="row" spacing={0.5} sx={{ ml: 0.5 }}>
-                        {onEditAgent && (
-                          <Tooltip title="Edit">
-                            <IconButton 
-                              size="small" 
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onEditAgent(agent, agent.session_id);
-                              }}
-                              sx={{ 
-                                width: 28, 
-                                height: 28,
-                                '&:hover': { backgroundColor: 'rgba(245, 158, 11, 0.1)' },
-                              }}
-                            >
-                              <EditIcon sx={{ fontSize: 14, color: colors.session.avatar }} />
-                            </IconButton>
-                          </Tooltip>
-                        )}
-                        <Tooltip title="Add to graph">
-                          <IconButton 
-                            size="small" 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onAddToGraph(agent);
-                            }}
-                            sx={{ 
-                              width: 28, 
-                              height: 28,
-                              backgroundColor: 'rgba(245, 158, 11, 0.08)',
-                              '&:hover': { backgroundColor: 'rgba(245, 158, 11, 0.15)' },
-                            }}
-                          >
-                            <AddIcon sx={{ fontSize: 16, color: colors.session.avatar }} />
-                          </IconButton>
-                        </Tooltip>
-                      </Stack>
-                    </ListItemButton>
-                  </ListItem>
-                ))}
-              </List>
-            </Box>
-          )}
+                          <AddIcon sx={{ fontSize: 16, color: colors.active.avatar }} />
+                        </IconButton>
+                      </Tooltip>
+                    </Stack>
+                  </ListItemButton>
+                </ListItem>
+              ))}
+            </List>
+          </Box>
         </Box>
       )}
     </Box>
@@ -2570,15 +2410,9 @@ export default function ScenarioBuilder({
 
   const fetchAvailableTemplates = useCallback(async () => {
     try {
-      // Fetch static templates
-      const response = await fetch(`${API_BASE_URL}/api/v1/scenario-builder/templates`);
       let templates = [];
-      if (response.ok) {
-        const data = await response.json();
-        templates = data.templates || [];
-      }
       
-      // Also fetch ALL session's custom scenarios to include in templates list
+      // Fetch all scenarios for this session (includes both custom and built-in)
       if (sessionId) {
         try {
           const sessionResponse = await fetch(
@@ -2586,9 +2420,10 @@ export default function ScenarioBuilder({
           );
           if (sessionResponse.ok) {
             const sessionData = await sessionResponse.json();
+            
+            // Add session-custom scenarios first (marked as custom)
             if (sessionData.scenarios && sessionData.scenarios.length > 0) {
-              // Add each custom scenario as a template option
-              const customTemplates = sessionData.scenarios.map((scenario, index) => ({
+              const customTemplates = sessionData.scenarios.map((scenario) => ({
                 id: `_custom_${scenario.name.replace(/\s+/g, '_').toLowerCase()}`,
                 name: `${scenario.icon || '🎭'} ${scenario.name || 'Custom Scenario'}`,
                 description: scenario.description || 'Your custom session scenario',
@@ -2599,15 +2434,53 @@ export default function ScenarioBuilder({
                 handoff_type: scenario.handoff_type || 'announced',
                 global_template_vars: scenario.global_template_vars || {},
                 isCustom: true,
+                isActive: scenario.is_active,
                 originalName: scenario.name,
               }));
-              templates = [...customTemplates, ...templates];
+              templates = [...templates, ...customTemplates];
+            }
+            
+            // Add built-in scenarios (from scenario store)
+            if (sessionData.builtin_scenarios && sessionData.builtin_scenarios.length > 0) {
+              const builtinTemplates = sessionData.builtin_scenarios.map((scenario) => ({
+                id: scenario.name.toLowerCase().replace(/\s+/g, '_'),
+                name: `${scenario.icon || '📋'} ${scenario.name}`,
+                description: scenario.description || '',
+                icon: scenario.icon || '📋',
+                agents: scenario.agents || [],
+                start_agent: scenario.start_agent,
+                handoffs: scenario.handoffs || [],
+                handoff_type: scenario.handoff_type || 'announced',
+                global_template_vars: scenario.global_template_vars || {},
+                isCustom: false,
+                isActive: scenario.is_active,
+                originalName: scenario.name,
+              }));
+              templates = [...templates, ...builtinTemplates];
             }
           }
         } catch (err) {
-          // No custom scenarios exist, that's fine
-          logger.debug('No custom scenarios for session');
+          logger.debug('Failed to fetch session scenarios, falling back to templates endpoint');
         }
+      }
+      
+      // Fallback: if no session or no scenarios found, fetch from templates endpoint
+      if (templates.length === 0) {
+        const response = await fetch(`${API_BASE_URL}/api/v1/scenario-builder/templates`);
+        if (response.ok) {
+          const data = await response.json();
+          templates = (data.templates || []).map((t) => ({
+            ...t,
+            isCustom: false,
+            isActive: false,
+          }));
+        }
+      }
+      
+      // Auto-select the active scenario if one exists
+      const activeTemplate = templates.find(t => t.isActive);
+      if (activeTemplate) {
+        setSelectedTemplate(activeTemplate.id);
       }
       
       setAvailableTemplates(templates);
@@ -3174,23 +3047,28 @@ export default function ScenarioBuilder({
         {/* Templates */}
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
           <Typography variant="caption" color="text.secondary">
-            Templates:
+            Scenarios:
           </Typography>
           {availableTemplates.map((template) => (
             <Chip
               key={template.id}
-              label={template.name}
+              label={template.isActive ? `✓ ${template.name}` : template.name}
               size="small"
               icon={selectedTemplate === template.id ? <CheckIcon /> : <HubIcon fontSize="small" />}
-              color={template.isCustom 
-                ? (selectedTemplate === template.id ? 'warning' : 'default')
-                : (selectedTemplate === template.id ? 'primary' : 'default')
+              color={template.isActive
+                ? 'success'
+                : template.isCustom 
+                  ? (selectedTemplate === template.id ? 'warning' : 'default')
+                  : (selectedTemplate === template.id ? 'primary' : 'default')
               }
-              variant={selectedTemplate === template.id ? 'filled' : 'outlined'}
+              variant={selectedTemplate === template.id || template.isActive ? 'filled' : 'outlined'}
               onClick={() => handleApplyTemplate(template.id)}
               sx={{ 
                 cursor: 'pointer',
-                ...(template.isCustom && {
+                ...(template.isActive && {
+                  fontWeight: 'bold',
+                }),
+                ...(template.isCustom && !template.isActive && {
                   borderColor: 'warning.main',
                   '&:hover': { borderColor: 'warning.dark' },
                 }),
@@ -3446,11 +3324,10 @@ export default function ScenarioBuilder({
                     agent={agent}
                     isStart={config.start_agent === agentName}
                     isSelected={selectedNode?.name === agentName}
-                    isSessionAgent={agent.is_session_agent}
                     position={position}
                     onSelect={setSelectedNode}
                     onAddHandoff={(a) => handleOpenAddHandoff(a, null)}
-                    onEditAgent={onEditAgent ? (a) => onEditAgent(a, a.session_id) : null}
+                    onEditAgent={onEditAgent ? (a) => onEditAgent(a, null) : null}
                     onViewDetails={setViewingAgent}
                     outgoingCount={outgoingCounts[agentName] || 0}
                   />
@@ -3583,7 +3460,7 @@ export default function ScenarioBuilder({
               : 'linear-gradient(135deg, #4f46e5 0%, #6366f1 100%)',
           }}
         >
-          {saving ? 'Saving...' : editMode ? 'Update Scenario' : 'Create Scenario'}
+          {saving ? 'Saving Scenario...' : 'Save Scenario'}
         </Button>
       </Box>
 

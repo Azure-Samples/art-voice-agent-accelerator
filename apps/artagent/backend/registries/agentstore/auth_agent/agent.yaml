@@ -109,11 +109,6 @@ tools:
   - escalate_human
   - escalate_emergency             # For medical/injury/fire emergencies
 
-template_vars:
-  institution_name: "{{ institution_name | default('XYMZ Insurance') }}"
-  agent_name: "AuthAgent"
-  industry: "{{ industry | default('insurance') }}"
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Prompt (inline for simple agent)
 # ─────────────────────────────────────────────────────────────────────────────

@@ -197,6 +197,13 @@ AZURE_COSMOS_COLLECTION_NAME: str = os.getenv("AZURE_COSMOS_COLLECTION_NAME", ""
 
 
 # ==============================================================================
+# AZURE AI FOUNDRY (for evaluation)
+# ==============================================================================
+
+AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: str = os.getenv("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT", "")
+
+
+# ==============================================================================
 # VOICE & TTS SETTINGS
 # ==============================================================================
 # NOTE: Per-agent voice settings are now defined in each agent's agent.yaml.
@@ -251,6 +258,10 @@ SESSION_CLEANUP_INTERVAL: int = _env_int("SESSION_CLEANUP_INTERVAL", 300)
 MAX_CONCURRENT_SESSIONS: int = _env_int("MAX_CONCURRENT_SESSIONS", 1000)
 ENABLE_SESSION_PERSISTENCE: bool = _env_bool("ENABLE_SESSION_PERSISTENCE", True)
 SESSION_STATE_TTL: int = _env_int("SESSION_STATE_TTL", 86400)
+
+# Session inactivity timeout (set to 0 or negative to disable)
+SESSION_INACTIVITY_TIMEOUT_S: float = _env_float("SESSION_INACTIVITY_TIMEOUT_S", 300.0)
+SESSION_INACTIVITY_CHECK_INTERVAL_S: float = _env_float("SESSION_INACTIVITY_CHECK_INTERVAL_S", 5.0)
 
 # Speech service pools
 POOL_SIZE_TTS: int = _env_int("POOL_SIZE_TTS", 50)

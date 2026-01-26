@@ -31,6 +31,9 @@ from fastapi.websockets import WebSocketState
 from utils.ml_logging import get_logger
 from utils.telemetry_decorators import add_speech_tts_metrics, trace_speech
 
+from apps.artagent.backend.src.orchestration.naming import find_agent_by_name
+from apps.artagent.backend.src.orchestration.session_agents import get_session_agent
+
 if TYPE_CHECKING:
     from apps.artagent.backend.voice.shared.context import VoiceSessionContext
 
@@ -161,10 +164,24 @@ class TTSPlayback:
                 )
                 return (voice.name, voice.style, voice.rate)
 
-        # Fallback to start agent from unified agents
-        unified_agents = getattr(self._app_state, "unified_agents", {})
+        # Try session agent (Agent Builder override) - has priority over base agents
         start_agent_name = getattr(self._app_state, "start_agent", "Concierge")
-        start_agent = unified_agents.get(start_agent_name)
+        session_agent = get_session_agent(self._context.session_id, start_agent_name)
+        if session_agent and hasattr(session_agent, "voice") and session_agent.voice:
+            voice = session_agent.voice
+            if voice.name:
+                logger.debug(
+                    "[%s] Voice from session agent '%s': %s",
+                    self._session_short,
+                    start_agent_name,
+                    voice.name,
+                )
+                return (voice.name, voice.style, voice.rate)
+
+        # Fallback to start agent from unified agents (base registry)
+        unified_agents = getattr(self._app_state, "unified_agents", {})
+        # Use case-insensitive lookup
+        _, start_agent = find_agent_by_name(unified_agents, start_agent_name)
 
         if start_agent and hasattr(start_agent, "voice") and start_agent.voice:
             voice = start_agent.voice
@@ -195,19 +212,31 @@ class TTSPlayback:
             agent_name: Name of the active agent
         """
         if agent_name:
-            # Look up agent in unified_agents and set on context
+            # First check session agents (Agent Builder overrides have priority)
+            session_agent = get_session_agent(self._context.session_id, agent_name)
+            if session_agent:
+                self._context.current_agent = session_agent
+                logger.debug(
+                    "[%s] Active agent set from session agents: %s (voice=%s)",
+                    self._session_short,
+                    agent_name,
+                    getattr(session_agent.voice, "name", "unknown") if session_agent.voice else "none",
+                )
+                return
+
+            # Fallback to unified_agents (base registry)
             unified_agents = getattr(self._app_state, "unified_agents", {})
-            agent = unified_agents.get(agent_name)
-            if agent:
+            actual_key, agent = find_agent_by_name(unified_agents, agent_name)
+            if actual_key is not None:
                 self._context.current_agent = agent
                 logger.debug(
-                    "[%s] Active agent set for TTS: %s",
+                    "[%s] Active agent set from unified_agents: %s",
                     self._session_short,
                     agent_name,
                 )
             else:
                 logger.warning(
-                    "[%s] Agent '%s' not found in unified_agents",
+                    "[%s] Agent '%s' not found in session_agents or unified_agents",
                     self._session_short,
                     agent_name,
                 )

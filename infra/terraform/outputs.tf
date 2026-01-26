@@ -63,6 +63,10 @@ output "ACS_RESOURCE_ID" {
   value       = azapi_resource.acs.id
 }
 
+output "AZURE_EMAIL_SENDER_ADDRESS" {
+  description = "Azure Email Communication Services sender address (e.g., noreply@domain.azurecomm.net)"
+  value       = "${local.email_sender_username}@${azurerm_email_communication_service_domain.managed.mail_from_sender_domain}"
+}
 
 # output "ACS_MANAGED_IDENTITY_PRINCIPAL_ID" {
 #   description = "Azure Communication Services system-assigned managed identity principal ID"
@@ -220,6 +224,11 @@ output "ai_foundry_account_endpoint" {
 output "ai_foundry_project_id" {
   description = "Resource ID of the AI Foundry project"
   value       = module.ai_foundry.project_id
+}
+
+output "ai_foundry_project_endpoint" {
+  description = "Endpoint URI for the AI Foundry project (used for Evaluations SDK)"
+  value       = module.ai_foundry.project_endpoint
 }
 
 output "ai_foundry_project_identity_principal_id" {

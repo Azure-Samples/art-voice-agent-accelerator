@@ -59,22 +59,22 @@ Both channels use the **same orchestrators** and **agent registry**:
 
 ```mermaid
 flowchart TB
-    subgraph Channels
-        ACS[ACS Media Endpoint]
-        Browser[Browser Endpoint]
+    subgraph Channels[Channels]
+        ACS[ACS Media]
+        Browser[Browser]
     end
     
-    subgraph Handlers
-        Cascade[SpeechCascadeHandler]
-        VL[VoiceLiveSDKHandler]
+    subgraph Handlers[Handlers]
+        Cascade[SpeechCascade]
+        VL[VoiceLive]
     end
     
-    subgraph Orchestration
-        CO[CascadeOrchestratorAdapter]
+    subgraph Orchestration[Orchestration]
+        CO[CascadeAdapter]
         LO[LiveOrchestrator]
     end
     
-    Agents[(Unified Agent Registry)]
+    Agents[(Unified Agents)]
     
     ACS --> Cascade
     ACS --> VL
@@ -86,6 +86,10 @@ flowchart TB
     
     CO --> Agents
     LO --> Agents
+    
+    style Channels fill:#F3F2F1,stroke:#605E5C
+    style Handlers fill:#E6F3FF,stroke:#0078D4
+    style Orchestration fill:#E6FFE6,stroke:#107C10
 ```
 
 ---

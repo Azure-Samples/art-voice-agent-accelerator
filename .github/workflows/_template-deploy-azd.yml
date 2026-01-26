@@ -54,6 +54,19 @@ on:
       appconfig_label:
         description: 'The Azure App Configuration label'
         value: ${{ jobs.execute.outputs.appconfig_label }}
+      # Evaluation-related outputs
+      openai_endpoint:
+        description: 'Azure OpenAI endpoint for evaluations'
+        value: ${{ jobs.execute.outputs.openai_endpoint }}
+      openai_deployment:
+        description: 'Azure OpenAI chat deployment ID'
+        value: ${{ jobs.execute.outputs.openai_deployment }}
+      speech_region:
+        description: 'Azure Speech region for evaluations'
+        value: ${{ jobs.execute.outputs.speech_region }}
+      ai_foundry_project_endpoint:
+        description: 'AI Foundry project endpoint for evaluation traces'
+        value: ${{ jobs.execute.outputs.ai_foundry_project_endpoint }}
 
 env:
   AZD_SKIP_INTERACTIVE: true
@@ -283,6 +296,11 @@ jobs:
       container_registry_endpoint: ${{ steps.outputs.outputs.container_registry_endpoint }}
       appconfig_endpoint: ${{ steps.outputs.outputs.appconfig_endpoint }}
       appconfig_label: ${{ steps.outputs.outputs.appconfig_label }}
+      # Evaluation-related outputs
+      openai_endpoint: ${{ steps.outputs.outputs.openai_endpoint }}
+      openai_deployment: ${{ steps.outputs.outputs.openai_deployment }}
+      speech_region: ${{ steps.outputs.outputs.speech_region }}
+      ai_foundry_project_endpoint: ${{ steps.outputs.outputs.ai_foundry_project_endpoint }}
     
     env:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -523,14 +541,41 @@ jobs:
             
             echo "resource_group=${AZURE_RESOURCE_GROUP:-unknown}" >> $GITHUB_OUTPUT
             echo "container_registry_endpoint=${AZURE_CONTAINER_REGISTRY_ENDPOINT:-}" >> $GITHUB_OUTPUT
-            echo "frontend_url=${FRONTEND_CONTAINER_APP_FQDN:-}" >> $GITHUB_OUTPUT
-            echo "backend_url=${BACKEND_CONTAINER_APP_FQDN:-}" >> $GITHUB_OUTPUT
+            
+            # Use full URLs (with https://) if available, otherwise construct from FQDN
+            if [ -n "${FRONTEND_CONTAINER_APP_URL:-}" ]; then
+              echo "frontend_url=${FRONTEND_CONTAINER_APP_URL}" >> $GITHUB_OUTPUT
+            elif [ -n "${FRONTEND_CONTAINER_APP_FQDN:-}" ]; then
+              echo "frontend_url=https://${FRONTEND_CONTAINER_APP_FQDN}" >> $GITHUB_OUTPUT
+            else
+              echo "frontend_url=" >> $GITHUB_OUTPUT
+            fi
+            
+            if [ -n "${BACKEND_CONTAINER_APP_URL:-}" ]; then
+              echo "backend_url=${BACKEND_CONTAINER_APP_URL}" >> $GITHUB_OUTPUT
+            elif [ -n "${BACKEND_CONTAINER_APP_FQDN:-}" ]; then
+              echo "backend_url=https://${BACKEND_CONTAINER_APP_FQDN}" >> $GITHUB_OUTPUT
+            else
+              echo "backend_url=" >> $GITHUB_OUTPUT
+            fi
+            
             echo "appconfig_endpoint=${AZURE_APPCONFIG_ENDPOINT:-}" >> $GITHUB_OUTPUT
             echo "appconfig_label=${AZURE_APPCONFIG_LABEL:-${{ inputs.environment }}}" >> $GITHUB_OUTPUT
             
+            # Evaluation-related outputs
+            echo "openai_endpoint=${AZURE_OPENAI_ENDPOINT:-}" >> $GITHUB_OUTPUT
+            echo "openai_deployment=${AZURE_OPENAI_CHAT_DEPLOYMENT_ID:-gpt-4o}" >> $GITHUB_OUTPUT
+            echo "speech_region=${AZURE_SPEECH_REGION:-}" >> $GITHUB_OUTPUT
+            echo "ai_foundry_project_endpoint=${ai_foundry_account_endpoint:-}" >> $GITHUB_OUTPUT
+            
             echo "📊 Outputs extracted:"
             echo "  Resource Group: ${AZURE_RESOURCE_GROUP:-unknown}"
+            echo "  Frontend URL: ${FRONTEND_CONTAINER_APP_URL:-https://${FRONTEND_CONTAINER_APP_FQDN:-not set}}"
+            echo "  Backend URL: ${BACKEND_CONTAINER_APP_URL:-https://${BACKEND_CONTAINER_APP_FQDN:-not set}}"
             echo "  App Config: ${AZURE_APPCONFIG_ENDPOINT:-not set}"
+            echo "  OpenAI Endpoint: ${AZURE_OPENAI_ENDPOINT:-not set}"
+            echo "  Speech Region: ${AZURE_SPEECH_REGION:-not set}"
+            echo "  AI Foundry: ${ai_foundry_account_endpoint:-not set}"
           else
             echo "⚠️ Could not extract outputs"
             echo "resource_group=unknown" >> $GITHUB_OUTPUT
@@ -559,6 +604,11 @@ jobs:
           APPCONFIG_LABEL: ${{ needs.execute.outputs.appconfig_label }}
           CONTAINER_REGISTRY_ENDPOINT: ${{ needs.execute.outputs.container_registry_endpoint }}
           RESOURCE_GROUP: ${{ needs.execute.outputs.resource_group }}
+          # Evaluation-related outputs
+          OPENAI_ENDPOINT: ${{ needs.execute.outputs.openai_endpoint }}
+          OPENAI_DEPLOYMENT: ${{ needs.execute.outputs.openai_deployment }}
+          SPEECH_REGION: ${{ needs.execute.outputs.speech_region }}
+          AI_FOUNDRY_PROJECT_ENDPOINT: ${{ needs.execute.outputs.ai_foundry_project_endpoint }}
         run: |
           echo "📝 Updating GitHub environment variables for '${{ inputs.environment }}'..."
 
@@ -598,6 +648,39 @@ jobs:
               --repo "${{ github.repository }}" || echo "⚠️ Could not set AZURE_RESOURCE_GROUP"
             echo "✅ AZURE_RESOURCE_GROUP=$RESOURCE_GROUP"
           fi
+          
+          # Evaluation-related variables
+          if [ -n "$OPENAI_ENDPOINT" ] && [ "$OPENAI_ENDPOINT" != "unknown" ]; then
+            gh variable set AZURE_OPENAI_ENDPOINT \
+              --body "$OPENAI_ENDPOINT" \
+              --env "${{ inputs.environment }}" \
+              --repo "${{ github.repository }}" || echo "⚠️ Could not set AZURE_OPENAI_ENDPOINT"
+            echo "✅ AZURE_OPENAI_ENDPOINT=$OPENAI_ENDPOINT"
+          fi
+          
+          if [ -n "$OPENAI_DEPLOYMENT" ] && [ "$OPENAI_DEPLOYMENT" != "unknown" ]; then
+            gh variable set AZURE_OPENAI_CHAT_DEPLOYMENT_ID \
+              --body "$OPENAI_DEPLOYMENT" \
+              --env "${{ inputs.environment }}" \
+              --repo "${{ github.repository }}" || echo "⚠️ Could not set AZURE_OPENAI_CHAT_DEPLOYMENT_ID"
+            echo "✅ AZURE_OPENAI_CHAT_DEPLOYMENT_ID=$OPENAI_DEPLOYMENT"
+          fi
+          
+          if [ -n "$SPEECH_REGION" ] && [ "$SPEECH_REGION" != "unknown" ]; then
+            gh variable set AZURE_SPEECH_REGION \
+              --body "$SPEECH_REGION" \
+              --env "${{ inputs.environment }}" \
+              --repo "${{ github.repository }}" || echo "⚠️ Could not set AZURE_SPEECH_REGION"
+            echo "✅ AZURE_SPEECH_REGION=$SPEECH_REGION"
+          fi
+          
+          if [ -n "$AI_FOUNDRY_PROJECT_ENDPOINT" ] && [ "$AI_FOUNDRY_PROJECT_ENDPOINT" != "unknown" ]; then
+            gh variable set AZURE_AI_FOUNDRY_PROJECT_ENDPOINT \
+              --body "$AI_FOUNDRY_PROJECT_ENDPOINT" \
+              --env "${{ inputs.environment }}" \
+              --repo "${{ github.repository }}" || echo "⚠️ Could not set AZURE_AI_FOUNDRY_PROJECT_ENDPOINT"
+            echo "✅ AZURE_AI_FOUNDRY_PROJECT_ENDPOINT=$AI_FOUNDRY_PROJECT_ENDPOINT"
+          fi
 
       - name: 📋 Generate Summary
         run: |
@@ -620,6 +703,9 @@ jobs:
             BACKEND="${{ needs.execute.outputs.backend_url }}"
             APPCONFIG="${{ needs.execute.outputs.appconfig_endpoint }}"
             APPCONFIG_LABEL="${{ needs.execute.outputs.appconfig_label }}"
+            OPENAI_ENDPOINT="${{ needs.execute.outputs.openai_endpoint }}"
+            SPEECH_REGION="${{ needs.execute.outputs.speech_region }}"
+            AI_FOUNDRY="${{ needs.execute.outputs.ai_foundry_project_endpoint }}"
             
             [ -n "$FRONTEND" ] && echo "| Frontend | [$FRONTEND]($FRONTEND) |" >> $GITHUB_STEP_SUMMARY
             [ -n "$BACKEND" ] && echo "| Backend | [$BACKEND]($BACKEND) |" >> $GITHUB_STEP_SUMMARY
@@ -631,9 +717,21 @@ jobs:
               echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
               echo "| Endpoint | \`$APPCONFIG\` |" >> $GITHUB_STEP_SUMMARY
               echo "| Label | \`$APPCONFIG_LABEL\` |" >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-              echo "> These values have been saved to the GitHub environment \`$ENV\`" >> $GITHUB_STEP_SUMMARY
             fi
+            
+            # Evaluation-related outputs
+            if [ -n "$OPENAI_ENDPOINT" ] || [ -n "$AI_FOUNDRY" ]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "### 🧪 Evaluation Configuration" >> $GITHUB_STEP_SUMMARY
+              echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
+              echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
+              [ -n "$OPENAI_ENDPOINT" ] && echo "| OpenAI Endpoint | \`$OPENAI_ENDPOINT\` |" >> $GITHUB_STEP_SUMMARY
+              [ -n "$SPEECH_REGION" ] && echo "| Speech Region | \`$SPEECH_REGION\` |" >> $GITHUB_STEP_SUMMARY
+              [ -n "$AI_FOUNDRY" ] && echo "| AI Foundry | \`$AI_FOUNDRY\` |" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "> These values have been saved to the GitHub environment \`$ENV\`" >> $GITHUB_STEP_SUMMARY
           fi
 
   # ============================================================================

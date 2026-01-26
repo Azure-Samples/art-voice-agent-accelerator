@@ -217,6 +217,9 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
 def initialize_tools() -> int:
     """
     Load and register all tools.
+    
+    Robust loading: if individual tool modules fail to import, they are logged
+    as warnings but do not prevent other tools from loading.
 
     Returns the number of tools registered.
     """
@@ -228,26 +231,53 @@ def initialize_tools() -> int:
 
     # Import tool modules - this triggers their registration
     # Each module registers its tools at import time via register_tool()
-    from apps.artagent.backend.registries.toolstore import auth  # noqa: F401
-    from apps.artagent.backend.registries.toolstore import call_transfer  # noqa: F401
-    from apps.artagent.backend.registries.toolstore import compliance  # noqa: F401
-    from apps.artagent.backend.registries.toolstore import customer_intelligence  # noqa: F401
-    from apps.artagent.backend.registries.toolstore import escalation  # noqa: F401
-    from apps.artagent.backend.registries.toolstore.insurance import fnol  # noqa: F401
-    from apps.artagent.backend.registries.toolstore.insurance import policy  # noqa: F401
-    from apps.artagent.backend.registries.toolstore.insurance import subro  # noqa: F401
-    from apps.artagent.backend.registries.toolstore import fraud  # noqa: F401
-    from apps.artagent.backend.registries.toolstore import handoffs  # noqa: F401
-    # NOTE: investment.py (old mock-based file) removed - use banking/investments.py instead
-    from apps.artagent.backend.registries.toolstore import knowledge_base  # noqa: F401
-    from apps.artagent.backend.registries.toolstore import personalized_greeting  # noqa: F401
-    from apps.artagent.backend.registries.toolstore import transfer_agency  # noqa: F401
-    from apps.artagent.backend.registries.toolstore import voicemail  # noqa: F401
-    from apps.artagent.backend.registries.toolstore.banking import banking  # noqa: F401
-    from apps.artagent.backend.registries.toolstore.banking import investments  # noqa: F401
+    # Wrapped in try-except to prevent single tool failures from breaking all tools
+    
+    tool_modules = [
+        ("auth", lambda: __import__("apps.artagent.backend.registries.toolstore.auth", fromlist=[""])),
+        ("call_transfer", lambda: __import__("apps.artagent.backend.registries.toolstore.call_transfer", fromlist=[""])),
+        ("compliance", lambda: __import__("apps.artagent.backend.registries.toolstore.compliance", fromlist=[""])),
+        ("customer_intelligence", lambda: __import__("apps.artagent.backend.registries.toolstore.customer_intelligence", fromlist=[""])),
+        ("escalation", lambda: __import__("apps.artagent.backend.registries.toolstore.escalation", fromlist=[""])),
+        ("fraud", lambda: __import__("apps.artagent.backend.registries.toolstore.fraud", fromlist=[""])),
+        ("handoffs", lambda: __import__("apps.artagent.backend.registries.toolstore.handoffs", fromlist=[""])),
+        ("knowledge_base", lambda: __import__("apps.artagent.backend.registries.toolstore.knowledge_base", fromlist=[""])),
+        ("personalized_greeting", lambda: __import__("apps.artagent.backend.registries.toolstore.personalized_greeting", fromlist=[""])),
+        ("rag_retrieval", lambda: __import__("apps.artagent.backend.registries.toolstore.rag_retrieval", fromlist=[""])),
+        ("transfer_agency", lambda: __import__("apps.artagent.backend.registries.toolstore.transfer_agency", fromlist=[""])),
+        ("voicemail", lambda: __import__("apps.artagent.backend.registries.toolstore.voicemail", fromlist=[""])),
+        # ("document_intelligence", lambda: __import__("apps.artagent.backend.registries.toolstore.document_intelligence", fromlist=[""])),
+        # Banking tools
+        ("banking.banking", lambda: __import__("apps.artagent.backend.registries.toolstore.banking.banking", fromlist=[""])),
+        ("banking.investments", lambda: __import__("apps.artagent.backend.registries.toolstore.banking.investments", fromlist=[""])),
+        # Insurance tools
+        ("insurance.fnol", lambda: __import__("apps.artagent.backend.registries.toolstore.insurance.fnol", fromlist=[""])),
+        ("insurance.policy", lambda: __import__("apps.artagent.backend.registries.toolstore.insurance.policy", fromlist=[""])),
+        ("insurance.subro", lambda: __import__("apps.artagent.backend.registries.toolstore.insurance.subro", fromlist=[""])),
+    ]
+    
+    failed_modules = []
+    for module_name, import_func in tool_modules:
+        try:
+            import_func()
+            logger.debug(f"✓ Loaded tool module: {module_name}")
+        except Exception as e:
+            failed_modules.append(module_name)
+            logger.warning(
+                f"Failed to load tool module '{module_name}': {type(e).__name__}: {e}",
+                exc_info=False  # Set to True for full stack trace in debug mode
+            )
 
     _INITIALIZED = True
-    logger.debug("Tool registry initialized with %d tools", len(_TOOL_DEFINITIONS))
+    
+    if failed_modules:
+        logger.warning(
+            f"Tool registry initialized with {len(_TOOL_DEFINITIONS)} tools. "
+            f"Failed to load {len(failed_modules)} modules: {', '.join(failed_modules)}"
+        )
+    else:
+        logger.info(f"Tool registry initialized successfully with {len(_TOOL_DEFINITIONS)} tools")
+    
     return len(_TOOL_DEFINITIONS)
 
 

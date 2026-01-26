@@ -164,6 +164,7 @@ add_kv "azure/speech/resource-id" "$(get_azd_value AZURE_SPEECH_RESOURCE_ID)"
 add_kv "azure/acs/endpoint" "$(get_azd_value ACS_ENDPOINT)"
 add_kv "azure/acs/immutable-id" "$(get_azd_value ACS_IMMUTABLE_ID)"
 add_kv_ref "azure/acs/connection-string" "acs-connection-string"
+add_kv "azure/acs/email-sender-address" "$(get_azd_value AZURE_EMAIL_SENDER_ADDRESS)"
 
 # Redis
 add_kv "azure/redis/hostname" "$(get_azd_value REDIS_HOSTNAME)"
@@ -185,6 +186,9 @@ add_kv "azure/appinsights/connection-string" "$(get_azd_value APPLICATIONINSIGHT
 add_kv "azure/voicelive/endpoint" "$(get_azd_value AZURE_VOICELIVE_ENDPOINT)"
 add_kv "azure/voicelive/model" "$(get_azd_value AZURE_VOICELIVE_MODEL)"
 add_kv "azure/voicelive/resource-id" "$(get_azd_value AZURE_VOICELIVE_RESOURCE_ID)"
+
+# AI Foundry (for Evaluations SDK)
+add_kv "azure/ai-foundry/project-endpoint" "$(get_azd_value ai_foundry_project_endpoint)"
 
 # Environment metadata
 add_kv "app/environment" "$(get_azd_value AZURE_ENV_NAME)"

@@ -30,6 +30,9 @@ import uuid
 from collections import deque
 from typing import TYPE_CHECKING, Dict, Optional, Tuple
 
+from apps.artagent.backend.src.orchestration.naming import (
+    get_scenario_from_corememory,
+)
 from apps.artagent.backend.src.orchestration.session_agents import (
     get_session_agent,
     register_adapter_update_callback,
@@ -141,10 +144,8 @@ def _get_or_create_adapter(
     if session_id in _adapters:
         return _adapters[session_id]
 
-    # Get scenario from MemoManager if available
-    scenario_name = None
-    if memo_manager:
-        scenario_name = memo_manager.get_value_from_corememory("scenario_name", None)
+    # Get scenario from MemoManager using centralized utility
+    scenario_name = get_scenario_from_corememory(memo_manager)
 
     # Create adapter using app.state config
     adapter = get_cascade_orchestrator(
@@ -187,7 +188,7 @@ def cleanup_adapter(session_id: str) -> None:
         logger.debug("Cleaned up adapter for session: %s", session_id)
 
 
-def update_session_agent(session_id: str, agent: UnifiedAgent) -> bool:
+def update_session_agent(session_id: str, agent: UnifiedAgent, set_active: bool = False) -> bool:
     """
     Update or inject a dynamic agent into the session's orchestrator adapter.
 
@@ -198,6 +199,8 @@ def update_session_agent(session_id: str, agent: UnifiedAgent) -> bool:
     Args:
         session_id: The session to update
         agent: The UnifiedAgent with updated configuration
+        set_active: If True, also set this agent as the active agent. Default False
+                    to prevent unintended scenario state changes when creating new agents.
 
     Returns:
         True if adapter was found and updated, False if no active adapter exists
@@ -215,13 +218,16 @@ def update_session_agent(session_id: str, agent: UnifiedAgent) -> bool:
     # Use a special key for the session agent so it doesn't conflict with base agents
     adapter.agents[agent.name] = agent
 
-    # If this is meant to be the active agent, update the adapter's active agent
-    adapter._active_agent = agent.name
+    # Only update the active agent if explicitly requested
+    # This prevents creating a new agent from accidentally becoming the active agent
+    if set_active:
+        adapter._active_agent = agent.name
 
     logger.info(
-        "🔄 Session agent updated in adapter | session=%s agent=%s voice=%s model=%s",
+        "🔄 Session agent updated in adapter | session=%s agent=%s set_active=%s voice=%s model=%s",
         session_id,
         agent.name,
+        set_active,
         agent.voice.name if agent.voice else None,
         agent.model.deployment_id if agent.model else None,
     )

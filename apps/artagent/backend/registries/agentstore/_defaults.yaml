@@ -69,6 +69,9 @@ session:
   tool_choice: auto
 
 # Template variables (available in prompts)
-template_vars:
-  institution_name: "Contoso Financial"
-  agent_name: "Assistant"
+# AVOID: Hardcoding values directly in prompts
+# INSTEAD: Use Jinja template edits with the pipe | notation for dynamic substitution
+#   Example: {{ institution_name | default("Contoso Financial") }}
+# template_vars:
+#   institution_name: "Contoso Financial"
+#   agent_name: "Assistant"

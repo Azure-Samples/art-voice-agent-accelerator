@@ -1,0 +1,144 @@
+# yaml-language-server: $schema=../scenario.schema.json
+comparison_name: gpt4o_vs_o3_banking
+scenario_template: banking
+scenario_name: Banking Detection Model Comparison
+description: Compare GPT 4o vs o3-mini for banking concierge + specialists
+
+# Threshold overrides for this A/B comparison
+# Lower thresholds since we're comparing models with different capabilities
+# NOTE: o3-mini reasoning models produce more elaborative responses with
+# explanatory content that may not appear in tool outputs (e.g., general
+# banking knowledge), leading to lower groundedness scores.
+# NOTE: With flexible expectations (many turns have tools_called: []),
+# precision can be very low since model may call tools not in expected list.
+thresholds:
+  min_tool_precision: 0.05  # Very low - flexible expectations + model variation
+  min_tool_recall: 0.10     # Low - many turns have no required tools
+  min_grounded_ratio: 0.05  # Very low for reasoning models - they add context
+  max_latency_p95_ms: 20000 # o3-mini reasoning may be slower
+
+# Azure AI Foundry export configuration
+# Generates foundry_eval.jsonl compatible with Foundry's evaluation platform
+foundry_export:
+  enabled: true
+  output_filename: foundry_eval.jsonl
+  include_metadata: true
+  context_source: evidence  # Use tool results as context for groundedness
+  ground_truth_field: turns.expectations.tools_called  # Extract expected tools as ground truth
+  evaluators:
+    # Quality evaluators (AI-based, require model deployment)
+    - id: builtin.relevance
+      init_params:
+        deployment_name: gpt-4o  # Model for evaluation
+      data_mapping:
+        query: "${data.query}"
+        response: "${data.response}"
+        context: "${data.context}"
+    - id: builtin.coherence
+      init_params:
+        deployment_name: gpt-4o
+      data_mapping:
+        query: "${data.query}"
+        response: "${data.response}"
+    # Safety evaluator - requires RAI service in region
+    # Uncomment if your Azure region supports content harm detection
+    # - id: builtin.violence
+    #   data_mapping:
+    #     query: "${data.query}"
+    #     response: "${data.response}"
+
+variants:
+  - variant_id: gpt4o_chat
+    # All agents use gpt-4o in this variant
+    agent_overrides:
+      - agent: BankingConcierge
+        model_override:
+          deployment_id: gpt-4o
+          endpoint_preference: chat
+          temperature: 0.6
+          top_p: 0.9
+          max_tokens: 200
+      - agent: CardRecommendation
+        model_override:
+          deployment_id: gpt-4o
+          endpoint_preference: chat
+          temperature: 0.6
+          max_tokens: 200
+      - agent: InvestmentAdvisor
+        model_override:
+          deployment_id: gpt-4o
+          endpoint_preference: chat
+          temperature: 0.6
+          max_tokens: 200
+
+  - variant_id: 5.1_chat
+    # All agents use o3-mini in this variant
+    # NOTE: max_completion_tokens must be high enough to cover both reasoning tokens
+    # AND output tokens. With reasoning_effort=low, reasoning typically uses 200-500 tokens.
+    # Setting 2000 allows ~1500 for actual output.
+    agent_overrides:
+      - agent: BankingConcierge
+        model_override:
+          deployment_id: gpt-4o
+          endpoint_preference: responses
+          max_completion_tokens: 2000
+          reasoning_effort: low
+      - agent: CardRecommendation
+        model_override:
+          deployment_id: gpt-5.1
+          endpoint_preference: chat
+          max_completion_tokens: 2000
+          reasoning_effort: medium
+      - agent: InvestmentAdvisor
+        model_override:
+          deployment_id: gpt-5.1
+          endpoint_preference: chat
+          max_completion_tokens: 2000
+          reasoning_effort: medium
+
+# Shared turns across both variants
+# NOTE: User inputs should be explicit enough to trigger expected tool calls.
+# For identity verification, provide name + SSN clearly.
+# For profile lookup, the agent should chain this after successful verification.
+turns:
+  - turn_id: turn_1
+    user_input: "Hi, I need to check a recent card charge. My name is Alice Brown and my last four of my SSN is 1234."
+    expectations:
+      tools_called:
+        - verify_client_identity
+      # NOTE: get_user_profile is often called after verify succeeds,
+      # but depends on model behavior. Keeping expectation minimal.
+
+  - turn_id: turn_2
+    user_input: "Also, can you suggest a better rewards credit card?"
+    expectations:
+      # Agent attempts handoff to CardRecommendation
+      # Note: handoff completion depends on session config
+      tools_called:
+        - handoff_to_agent
+
+  - turn_id: turn_3
+    user_input: "I'm thinking I need to talk more about cards with no foreign transaction fees."
+    expectations:
+      # If handoff completed: CardRecommendation uses search_card_products
+      # If handoff didn't complete: Agent may retry handoff or answer directly
+      # Making this flexible to accommodate model variation
+      tools_called: []  # No strict requirement
+      tools_optional:
+        - search_card_products
+        - handoff_to_agent
+
+  - turn_id: turn_4
+    user_input: "Thanks, can we get back to the main banker now?"
+    expectations:
+      # Agent may attempt handoff back, or may already be on BankingConcierge
+      tools_called: []  # No strict requirement
+      tools_optional:
+        - handoff_to_agent
+
+comparison_metrics:
+  - latency_p95_ms  # o1 may be slower due to reasoning
+  - tool_precision  # Both should be high
+  - tool_efficiency  # Compare redundant tool calls
+  - grounded_span_ratio  # Response quality
+  - cost_per_turn  # o1 is more expensive

@@ -39,11 +39,8 @@ from apps.artagent.backend.voice import (
     pcm16le_rms,
 )
 
-# DEPRECATED: MediaHandler is now an alias to VoiceHandler
-# All new code should use VoiceHandler directly
-MediaHandler = VoiceHandler
-MediaHandlerConfig = VoiceHandlerConfig
-ACSMediaHandler = VoiceHandler  # Legacy alias
+# MediaHandler has been removed - use VoiceHandler instead
+# Migration completed 2026-01-05
 
 
 __all__ = [
@@ -55,15 +52,11 @@ __all__ = [
     "RouteTurnThread",
     "SpeechSDKThread",
     "BargeInController",
-    # Unified voice handler (new - Phase 3)
+    # Unified voice handler
     "VoiceHandler",
     "VoiceHandlerConfig",
     "TransportType",
     "ACSMessageKind",
-    # Legacy (deprecated - Phase 2)
-    "MediaHandler",
-    "MediaHandlerConfig",
-    "ACSMediaHandler",
     # VoiceLive
     "VoiceLiveSDKHandler",
     # Audio utilities

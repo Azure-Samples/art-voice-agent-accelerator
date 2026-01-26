@@ -4,16 +4,28 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock
 
+# Detect if evaluation tests are being run by checking sys.argv
+# This runs before pytest fixtures are loaded, so we check the command line
+_running_evaluation_tests = any(
+    "tests/evaluation" in arg or "test_scenarios" in arg
+    for arg in sys.argv
+)
+
+# Allow explicit override via environment variable
+if os.environ.get("EVAL_USE_REAL_AOAI", "").lower() in ("1", "true", "yes"):
+    _running_evaluation_tests = True
+
 # Disable telemetry for tests
 os.environ["DISABLE_CLOUD_TELEMETRY"] = "true"
 
-# Set required environment variables for CI
-os.environ.setdefault("AZURE_OPENAI_ENDPOINT", "https://test.openai.azure.com")
-os.environ.setdefault("AZURE_OPENAI_API_KEY", "test-key")
-os.environ.setdefault("AZURE_OPENAI_KEY", "test-key")  # Alternate env var
-os.environ.setdefault("AZURE_OPENAI_CHAT_DEPLOYMENT_ID", "test-deployment")
-os.environ.setdefault("AZURE_SPEECH_KEY", "test-speech-key")
-os.environ.setdefault("AZURE_SPEECH_REGION", "test-region")
+# Set required environment variables for CI (skip for evaluation tests which use real credentials)
+if not _running_evaluation_tests:
+    os.environ.setdefault("AZURE_OPENAI_ENDPOINT", "https://test.openai.azure.com")
+    os.environ.setdefault("AZURE_OPENAI_API_KEY", "test-key")
+    os.environ.setdefault("AZURE_OPENAI_KEY", "test-key")  # Alternate env var
+    os.environ.setdefault("AZURE_OPENAI_CHAT_DEPLOYMENT_ID", "test-deployment")
+    os.environ.setdefault("AZURE_SPEECH_KEY", "test-speech-key")
+    os.environ.setdefault("AZURE_SPEECH_REGION", "test-region")
 
 # Mock the config module before any app imports
 # This provides stubs for all config values used by the application
@@ -58,23 +70,25 @@ if "config" not in sys.modules:
     sys.modules["config"] = config_mock
 
 # Mock Azure OpenAI client to avoid Azure authentication during tests
-aoai_client_mock = MagicMock()
-aoai_client_mock.chat = MagicMock()
-aoai_client_mock.chat.completions = MagicMock()
-aoai_client_mock.chat.completions.create = MagicMock()
+# SKIP this mock for evaluation tests which need real API access
+if not _running_evaluation_tests:
+    aoai_client_mock = MagicMock()
+    aoai_client_mock.chat = MagicMock()
+    aoai_client_mock.chat.completions = MagicMock()
+    aoai_client_mock.chat.completions.create = MagicMock()
 
-if "src.aoai.client" not in sys.modules:
-    aoai_module = ModuleType("src.aoai.client")
-    aoai_module.get_client = MagicMock(return_value=aoai_client_mock)
-    aoai_module.create_azure_openai_client = MagicMock(return_value=aoai_client_mock)
-    sys.modules["src.aoai.client"] = aoai_module
+    if "src.aoai.client" not in sys.modules:
+        aoai_module = ModuleType("src.aoai.client")
+        aoai_module.get_client = MagicMock(return_value=aoai_client_mock)
+        aoai_module.create_azure_openai_client = MagicMock(return_value=aoai_client_mock)
+        sys.modules["src.aoai.client"] = aoai_module
 
-# Mock the openai_services module that imports from src.aoai.client
-if "apps.artagent.backend.src.services.openai_services" not in sys.modules:
-    openai_services_mock = ModuleType("apps.artagent.backend.src.services.openai_services")
-    openai_services_mock.AzureOpenAIClient = MagicMock(return_value=aoai_client_mock)
-    openai_services_mock.get_client = MagicMock(return_value=aoai_client_mock)
-    sys.modules["apps.artagent.backend.src.services.openai_services"] = openai_services_mock
+    # Mock the openai_services module that imports from src.aoai.client
+    if "apps.artagent.backend.src.services.openai_services" not in sys.modules:
+        openai_services_mock = ModuleType("apps.artagent.backend.src.services.openai_services")
+        openai_services_mock.AzureOpenAIClient = MagicMock(return_value=aoai_client_mock)
+        openai_services_mock.get_client = MagicMock(return_value=aoai_client_mock)
+        sys.modules["apps.artagent.backend.src.services.openai_services"] = openai_services_mock
 
 # Mock PortAudio-dependent modules before any imports
 sounddevice_mock = MagicMock()

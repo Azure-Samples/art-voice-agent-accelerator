@@ -20,6 +20,12 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 from utils.ml_logging import get_logger
 
+from apps.artagent.backend.src.orchestration.naming import (
+    SCENARIO_KEY_ACTIVE,
+    SCENARIO_KEY_ALL,
+    SCENARIO_KEY_CONFIG,
+)
+
 logger = get_logger(__name__)
 
 router = APIRouter()
@@ -355,7 +361,7 @@ async def _parse_session_data(session_key: str, redis_data: Dict[str, Any]) -> S
                     active_agent_name = None
 
                     # Method 1: Check session_scenario_config for agents list
-                    session_scenario_config = core_memory.get("session_scenario_config", {})
+                    session_scenario_config = core_memory.get(SCENARIO_KEY_CONFIG, {})
                     if session_scenario_config and isinstance(session_scenario_config, dict):
                         agents_in_scenario = session_scenario_config.get("agents", [])
                         if agents_in_scenario:
@@ -384,8 +390,8 @@ async def _parse_session_data(session_key: str, redis_data: Dict[str, Any]) -> S
 
                     # Method 2: Check session_scenarios_all for agent information
                     if not agents_count:
-                        session_scenarios = core_memory.get("session_scenarios_all", {})
-                        active_scenario_name = core_memory.get("active_scenario_name")
+                        session_scenarios = core_memory.get(SCENARIO_KEY_ALL, {})
+                        active_scenario_name = core_memory.get(SCENARIO_KEY_ACTIVE)
 
                         if session_scenarios and active_scenario_name:
                             active_scenario = session_scenarios.get(active_scenario_name, {})
@@ -454,10 +460,10 @@ async def _parse_session_data(session_key: str, redis_data: Dict[str, Any]) -> S
                     scenarios_list = []
                     scenarios_count = 0
                     custom_scenarios_count = 0
-                    active_scenario_name = core_memory.get("active_scenario_name")
+                    active_scenario_name = core_memory.get(SCENARIO_KEY_ACTIVE)
 
                     # Method 1: Try the new structure: session_scenarios_all + active_scenario_name
-                    session_scenarios = core_memory.get("session_scenarios_all", {})
+                    session_scenarios = core_memory.get(SCENARIO_KEY_ALL, {})
 
                     if session_scenarios and isinstance(session_scenarios, dict):
                         scenarios_count = len(session_scenarios)
@@ -500,7 +506,7 @@ async def _parse_session_data(session_key: str, redis_data: Dict[str, Any]) -> S
                     # Check for session_scenario_config as well (active scenario details)
                     # Only add if we didn't find scenarios in the methods above
                     if not scenarios_count:
-                        session_scenario_config = core_memory.get("session_scenario_config", {})
+                        session_scenario_config = core_memory.get(SCENARIO_KEY_CONFIG, {})
                         if session_scenario_config and isinstance(session_scenario_config, dict):
                             scenario_name = session_scenario_config.get("name")
                             if scenario_name:

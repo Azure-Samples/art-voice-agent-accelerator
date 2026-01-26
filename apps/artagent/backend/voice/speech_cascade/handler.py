@@ -4,7 +4,7 @@ Speech Cascade Handler - Three-Thread Architecture
 
 Generic speech processing handler implementing the three-thread architecture
 for low-latency voice interactions. This handler is protocol-agnostic and
-can be composed with different transport handlers (ACS, VoiceLive, WebRTC, etc.).
+can be composed with different transport handlers (ACS, VoiceLive, Websocket, etc.).
 
 🧵 Thread 1: Speech SDK Thread (Never Blocks)
 - Continuous audio recognition
@@ -21,7 +21,7 @@ can be composed with different transport handlers (ACS, VoiceLive, WebRTC, etc.)
 - Non-blocking coordination with transport layer
 
 Architecture:
-    Transport Handler (ACS/VoiceLive/WebRTC)
+    Transport Handler (ACS/VoiceLive/Websocket)
            │
            ▼
     SpeechCascadeHandler
@@ -137,6 +137,8 @@ class ThreadBridge:
         self._route_turn_thread_ref: weakref.ReferenceType | None = None
         # Thread-safe flag to suppress barge-in during agent transitions/greetings
         self._suppress_barge_in = threading.Event()
+        # Lock for atomic queue eviction operations
+        self._queue_lock = threading.Lock()
 
     def set_main_loop(self, loop: asyncio.AbstractEventLoop, connection_id: str = None) -> None:
         """
@@ -220,6 +222,9 @@ class ThreadBridge:
         """
         Queue speech recognition result for Route Turn Thread processing.
 
+        Thread-safe implementation that uses locking to prevent race conditions
+        during queue eviction operations.
+
         Args:
             speech_queue: Async queue for speech event transfer between threads.
             event: Speech recognition event containing transcription results.
@@ -239,52 +244,59 @@ class ThreadBridge:
             if event.event_type == SpeechEventType.PARTIAL:
                 logger.debug(f"[{self.connection_id}] Queue full, dropping PARTIAL event")
                 return
-            
-            # For important events (TTS, FINAL, etc.), try to evict PARTIAL events only
-            evicted = False
-            try:
-                # Try to find and remove a PARTIAL event
-                temp_events = []
-                while not speech_queue.empty():
-                    try:
-                        old_event = speech_queue.get_nowait()
-                        if not evicted and old_event.event_type == SpeechEventType.PARTIAL:
-                            evicted = True
-                            logger.debug(f"[{self.connection_id}] Evicted PARTIAL to make room for {event.event_type.value}")
-                        else:
-                            temp_events.append(old_event)
-                    except asyncio.QueueEmpty:
-                        break
-                
-                # Put back non-evicted events
-                for e in temp_events:
-                    try:
-                        speech_queue.put_nowait(e)
-                    except asyncio.QueueFull:
-                        break
-            except Exception:
-                pass
 
-            # Now try to add the important event
-            try:
-                speech_queue.put_nowait(event)
-                logger.info(f"[{self.connection_id}] Enqueued {event.event_type.value} after eviction")
-            except asyncio.QueueFull:
-                # For TTS_RESPONSE, use blocking put - must not drop
-                if event.event_type == SpeechEventType.TTS_RESPONSE:
-                    logger.warning(f"[{self.connection_id}] Queue full for TTS, using blocking put")
-                    if self.main_loop and not self.main_loop.is_closed():
+            # For important events (TTS, FINAL, etc.), try to evict PARTIAL events
+            # Use lock to make eviction atomic and prevent race conditions
+            with self._queue_lock:
+                evicted = False
+                try:
+                    # Drain queue while holding lock to prevent concurrent modifications
+                    temp_events = []
+                    while not speech_queue.empty():
                         try:
-                            future = asyncio.run_coroutine_threadsafe(
-                                speech_queue.put(event), self.main_loop
+                            old_event = speech_queue.get_nowait()
+                            if not evicted and old_event.event_type == SpeechEventType.PARTIAL:
+                                evicted = True
+                                logger.debug(
+                                    f"[{self.connection_id}] Evicted PARTIAL to make room for {event.event_type.value}"
+                                )
+                            else:
+                                temp_events.append(old_event)
+                        except asyncio.QueueEmpty:
+                            break
+
+                    # Restore non-evicted events in original order
+                    for e in temp_events:
+                        try:
+                            speech_queue.put_nowait(e)
+                        except asyncio.QueueFull:
+                            logger.error(
+                                f"[{self.connection_id}] Lost event during eviction restore: {e.event_type.value}"
                             )
-                            future.result(timeout=5.0)  # Wait up to 5s for queue space
-                        except Exception as e:
-                            logger.error(f"[{self.connection_id}] Failed to queue TTS: {e}")
-                else:
-                    logger.error(
-                        f"[{self.connection_id}] Queue still full after eviction; dropping {event.event_type.value}"
-                    )
+                            break
+                except Exception as exc:
+                    logger.debug(f"[{self.connection_id}] Queue eviction error: {exc}")
+
+                # Now try to add the important event (still under lock)
+                try:
+                    speech_queue.put_nowait(event)
+                    logger.info(f"[{self.connection_id}] Enqueued {event.event_type.value} after eviction")
+                except asyncio.QueueFull:
+                    # For TTS_RESPONSE, use blocking put - must not drop
+                    if event.event_type == SpeechEventType.TTS_RESPONSE:
+                        logger.warning(f"[{self.connection_id}] Queue full for TTS, using blocking put")
+                        if self.main_loop and not self.main_loop.is_closed():
+                            try:
+                                future = asyncio.run_coroutine_threadsafe(
+                                    speech_queue.put(event), self.main_loop
+                                )
+                                future.result(timeout=5.0)  # Wait up to 5s for queue space
+                            except Exception as e:
+                                logger.error(f"[{self.connection_id}] Failed to queue TTS: {e}")
+                    else:
+                        logger.error(
+                            f"[{self.connection_id}] Queue still full after eviction; dropping {event.event_type.value}"
+                        )
         except Exception:
             # Fallback to run_coroutine_threadsafe
             if self.main_loop and not self.main_loop.is_closed():
@@ -457,6 +469,22 @@ class SpeechSDKThread:
         """
         if self.recognizer:
             self.recognizer.write_bytes(audio_bytes)
+
+    def stop_stt_timer_for_barge_in(self) -> None:
+        """
+        Stop any active STT timer during barge-in.
+
+        Called when user interrupts to end current recognition session.
+        This signals to the recognizer that the current utterance is complete
+        due to user interruption.
+        """
+        logger.debug(f"[{self._conn_short}] STT timer stopped for barge-in")
+        # Signal recognizer to finalize current audio buffer if supported
+        if self.recognizer and hasattr(self.recognizer, "finalize_current_utterance"):
+            try:
+                self.recognizer.finalize_current_utterance()
+            except Exception as e:
+                logger.debug(f"[{self._conn_short}] Error finalizing utterance: {e}")
 
     def stop(self) -> None:
         """Stop speech recognition and thread."""
@@ -909,7 +937,7 @@ class SpeechCascadeHandler:
 
     Coordinates the three-thread architecture for low-latency voice interactions.
     This handler is protocol-agnostic and can be composed with different
-    transport handlers (ACS, VoiceLive, WebRTC, etc.).
+    transport handlers (ACS, VoiceLive, Websocket, etc.).
 
     Usage:
         handler = SpeechCascadeHandler(

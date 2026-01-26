@@ -173,6 +173,19 @@ _MOCK_USERS = {
         "phone_last_4": "4441",
         "email": "bob.williams@example.com",
     },
+    # Test scenario users
+    ("john smith", "5678"): {
+        "client_id": "john_smith_js",
+        "full_name": "John Smith",
+        "phone_last_4": "1234",
+        "email": "john.smith.test@example.com",
+    },
+    ("sarah johnson", "4321"): {
+        "client_id": "sarah_johnson_sj",
+        "full_name": "Sarah Johnson",
+        "phone_last_4": "7890",
+        "email": "sarah.johnson@example.com",
+    },
 }
 
 _PENDING_MFA: dict[str, str] = {}  # client_id -> code

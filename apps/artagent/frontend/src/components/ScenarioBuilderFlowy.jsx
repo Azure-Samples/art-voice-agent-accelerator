@@ -120,7 +120,6 @@ function FlowyCanvasSection({
   // Get agent color scheme
   const getAgentColorScheme = useCallback((agent, isStart = false) => {
     if (isStart) return colors.start;
-    if (agent?.is_session_agent) return colors.session;
     return colors.active;
   }, []);
 
@@ -241,10 +240,6 @@ function FlowyCanvasSection({
     checkFlowy();
   }, [initializeFlowy]);
 
-  // Separate agents into groups
-  const staticAgents = agents.filter(a => !a.is_session_agent);
-  const sessionAgents = agents.filter(a => a.is_session_agent);
-
   return (
     <Box sx={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
       {/* Draggable blocks sidebar */}
@@ -272,13 +267,13 @@ function FlowyCanvasSection({
               sx={{
                 py: 1,
                 borderStyle: 'dashed',
-                borderColor: colors.session.border,
-                color: colors.session.avatar,
+                borderColor: colors.active.border,
+                color: colors.active.avatar,
                 fontWeight: 600,
                 fontSize: 12,
                 '&:hover': {
                   borderStyle: 'solid',
-                  backgroundColor: colors.session.bg,
+                  backgroundColor: colors.active.bg,
                 },
               }}
             >
@@ -303,11 +298,10 @@ function FlowyCanvasSection({
           </Typography>
         </Box>
 
-        {/* Agent blocks container */}
+        {/* Agent blocks container - unified, no session vs built-in distinction */}
         <Box id="flowy-blocks" sx={{ flex: 1, overflowY: 'auto', p: 1 }}>
-          {/* Built-in Agents */}
-          {staticAgents.length > 0 && (
-            <Box sx={{ mb: 2 }}>
+          {agents.length > 0 && (
+            <Box>
               <Typography 
                 variant="caption" 
                 sx={{ 
@@ -321,10 +315,10 @@ function FlowyCanvasSection({
                   mb: 1,
                 }}
               >
-                Built-in Agents
+                Available Agents
               </Typography>
               
-              {staticAgents.map(agent => {
+              {agents.map(agent => {
                 const colorScheme = getAgentColorScheme(agent);
                 const blockId = getBlockId(agent.name);
                 
@@ -400,103 +394,6 @@ function FlowyCanvasSection({
                               </Typography>
                             )}
                           </Box>
-                        </Stack>
-                      </Paper>
-                    </div>
-                  </Box>
-                );
-              })}
-            </Box>
-          )}
-
-          {/* Custom Agents */}
-          {sessionAgents.length > 0 && (
-            <Box>
-              <Typography 
-                variant="caption" 
-                sx={{ 
-                  fontWeight: 700, 
-                  color: colors.session.avatar,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.5px',
-                  fontSize: 10,
-                  px: 0.5,
-                  display: 'block',
-                  mb: 1,
-                }}
-              >
-                Custom Agents
-              </Typography>
-              
-              {sessionAgents.map(agent => {
-                const colorScheme = getAgentColorScheme(agent);
-                const blockId = getBlockId(agent.name);
-                
-                return (
-                  <Box
-                    key={agent.name}
-                    className="create-flowy"
-                    data-agent-name={agent.name}
-                    data-block-id={blockId}
-                    sx={{ mb: 1 }}
-                  >
-                    <input type="hidden" name="blockelemtype" className="blockelemtype" value={blockId} />
-                    <input type="hidden" name="blockid" className="blockid" value={blockId} />
-                    <input type="hidden" name="agentname" className="agentname" data-agent-name={agent.name} value={agent.name} />
-                    <div className="grabme" data-agent-name={agent.name}>
-                      <Paper
-                        elevation={0}
-                        className="agent-block"
-                        sx={{
-                          background: colorScheme.bg,
-                          border: `2px solid ${colorScheme.border}`,
-                          borderRadius: '12px',
-                          p: 1.25,
-                          cursor: 'grab',
-                          transition: 'all 0.2s ease',
-                          '&:hover': {
-                            transform: 'translateY(-2px)',
-                            boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                          },
-                        }}
-                      >
-                        <Stack direction="row" alignItems="center" spacing={1}>
-                          <Avatar
-                            sx={{
-                              width: 28,
-                              height: 28,
-                              bgcolor: colorScheme.avatar,
-                              fontSize: 12,
-                              fontWeight: 600,
-                            }}
-                          >
-                            {agent.name?.[0] || 'A'}
-                          </Avatar>
-                          <Box sx={{ flex: 1, minWidth: 0 }}>
-                            <Typography
-                              variant="body2"
-                              sx={{
-                                fontWeight: 600,
-                                fontSize: 12,
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                              }}
-                            >
-                              {agent.name}
-                            </Typography>
-                          </Box>
-                          <Chip
-                            icon={<AutoFixHighIcon sx={{ fontSize: 10 }} />}
-                            label="Custom"
-                            size="small"
-                            sx={{
-                              height: 18,
-                              fontSize: 9,
-                              backgroundColor: colors.session.bg,
-                              color: colors.session.avatar,
-                            }}
-                          />
                         </Stack>
                       </Paper>
                     </div>

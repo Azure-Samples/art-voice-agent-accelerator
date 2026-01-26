@@ -762,6 +762,7 @@ The application provides comprehensive health monitoring via REST endpoints:
 Returns `200 OK` if the server process is running. Used by Kubernetes/load balancers for liveness checks.
 
 **Response includes:**
+
 - Basic service status
 - Active session count
 - WebSocket connection metrics
@@ -771,6 +772,7 @@ Returns `200 OK` if the server process is running. Used by Kubernetes/load balan
 Returns `200 OK` only if all critical dependencies are healthy. Returns `503 Service Unavailable` if any are unhealthy.
 
 **Dependencies checked (with 1s timeout each):**
+
 - ✅ **Redis** - Connectivity and ping response
 - ✅ **Azure OpenAI** - Client initialization
 - ✅ **Speech Services** - STT/TTS pool readiness
@@ -1072,6 +1074,7 @@ opentelemetry-instrumentation-openai-v2
 The instrumentor follows OpenTelemetry GenAI semantic conventions:
 
 **Attributes captured:**
+
 - `gen_ai.request.model` - Model deployment ID
 - `gen_ai.request.max_tokens` - Max tokens requested
 - `gen_ai.request.temperature` - Sampling temperature
@@ -1086,7 +1089,7 @@ The instrumentor follows OpenTelemetry GenAI semantic conventions:
 ### Azure AI & Agents
 
 | Topic | Documentation |
-|-------|---------------|
+| ----- | ------------- |
 | **Tracing AI Agents** | [Enable tracing for Azure AI Agents SDK](https://learn.microsoft.com/azure/ai-foundry/how-to/develop/trace-agents-sdk) |
 | **Production Tracing** | [Tracing in production with the Azure AI SDK](https://learn.microsoft.com/azure/ai-foundry/how-to/develop/trace-production-sdk) |
 | **Visualize Traces** | [Visualize your traces in Azure AI Foundry](https://learn.microsoft.com/azure/ai-foundry/how-to/develop/visualize-traces) |
@@ -1094,7 +1097,7 @@ The instrumentor follows OpenTelemetry GenAI semantic conventions:
 ### Azure Monitor & Application Insights
 
 | Topic | Documentation |
-|-------|---------------|
+| ----- | ------------- |
 | **Application Map** | [Application Map: Triage Distributed Applications](https://learn.microsoft.com/azure/azure-monitor/app/app-map) |
 | **OpenTelemetry Setup** | [Enable Azure Monitor OpenTelemetry](https://learn.microsoft.com/azure/azure-monitor/app/opentelemetry-enable) |
 | **Cloud Role Configuration** | [Set Cloud Role Name and Instance](https://learn.microsoft.com/azure/azure-monitor/app/opentelemetry-configuration#set-the-cloud-role-name-and-the-cloud-role-instance) |
@@ -1105,7 +1108,7 @@ The instrumentor follows OpenTelemetry GenAI semantic conventions:
 ### OpenTelemetry Standards
 
 | Topic | Documentation |
-|-------|---------------|
+| ----- | ------------- |
 | **GenAI Semantic Conventions** | [Generative AI Spans](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/) |
 | **GenAI Metrics** | [Generative AI Metrics](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-metrics/) |
 | **Span Kinds** | [Span Kind](https://opentelemetry.io/docs/concepts/signals/traces/#span-kind) |
@@ -1114,7 +1117,7 @@ The instrumentor follows OpenTelemetry GenAI semantic conventions:
 ### Azure Services
 
 | Topic | Documentation |
-|-------|---------------|
+| ----- | ------------- |
 | **Azure Speech Telemetry** | [Speech SDK logging](https://learn.microsoft.com/azure/ai-services/speech-service/how-to-use-logging) |
 | **Azure OpenAI Monitoring** | [Monitor Azure OpenAI](https://learn.microsoft.com/azure/ai-services/openai/how-to/monitoring) |
 | **Container Apps Health Probes** | [Health probes in Azure Container Apps](https://learn.microsoft.com/azure/container-apps/health-probes) |

@@ -41,6 +41,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from src.stateful.state_managment import MemoManager
 
+from apps.artagent.backend.src.orchestration.naming import find_agent_by_name
+
 try:
     from utils.ml_logging import get_logger
 
@@ -163,14 +165,23 @@ def sync_state_from_memo(
 
     # ─── Active Agent ───
     active = _get_from_memo(mm, K.ACTIVE_AGENT)
-    if active and (available_agents is None or active in available_agents):
-        state.active_agent = active
-        logger.debug("Synced active_agent from MemoManager: %s", active)
-    elif active and available_agents:
-        logger.warning(
-            "Active agent '%s' not in available agents, ignoring",
-            active,
-        )
+    if active:
+        # Use case-insensitive lookup if available_agents is provided
+        if available_agents is None:
+            state.active_agent = active
+            logger.debug("Synced active_agent from MemoManager: %s", active)
+        else:
+            # Convert set to dict for find_agent_by_name (keys only matter)
+            agents_dict = {name: None for name in available_agents}
+            actual_key, _ = find_agent_by_name(agents_dict, active)
+            if actual_key:
+                state.active_agent = actual_key  # Use the actual key from agents
+                logger.debug("Synced active_agent from MemoManager: %s (matched %s)", actual_key, active)
+            else:
+                logger.warning(
+                    "Active agent '%s' not in available agents, ignoring",
+                    active,
+                )
 
     # ─── Visited Agents ───
     visited = _get_from_memo(mm, K.VISITED_AGENTS)

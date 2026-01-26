@@ -36,7 +36,7 @@ dependencies = [
     "starlette>=0.27.0",
     "redis>=5.0.0",
     "redis-entraid>=1.0.0",
-    "aiohttp>=3.9.0",
+    "aiohttp>=3.13.3",
     "python-multipart>=0.0.6",
     "pyjwt",
     # Azure services
@@ -55,16 +55,20 @@ dependencies = [
     "azure-ai-agents==1.2.0b5",
     "azure-ai-projects==1.0.0",
     "azure-ai-voicelive==1.0.0",
-    # Azure monitoring and telemetry
+    # Azure monitoring and telemetry (pinned to avoid conflicts with google-adk)
     "azure-monitor-opentelemetry>=1.6.11",
-    "opentelemetry-sdk",
-    "opentelemetry-instrumentation",
-    "opentelemetry-instrumentation-fastapi",
-    "opentelemetry-instrumentation-requests",
-    "opentelemetry-instrumentation-urllib",
-    "opentelemetry-instrumentation-urllib3",
+    "opentelemetry-api==1.37.0",
+    "opentelemetry-sdk==1.37.0",
+    "opentelemetry-semantic-conventions==0.58b0",
+    "opentelemetry-instrumentation==0.58b0",
+    "opentelemetry-instrumentation-fastapi==0.58b0",
+    "opentelemetry-instrumentation-asgi==0.58b0",
+    "opentelemetry-instrumentation-requests==0.58b0",
+    "opentelemetry-instrumentation-urllib==0.58b0",
+    "opentelemetry-instrumentation-urllib3==0.58b0",
     # Azure + misc
-    "azure-core>=1.29.0",
+    "azure-core>=1.38.0",
+    "urllib3>=2.6.3",
     "colorama>=0.4.6",
     # AI and OpenAI integration
     "openai>=1.50.0",
@@ -86,7 +90,7 @@ dependencies = [
     "pyyaml>=6.0.0",
     "pyyaml-include>=1.3.0",
     # Audio processing
-    # NOTE: local microphone capture/playback deps live in the `dev` extra.
+    # NOTE: local microphone capture/playback deps live in the `audio` extra.
     # Database drivers
     "pymongo>=4.6.0",
     "rapidfuzz>=3.13.0",
@@ -120,7 +124,45 @@ dev = [
     "pre-commit==2.14.0",
     # Load testing
     "locust>=2.20.0",
+    # Evaluation (Foundry cloud submission)
+    "azure-ai-evaluation>=1.0.0",
+]
 
+# Local audio capture/playback - requires system portaudio library
+# Install with: pip install -e ".[audio]" or ".[dev-all]"
+# On Ubuntu: apt-get install portaudio19-dev
+# On macOS: brew install portaudio
+audio = [
+    "sounddevice>=0.4.6",
+    "pyaudio>=0.2.11",
+]
+
+# Full dev environment including local audio support
+# Duplicates dev deps to avoid self-reference issues with some tools
+dev-all = [
+    # Testing
+    "pytest>=7.4.0",
+    "pytest-asyncio",
+    "pytest-cov",
+    "anyio",
+    # Code quality
+    "black[jupyter]==25.1.0",
+    "isort==5.9.3",
+    "flake8==3.9.2",
+    "ruff",
+    "pylint",
+    "bandit",
+    # Type checking
+    "types-requests",
+    "types-PyYAML",
+    # Docstring coverage
+    "interrogate==1.4.0",
+    # Pre-commit hooks
+    "pre-commit==2.14.0",
+    # Load testing
+    "locust>=2.20.0",
+    # Evaluation (Foundry cloud submission)
+    "azure-ai-evaluation>=1.0.0",
     # Local audio (mic capture / playback)
     "sounddevice>=0.4.6",
     "pyaudio>=0.2.11",
@@ -226,6 +268,9 @@ pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "-q -ra"
 asyncio_mode = "auto"
+markers = [
+  "evaluation: marks tests as evaluation tests (deselect with '-m \"not evaluation\"')",
+]
 filterwarnings = [
   "ignore::DeprecationWarning",
   "ignore::UserWarning"
@@ -278,6 +323,7 @@ include = ["src*", "apps*", "utils*"]
 
 [dependency-groups]
 dev = [
+    "azure-ai-projects>=1.0.0",
     "ipykernel>=7.1.0",
     "ipywidgets>=8.1.8",
     "pandas>=2.3.3",

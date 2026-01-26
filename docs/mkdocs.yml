@@ -62,54 +62,76 @@ nav:
     - Demo Guide: getting-started/demo-guide.md
   - Architecture:
     - Overview: architecture/README.md
-    - Agents:
-      - Agent Framework: architecture/agents/README.md
-      - Handoff Strategies: architecture/agents/handoffs.md
-    - Orchestration:
-      - Overview: architecture/orchestration/README.md
-      - Scenario-Based Orchestration: architecture/orchestration/industry-scenarios.md
-      - Scenario System Flow: architecture/orchestration/scenario-system-flow.md
-      - Cascade Orchestrator: architecture/orchestration/cascade.md
-      - VoiceLive Orchestrator: architecture/orchestration/voicelive.md
-      - Handoff Service: architecture/orchestration/handoff-service.md
-    - Speech & Voice:
-      - Streaming Modes: architecture/speech/README.md
-      - Recognition: architecture/speech/recognition.md
-      - Synthesis: architecture/speech/synthesis.md
-      - Voice Processing: architecture/voice/README.md
-    - Data:
-      - Session Management: architecture/data/README.md
-      - Data Flows: architecture/data/flows.md
-    - ACS:
-      - Call Flows: architecture/acs/README.md
-      - Telephony Integration: architecture/acs/integrations.md
+    - Voice Processing: architecture/voice/README.md
+    - Orchestration: architecture/orchestration/README.md
+    - Speech & Audio: architecture/speech/README.md
+    - ACS Integration: architecture/acs/README.md
+    - Session & Data: architecture/data/README.md
     - Telemetry: architecture/telemetry.md
-    - Archive: architecture/archive/README.md
+  - Agents:
+    - Framework: architecture/agents/README.md
+    - Handoff Strategies: architecture/agents/handoffs.md
+    - Handoff Service: architecture/orchestration/handoff-service.md
+    - Registries:
+      - Overview: architecture/registries/index.md
+      - Agents: architecture/registries/agents.md
+      - Tool Development: architecture/registries/tools.md
+      - Tool Reference: architecture/registries/tool-catalog.md
+      - Scenarios: architecture/registries/scenarios.md
+    - Reference:
+      - Catalog: architecture/agents/reference/index.md
+      - Banking:
+        - BankingConcierge: architecture/agents/reference/banking-concierge.md
+        - FraudAgent: architecture/agents/reference/fraud-agent.md
+        - InvestmentAdvisor: architecture/agents/reference/investment-advisor.md
+        - CardRecommendation: architecture/agents/reference/card-recommendation.md
+      - Insurance:
+        - PolicyAdvisor: architecture/agents/reference/policy-advisor.md
+        - ClaimsSpecialist: architecture/agents/reference/claims-specialist.md
+        - FNOLAgent: architecture/agents/reference/fnol-agent.md
+        - SubroAgent: architecture/agents/reference/subro-agent.md
+      - Cross-Domain:
+        - AuthAgent: architecture/agents/reference/auth-agent.md
+        - Concierge: architecture/agents/reference/concierge.md
+        - ComplianceDesk: architecture/agents/reference/compliance-desk.md
+        - GeneralKBAgent: architecture/agents/reference/general-kb-agent.md
+  - Configuration:
+    - Voice Settings: architecture/voice/configuration.md
+    - Config Reference: architecture/voice/config-reference.md
+    - Orchestrators: architecture/orchestration/orchestrators.md
+    - Speech Services: architecture/speech/speech-services.md
+    - Telephony: architecture/acs/integrations.md
   - Deployment:
-    - Deployment Guide: deployment/README.md
+    - Overview: deployment/README.md
     - Phone Number Setup: deployment/phone-number-setup.md
     - Production: deployment/production.md
     - CI/CD: deployment/cicd.md
-  - Security:
-    - Authentication: security/authentication.md
+  - Testing:
+    - Overview: testing/index.md
+    - Unit & Integration Tests: operations/testing.md
+    - Agent Evaluation:
+      - Overview: testing/model-evaluation.md
+      - Framework Reference: testing/evaluation-framework.md
+      - Scenario YAML Reference: testing/evaluation-scenarios.md
+    - Load Testing: operations/load-testing.md
   - Operations:
     - Monitoring: operations/monitoring.md
     - Troubleshooting: operations/troubleshooting.md
-    - Testing: operations/testing.md
-    - Load Testing: operations/load-testing.md
+    - Voice Debugging: architecture/voice/debugging.md
   - API Reference:
     - Overview: api/README.md
-    - API Reference: api/api-reference.md
+    - Endpoints: api/api-reference.md
   - Industry Solutions:
     - Overview: industry/README.md
     - Banking: industry/banking.md
     - Insurance: industry/insurance.md
     - Healthcare: industry/healthcare.md
-  - Samples & Labs:
-    - Overview: samples/README.md
   - Guides:
     - Repository Structure: guides/repository-structure.md
     - Utilities & Services: guides/utilities.md
+    - Samples & Labs: samples/README.md
+  - Security:
+    - Authentication: security/authentication.md
 extra_css:
   - assets/oad-styles.css
 

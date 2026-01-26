@@ -1197,8 +1197,10 @@ class AzureOpenAIManager:
         """
         Determine which endpoint to use based on model configuration and parameters.
 
-        IMPORTANT: For real-time voice scenarios, this method prioritizes /chat/completions
-        for streaming to ensure optimal latency and compatibility.
+        Priority order:
+        1. Explicit endpoint_preference ("responses" or "chat") is ALWAYS honored
+        2. For streaming with "auto" mode, defaults to chat for compatibility
+        3. For non-streaming "auto", uses responses for reasoning models (o1/o3/o4/gpt-5)
 
         Args:
             model_config: ModelConfig instance with endpoint preferences
@@ -1207,23 +1209,23 @@ class AzureOpenAIManager:
         Returns:
             True if /responses endpoint should be used, False for /chat/completions
         """
-        # CRITICAL: Current responses API doesn't properly support streaming with conversation history
-        # Disable responses endpoint for streaming until SDK is updated
-        # This ensures optimal performance for real-time voice scenarios
-        if kwargs.get("stream", False):
-            logger.debug("Using /chat/completions endpoint (streaming not well-supported by responses API - optimal for real-time)")
-            return False
-
         # Handle case where model_config might not have the new attributes
         if not hasattr(model_config, "endpoint_preference"):
             return False
 
-        # Explicit override
+        # 1. Explicit preference ALWAYS wins (even for streaming)
+        #    Responses API streaming is now GA (Aug 2025) - opt-in via explicit preference
         if model_config.endpoint_preference == "responses":
             logger.debug("Using /responses endpoint (explicit preference)")
             return True
         if model_config.endpoint_preference == "chat":
             logger.debug("Using /chat/completions endpoint (explicit preference)")
+            return False
+
+        # 2. For "auto" mode with streaming, default to chat for backward compatibility
+        #    Users can opt-in to responses streaming via explicit preference above
+        if kwargs.get("stream", False):
+            logger.debug("Using /chat/completions endpoint (streaming with auto mode)")
             return False
 
         # Auto-detection (endpoint_preference == "auto")
@@ -1438,34 +1440,31 @@ class AzureOpenAIManager:
         if typical_p is not None:
             params["typical_p"] = typical_p
 
-        # Reasoning parameters - OPTIMIZED FOR REAL-TIME
-        reasoning_effort = getattr(model_config, "reasoning_effort", None)
-        if reasoning_effort:
-            params["reasoning_effort"] = reasoning_effort
-        else:
-            # Real-time optimization: Default to "low" reasoning for reasoning models
-            model_family = getattr(model_config, "model_family", None)
-            deployment_id = getattr(model_config, "deployment_id", "").lower()
-            is_reasoning_model = (
-                model_family in ["o1", "o3", "o4"] or
-                any(x in deployment_id for x in ["o1", "o3", "o4"])
-            )
-            if is_reasoning_model:
+        # Reasoning parameters - ONLY for reasoning models (o1, o3, o4)
+        # gpt-4o and other non-reasoning models don't support these parameters
+        is_reasoning = getattr(model_config, "is_reasoning_model", False)
+
+        if is_reasoning:
+            reasoning_effort = getattr(model_config, "reasoning_effort", None)
+            if reasoning_effort:
+                params["reasoning_effort"] = reasoning_effort
+            else:
+                # Real-time optimization: Default to "low" reasoning for reasoning models
                 params["reasoning_effort"] = "low"
                 logger.debug("Real-time optimization: Setting reasoning_effort=low for reasoning model")
 
-        include_reasoning = getattr(model_config, "include_reasoning", False)
-        if include_reasoning:
-            params["include_reasoning"] = True
+            # include_reasoning is also only for reasoning models
+            include_reasoning = getattr(model_config, "include_reasoning", False)
+            if include_reasoning:
+                params["include_reasoning"] = True
 
-        # Verbosity and output control - OPTIMIZED FOR REAL-TIME
-        # ALWAYS send verbosity explicitly for real-time scenarios
-        verbosity = getattr(model_config, "verbosity", 0)
-        params["verbosity"] = verbosity  # Explicitly set (0=minimal for real-time)
-
-        # Log if using non-optimal verbosity for real-time
-        if verbosity > 0:
-            logger.debug(f"Non-optimal real-time verbosity: {verbosity} (recommend 0 for minimal latency)")
+            # Verbosity - ONLY for reasoning models (o1, o3, o4)
+            # Non-reasoning models like gpt-4o don't support this parameter
+            verbosity = getattr(model_config, "verbosity", None)
+            if verbosity is not None:
+                params["verbosity"] = verbosity
+                if verbosity > 0:
+                    logger.debug(f"Verbosity set to {verbosity} (0=minimal for lowest latency)")
 
         store = getattr(model_config, "store", None)
         if store is not None:

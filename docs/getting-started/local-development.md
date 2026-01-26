@@ -71,6 +71,20 @@ Choose **one** of these options:
     uv sync  # or: pip install -e .[dev]
     ```
 
+!!! tip "Local Audio Capture (Optional)"
+    If you need local microphone capture/playback features (e.g., for testing with `pyaudio`), install the `audio` extra:
+    
+    ```bash
+    # First install the system portaudio library
+    # macOS: brew install portaudio
+    # Ubuntu/Debian: apt-get install portaudio19-dev
+    
+    # Then install with audio extras
+    pip install -e ".[dev-all]"  # or: pip install -e ".[dev,audio]"
+    ```
+    
+    This is **not required** for the main voice pipeline which uses Azure Communication Services.
+
 ---
 
 ## :material-numeric-2-circle: Environment Configuration
@@ -367,3 +381,17 @@ uv run pytest tests/ -v
 ```
 
 📚 **Full guide:** [Testing Guide](../operations/testing.md)
+
+---
+
+## :material-cog: Customizing Agents, Tools, and Scenarios
+
+Now that you're running locally, you can modify agent behavior, add custom tools, and create new scenarios directly in code.
+
+| What to Customize | Location | Guide |
+|-------------------|----------|-------|
+| Add a new tool | `apps/artagent/backend/registries/toolstore/` | [Tools Guide](../architecture/registries/tools.md) |
+| Create/modify an agent | `apps/artagent/backend/registries/agentstore/` | [Agents Guide](../architecture/registries/agents.md) |
+| Define a scenario | `apps/artagent/backend/registries/scenariostore/` | [Scenarios Guide](../architecture/registries/scenarios.md) |
+
+📚 **Full guide:** [Registries Overview](../architecture/registries/index.md)

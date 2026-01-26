@@ -6,18 +6,16 @@
 
 ## Architecture
 
-```
-            ┌───────────┐
-            │ AuthAgent │ ← Security gate
-            └─────┬─────┘
-                  │
-     ┌────────────┼────────────┐
-     ▼            ▼            ▼
-┌──────────┐ ┌──────────┐ ┌──────────┐
-│  Policy  │ │   FNOL   │ │  Subro   │
-│  Advisor │ │  Agent   │ │  Agent   │
-└──────────┘ └──────────┘ └──────────┘
-     B2C          B2C          B2B
+```mermaid
+flowchart TB
+    AA[AuthAgent<br/>Security Gate] --> PA[PolicyAdvisor<br/>B2C]
+    AA --> FNOL[FNOLAgent<br/>B2C]
+    AA --> SA[SubroAgent<br/>B2B]
+    PA --> FNOL
+    FNOL --> PA
+    PA --> H[Human Agent]
+    FNOL --> H
+    SA --> H
 ```
 
 **Two caller types:**
@@ -31,12 +29,14 @@
 
 ## Agents
 
-| Agent | Purpose | Key Tools |
-|:------|:--------|:----------|
-| **AuthAgent** | Entry, identity verification | `verify_client_identity`, `verify_cc_caller` |
-| **PolicyAdvisor** | Policy inquiries | `get_policy_details`, `get_coverage_details` |
-| **FNOLAgent** | File new claims | `file_new_claim` |
-| **SubroAgent** | B2B subrogation | `get_coverage_status`, `evaluate_rush_criteria` |
+| Agent | Purpose | Key Tools | Reference |
+|:------|:--------|:----------|:----------|
+| **AuthAgent** | Entry, identity verification | `verify_client_identity`, `verify_cc_caller` | [→ Details](../architecture/agents/reference/auth-agent.md) |
+| **PolicyAdvisor** | Policy inquiries | `get_policy_details`, `get_coverage_details` | [→ Details](../architecture/agents/reference/policy-advisor.md) |
+| **FNOLAgent** | File new claims | `file_new_claim` | [→ Details](../architecture/agents/reference/fnol-agent.md) |
+| **SubroAgent** | B2B subrogation | `get_coverage_status`, `evaluate_rush_criteria` | [→ Details](../architecture/agents/reference/subro-agent.md) |
+
+> **Related:** [ClaimsSpecialist](../architecture/agents/reference/claims-specialist.md) handles ongoing claims processing
 
 ---
 

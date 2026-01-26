@@ -155,6 +155,12 @@ class ModelConfig:
             return "gpt-5"
         return "unknown"
 
+    @property
+    def is_reasoning_model(self) -> bool:
+        """Check if this is a reasoning model (o1/o3/o4) that supports reasoning-specific params."""
+        family = self.model_family or self._detect_model_family()
+        return family in ("o1", "o3", "o4")
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ModelConfig:
         """Create ModelConfig from dict."""

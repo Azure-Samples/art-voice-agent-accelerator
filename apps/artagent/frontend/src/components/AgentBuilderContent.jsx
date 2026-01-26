@@ -710,7 +710,6 @@ function AgentDetailsDialog({ open, onClose, agent, loading }) {
   const modelLabel = getModelLabel(agent);
   const cascadeLabel = getCascadeLabel(agent);
   const voiceLiveLabel = getVoiceLiveLabel(agent);
-  const isSessionAgent = Boolean(agent?.is_session_agent);
   const promptIsPreview = !agent?.prompt_full && !agent?.prompt && !!agent?.prompt_preview;
 
   if (!open) return null;
@@ -719,7 +718,7 @@ function AgentDetailsDialog({ open, onClose, agent, loading }) {
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
       <DialogTitle sx={{ pb: 1 }}>
         <Stack direction="row" alignItems="center" spacing={2}>
-          <Avatar sx={{ bgcolor: isSessionAgent ? '#6366f1' : '#0ea5e9' }}>
+          <Avatar sx={{ bgcolor: '#0ea5e9' }}>
             {agent?.name?.[0] || 'A'}
           </Avatar>
           <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -727,14 +726,6 @@ function AgentDetailsDialog({ open, onClose, agent, loading }) {
               <Typography variant="h6" sx={{ fontWeight: 600 }}>
                 {agent?.name || 'Agent Details'}
               </Typography>
-              {isSessionAgent && (
-                <Chip
-                  size="small"
-                  icon={<MemoryIcon sx={{ fontSize: 14 }} />}
-                  label="Session"
-                  sx={{ backgroundColor: '#eef2ff', color: '#4338ca' }}
-                />
-              )}
               {agent?.is_entry_point && (
                 <Chip size="small" color="primary" label="Entry" />
               )}
@@ -785,9 +776,6 @@ function AgentDetailsDialog({ open, onClose, agent, loading }) {
                   icon={<HearingIcon sx={{ fontSize: 14 }} />}
                   label={`VoiceLive ${voiceLiveLabel}`}
                 />
-                {isSessionAgent && agent?.session_id && (
-                  <Chip size="small" label={`Session ${agent.session_id}`} />
-                )}
               </Stack>
             </Box>
 
@@ -1097,6 +1085,15 @@ export default function AgentBuilderContent({
       agent_name: 'Assistant',
     },
   });
+  const [draftGreeting, setDraftGreeting] = useState('');
+  const [draftReturnGreeting, setDraftReturnGreeting] = useState('');
+  const [draftPrompt, setDraftPrompt] = useState(DEFAULT_PROMPT);
+
+  // Explicit custom mode tracking - prevents input reset when typing hyphens
+  // that might temporarily match a preset name (e.g., typing "my-gpt-4o-test" matches "gpt-4o")
+  const [isCascadeCustomMode, setIsCascadeCustomMode] = useState(false);
+  const [isVoiceliveCustomMode, setIsVoiceliveCustomMode] = useState(false);
+  const customModeInitialized = useRef(false);
 
   const cascadeEndpointPreference = useMemo(
     () => resolveEndpointPreference(config.cascade_model),
@@ -1106,20 +1103,35 @@ export default function AgentBuilderContent({
     () => resolveEndpointPreference(config.voicelive_model),
     [config.voicelive_model],
   );
+  // Compute preset values for dropdown display
   const cascadeModelPreset = useMemo(() => {
+    if (isCascadeCustomMode) return 'custom';
     const deploymentId = (config.cascade_model?.deployment_id || '').trim();
     return CASCADE_MODEL_PRESETS.some((preset) => preset.id === deploymentId)
       ? deploymentId
       : 'custom';
-  }, [config.cascade_model?.deployment_id]);
+  }, [config.cascade_model?.deployment_id, isCascadeCustomMode]);
   const voiceliveModelPreset = useMemo(() => {
+    if (isVoiceliveCustomMode) return 'custom';
     const deploymentId = (config.voicelive_model?.deployment_id || '').trim();
     return VOICELIVE_MODEL_PRESETS.some((preset) => preset.id === deploymentId)
       ? deploymentId
       : 'custom';
-  }, [config.voicelive_model?.deployment_id]);
-  const isCascadeCustom = cascadeModelPreset === 'custom';
-  const isVoiceliveCustom = voiceliveModelPreset === 'custom';
+  }, [config.voicelive_model?.deployment_id, isVoiceliveCustomMode]);
+  const isCascadeCustom = isCascadeCustomMode || cascadeModelPreset === 'custom';
+  const isVoiceliveCustom = isVoiceliveCustomMode || voiceliveModelPreset === 'custom';
+
+  // Initialize custom mode flags based on loaded config (only once)
+  useEffect(() => {
+    if (customModeInitialized.current) return;
+    const cascadeId = (config.cascade_model?.deployment_id || '').trim();
+    const voiceliveId = (config.voicelive_model?.deployment_id || '').trim();
+    const cascadeIsCustom = cascadeId && !CASCADE_MODEL_PRESETS.some(p => p.id === cascadeId);
+    const voiceliveIsCustom = voiceliveId && !VOICELIVE_MODEL_PRESETS.some(p => p.id === voiceliveId);
+    if (cascadeIsCustom) setIsCascadeCustomMode(true);
+    if (voiceliveIsCustom) setIsVoiceliveCustomMode(true);
+    customModeInitialized.current = true;
+  }, [config.cascade_model?.deployment_id, config.voicelive_model?.deployment_id]);
   const cascadeOverrideValue = (config.cascade_model?.deployment_id || '').trim();
   const voiceliveOverrideValue = (config.voicelive_model?.deployment_id || '').trim();
   const isCascadeOverrideMissing = isCascadeCustom && !cascadeOverrideValue;
@@ -1132,15 +1144,9 @@ export default function AgentBuilderContent({
   // Tool categories
   const [expandedCategories, setExpandedCategories] = useState({});
   const [toolFilter, setToolFilter] = useState('all');
-  const sessionTemplates = useMemo(() => {
-    const sessionItems = (availableTemplates || []).filter((t) => t.is_session_agent);
-    if (sessionId) {
-      return sessionItems.filter((t) => t.session_id === sessionId);
-    }
-    return sessionItems;
-  }, [availableTemplates, sessionId]);
-  const staticTemplates = useMemo(
-    () => (availableTemplates || []).filter((t) => !t.is_session_agent),
+  // All templates displayed uniformly - no session vs built-in distinction
+  const allTemplates = useMemo(
+    () => availableTemplates || [],
     [availableTemplates],
   );
 
@@ -1263,13 +1269,22 @@ export default function AgentBuilderContent({
     return availableTools.filter((t) => !t.is_handoff);
   }, [availableTools, toolFilter]);
 
-  // Compute used Jinja variables from prompt, greeting, return_greeting
-  const usedVars = useMemo(() => {
-    const fromGreeting = extractJinjaVariables(config.greeting);
-    const fromReturnGreeting = extractJinjaVariables(config.return_greeting);
-    const fromPrompt = extractJinjaVariables(config.prompt);
-    return [...new Set([...fromGreeting, ...fromReturnGreeting, ...fromPrompt])];
-  }, [config.greeting, config.return_greeting, config.prompt]);
+  const greetingVars = useMemo(
+    () => extractJinjaVariables(config.greeting),
+    [config.greeting],
+  );
+  const returnGreetingVars = useMemo(
+    () => extractJinjaVariables(config.return_greeting),
+    [config.return_greeting],
+  );
+  const promptVars = useMemo(
+    () => extractJinjaVariables(config.prompt),
+    [config.prompt],
+  );
+  const usedVars = useMemo(
+    () => [...new Set([...greetingVars, ...returnGreetingVars, ...promptVars])],
+    [greetingVars, returnGreetingVars, promptVars],
+  );
 
   // Ref for prompt textarea to support variable insertion
   const promptTextareaRef = useRef(null);
@@ -1308,11 +1323,11 @@ export default function AgentBuilderContent({
     if (textarea) {
       const start = textarea.selectionStart || 0;
       const end = textarea.selectionEnd || 0;
-      const text = config.prompt;
+      const text = draftPrompt;
       const before = text.substring(0, start);
       const after = text.substring(end);
       const newText = before + varText + after;
-      handleConfigChange('prompt', newText);
+      setDraftPrompt(newText);
       // Set cursor position after inserted text
       setTimeout(() => {
         textarea.focus();
@@ -1320,9 +1335,21 @@ export default function AgentBuilderContent({
       }, 0);
     } else {
       // Fallback: append to end
-      handleConfigChange('prompt', config.prompt + varText);
+      setDraftPrompt((prev) => prev + varText);
     }
-  }, [config.prompt, handleConfigChange]);
+  }, [draftPrompt]);
+
+  useEffect(() => {
+    setDraftGreeting(config.greeting || '');
+  }, [config.greeting]);
+
+  useEffect(() => {
+    setDraftReturnGreeting(config.return_greeting || '');
+  }, [config.return_greeting]);
+
+  useEffect(() => {
+    setDraftPrompt(config.prompt || DEFAULT_PROMPT);
+  }, [config.prompt]);
 
   const isCustomVoice = (config.voice?.type || 'azure-standard') === 'azure-custom';
 
@@ -1353,7 +1380,7 @@ export default function AgentBuilderContent({
       voicelive_model: template.voicelive_model || prev.voicelive_model,
       voice: template.voice || prev.voice,
     }));
-    setSuccess(`Applied ${template.is_session_agent ? 'session agent' : 'template'}: ${template.name}`);
+    setSuccess(`Applied agent: ${template.name}`);
     setTimeout(() => setSuccess(null), 3000);
   }, []);
 
@@ -1456,10 +1483,10 @@ export default function AgentBuilderContent({
       const payload = {
         name: config.name,
         description: config.description,
-        greeting: config.greeting,
-        return_greeting: config.return_greeting,
+        greeting: draftGreeting,
+        return_greeting: draftReturnGreeting,
         handoff_trigger: config.handoff_trigger,
-        prompt: config.prompt,
+        prompt: draftPrompt,
         tools: config.tools,
         cascade_model: {
           ...config.cascade_model,
@@ -1475,6 +1502,16 @@ export default function AgentBuilderContent({
         session: config.session,
         template_vars: config.template_vars,
       };
+
+      if (draftGreeting !== config.greeting) {
+        handleConfigChange('greeting', draftGreeting);
+      }
+      if (draftReturnGreeting !== config.return_greeting) {
+        handleConfigChange('return_greeting', draftReturnGreeting);
+      }
+      if (draftPrompt !== config.prompt) {
+        handleConfigChange('prompt', draftPrompt);
+      }
 
       const url = isEditMode
         ? `${API_BASE_URL}/api/v1/agent-builder/session/${encodeURIComponent(sessionId)}`
@@ -1655,7 +1692,6 @@ export default function AgentBuilderContent({
     const voiceLabel = getVoiceLabel(agent);
     const cascadeLabel = getCascadeLabel(agent);
     const voiceLiveLabel = getVoiceLiveLabel(agent);
-    const isSessionAgent = Boolean(agent?.is_session_agent);
 
     return (
       <Card
@@ -1668,7 +1704,7 @@ export default function AgentBuilderContent({
           display: 'flex',
           flexDirection: 'column',
           borderRadius: '12px',
-          borderColor: isSessionAgent ? '#c7d2fe' : '#e5e7eb',
+          borderColor: '#e5e7eb',
           boxShadow: 'none',
           '&:hover': {
             borderColor: '#6366f1',
@@ -1678,7 +1714,7 @@ export default function AgentBuilderContent({
       >
         <CardContent sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
           <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
-            <Avatar sx={{ width: 32, height: 32, bgcolor: isSessionAgent ? '#6366f1' : '#0ea5e9' }}>
+            <Avatar sx={{ width: 32, height: 32, bgcolor: '#0ea5e9' }}>
               {agent?.name?.[0] || 'A'}
             </Avatar>
             <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -1688,9 +1724,6 @@ export default function AgentBuilderContent({
             </Box>
             {agent?.is_entry_point && (
               <Chip size="small" color="primary" label="Entry" />
-            )}
-            {isSessionAgent && (
-              <Chip size="small" label="Session" sx={{ bgcolor: '#eef2ff', color: '#4338ca' }} />
             )}
           </Stack>
           <Typography
@@ -1840,11 +1873,11 @@ export default function AgentBuilderContent({
             </Button>
             <Button
               size="small"
-              variant={isSessionAgent ? 'contained' : 'outlined'}
+              variant="outlined"
               onClick={() => handleApplyTemplateCard(agent)}
               sx={{ textTransform: 'none' }}
             >
-              {isSessionAgent ? 'Edit Agent' : 'Use Template'}
+              Edit Agent
             </Button>
           </Stack>
         </CardContent>
@@ -1947,53 +1980,25 @@ export default function AgentBuilderContent({
                   </CardContent>
                 </Card>
 
-                {/* Templates & Existing Agents */}
+                {/* Available Agents */}
                 <Card variant="outlined" sx={styles.sectionCard}>
                   <CardContent>
                     <Typography variant="subtitle2" color="primary" sx={{ mb: 1, fontWeight: 600 }}>
                       <FolderOpenIcon fontSize="small" sx={{ mr: 1, verticalAlign: 'middle' }} />
-                      Edit Existing or Create from Template
+                      Available Agents
                     </Typography>
                     <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>
-                      Select an agent to edit or use as a starting template for a new agent.
+                      Select an agent to edit. Changes with the same name will update the existing agent.
                     </Typography>
-                    <Stack spacing={2.5}>
-                      {sessionTemplates.length > 0 && (
-                        <Box>
-                          <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
-                            <MemoryIcon sx={{ fontSize: 16, color: '#4338ca' }} />
-                            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                              Session Memory Agents
-                            </Typography>
-                            <Chip size="small" label={sessionTemplates.length} />
-                          </Stack>
-                          <Stack direction="row" flexWrap="wrap" gap={1.5}>
-                            {sessionTemplates.map(renderAgentCard)}
-                          </Stack>
-                        </Box>
-                      )}
-
-                      {staticTemplates.length > 0 && (
-                        <Box>
-                          <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
-                            <FolderOpenIcon sx={{ fontSize: 16, color: '#0ea5e9' }} />
-                            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                              Built-in Templates
-                            </Typography>
-                            <Chip size="small" label={staticTemplates.length} />
-                          </Stack>
-                          <Stack direction="row" flexWrap="wrap" gap={1.5}>
-                            {staticTemplates.map(renderAgentCard)}
-                          </Stack>
-                        </Box>
-                      )}
-
-                      {sessionTemplates.length === 0 && staticTemplates.length === 0 && (
-                        <Typography variant="body2" color="text.secondary">
-                          No templates available
-                        </Typography>
-                      )}
-                    </Stack>
+                    {allTemplates.length > 0 ? (
+                      <Stack direction="row" flexWrap="wrap" gap={1.5}>
+                        {allTemplates.map(renderAgentCard)}
+                      </Stack>
+                    ) : (
+                      <Typography variant="body2" color="text.secondary">
+                        No agents available
+                      </Typography>
+                    )}
                   </CardContent>
                 </Card>
               </Stack>
@@ -2011,8 +2016,13 @@ export default function AgentBuilderContent({
                     <Box>
                       <TextField
                         label="Initial Greeting"
-                        value={config.greeting}
-                        onChange={(e) => handleConfigChange('greeting', e.target.value)}
+                        value={draftGreeting}
+                        onChange={(e) => setDraftGreeting(e.target.value)}
+                        onBlur={() => {
+                          if (draftGreeting !== config.greeting) {
+                            handleConfigChange('greeting', draftGreeting);
+                          }
+                        }}
                         fullWidth
                         multiline
                         rows={3}
@@ -2020,15 +2030,20 @@ export default function AgentBuilderContent({
                         sx={styles.promptEditor}
                       />
                       <InlineVariablePicker 
-                        onInsert={(text) => handleConfigChange('greeting', config.greeting + text)} 
-                        usedVars={extractJinjaVariables(config.greeting)}
+                        onInsert={(text) => setDraftGreeting((prev) => prev + text)} 
+                        usedVars={greetingVars}
                       />
                     </Box>
                     <Box>
                       <TextField
                         label="Return Greeting"
-                        value={config.return_greeting}
-                        onChange={(e) => handleConfigChange('return_greeting', e.target.value)}
+                        value={draftReturnGreeting}
+                        onChange={(e) => setDraftReturnGreeting(e.target.value)}
+                        onBlur={() => {
+                          if (draftReturnGreeting !== config.return_greeting) {
+                            handleConfigChange('return_greeting', draftReturnGreeting);
+                          }
+                        }}
                         fullWidth
                         multiline
                         rows={3}
@@ -2036,8 +2051,8 @@ export default function AgentBuilderContent({
                         sx={styles.promptEditor}
                       />
                       <InlineVariablePicker 
-                        onInsert={(text) => handleConfigChange('return_greeting', config.return_greeting + text)} 
-                        usedVars={extractJinjaVariables(config.return_greeting)}
+                        onInsert={(text) => setDraftReturnGreeting((prev) => prev + text)} 
+                        usedVars={returnGreetingVars}
                       />
                     </Box>
                   </Stack>
@@ -2052,8 +2067,13 @@ export default function AgentBuilderContent({
                   </Typography>
                   <TextField
                     inputRef={promptTextareaRef}
-                    value={config.prompt}
-                    onChange={(e) => handleConfigChange('prompt', e.target.value)}
+                    value={draftPrompt}
+                    onChange={(e) => setDraftPrompt(e.target.value)}
+                    onBlur={() => {
+                      if (draftPrompt !== config.prompt) {
+                        handleConfigChange('prompt', draftPrompt);
+                      }
+                    }}
                     fullWidth
                     multiline
                     rows={18}
@@ -2062,7 +2082,7 @@ export default function AgentBuilderContent({
                   />
                   <InlineVariablePicker 
                     onInsert={handleInsertVariable} 
-                    usedVars={extractJinjaVariables(config.prompt)}
+                    usedVars={promptVars}
                   />
                 </CardContent>
               </Card>
@@ -2321,11 +2341,16 @@ export default function AgentBuilderContent({
                         value={cascadeModelPreset}
                         onChange={(e) => {
                           const selected = e.target.value;
-                          handleNestedConfigChange(
-                            'cascade_model',
-                            'deployment_id',
-                            selected === 'custom' ? '' : selected
-                          );
+                          if (selected === 'custom') {
+                            setIsCascadeCustomMode(true);
+                            // Keep existing value if any, otherwise empty
+                            if (!config.cascade_model?.deployment_id || CASCADE_MODEL_PRESETS.some(p => p.id === config.cascade_model?.deployment_id)) {
+                              handleNestedConfigChange('cascade_model', 'deployment_id', '');
+                            }
+                          } else {
+                            setIsCascadeCustomMode(false);
+                            handleNestedConfigChange('cascade_model', 'deployment_id', selected);
+                          }
                         }}
                         fullWidth
                         size="small"
@@ -2628,11 +2653,16 @@ export default function AgentBuilderContent({
                         value={voiceliveModelPreset}
                         onChange={(e) => {
                           const selected = e.target.value;
-                          handleNestedConfigChange(
-                            'voicelive_model',
-                            'deployment_id',
-                            selected === 'custom' ? '' : selected
-                          );
+                          if (selected === 'custom') {
+                            setIsVoiceliveCustomMode(true);
+                            // Keep existing value if any, otherwise empty
+                            if (!config.voicelive_model?.deployment_id || VOICELIVE_MODEL_PRESETS.some(p => p.id === config.voicelive_model?.deployment_id)) {
+                              handleNestedConfigChange('voicelive_model', 'deployment_id', '');
+                            }
+                          } else {
+                            setIsVoiceliveCustomMode(false);
+                            handleNestedConfigChange('voicelive_model', 'deployment_id', selected);
+                          }
                         }}
                         fullWidth
                         size="small"
@@ -3138,9 +3168,7 @@ export default function AgentBuilderContent({
               : 'linear-gradient(135deg, #4f46e5 0%, #6366f1 100%)',
           }}
         >
-          {saving
-            ? isEditMode ? 'Updating...' : 'Creating...'
-            : isEditMode ? 'Update Agent' : 'Create Agent'}
+          {saving ? 'Saving Agent...' : 'Save Agent'}
         </Button>
       </Box>
 
