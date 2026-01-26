@@ -1,92 +1,53 @@
 # Evaluation Package
 
-Model-to-model evaluation framework for voice agent orchestration.
+Simplified evaluation framework for voice agent orchestration.
 
 ## Quick Start
-
-### Interactive Notebook (Recommended)
-
-The easiest way to explore and validate the evaluation framework:
-
-```bash
-# Open in VS Code / Jupyter
-samples/labs/dev/evaluation_framework_validation.ipynb
-```
-
-This notebook demonstrates:
-- Event recording and inspection
-- Metrics scoring (tool precision/recall, latency, groundedness)
-- Azure AI Foundry submission
-- CLI command usage
-
-### Automated Testing with Pytest
-
-Run evaluation scenarios as automated tests:
-
-```bash
-# Run all evaluation tests
-pytest tests/evaluation/test_scenarios.py -v -m evaluation
-
-# Run specific scenario type
-pytest tests/evaluation/test_scenarios.py -k "session" -v
-
-# Run A/B comparison tests
-pytest tests/evaluation/test_scenarios.py -k "ab_comparison" -v
-
-# Skip slow E2E tests (use existing data only)
-pytest tests/evaluation/test_scenarios.py -m "evaluation and not slow"
-
-# Submit results to Azure AI Foundry
-pytest tests/evaluation/test_scenarios.py --submit-to-foundry
-```
 
 ### CLI Commands
 
 ```bash
-# Score existing events
-python -m tests.evaluation.cli score \
-    --input runs/my_run_events.jsonl \
-    --output runs/my_run_scores
-
-# Run a scenario
-python -m tests.evaluation.cli scenario \
+# Run a scenario (auto-detects single vs A/B comparison)
+python -m tests.evaluation.cli run \
     --input tests/evaluation/scenarios/session_based/banking_multi_agent.yaml
-
-# Run A/B comparison
-python -m tests.evaluation.cli compare \
-    --input tests/evaluation/scenarios/ab_tests/fraud_detection_comparison.yaml
 
 # Submit to Azure AI Foundry
 python -m tests.evaluation.cli submit \
-    --input runs/my_run/foundry_eval.jsonl \
+    --data runs/my_run/foundry_eval.jsonl \
     --endpoint "$AZURE_AI_FOUNDRY_PROJECT_ENDPOINT"
+```
+
+### Pytest
+
+```bash
+# Run all evaluation tests
+pytest tests/evaluation/test_scenarios.py -v
+
+# Run specific scenario
+pytest tests/evaluation/test_scenarios.py -k "banking" -v
 ```
 
 ## Package Structure
 
 ```text
 tests/evaluation/
-├── __init__.py              # Package exports + import guards
-├── schemas/                 # Pydantic models (modular package)
-│   ├── config.py            # ModelProfile, SessionAgentConfig
+├── __init__.py              # Package exports
+├── schemas/                 # Pydantic models
+│   ├── config.py            # SessionAgentConfig
 │   ├── events.py            # TurnEvent, ToolCall, HandoffEvent
 │   ├── expectations.py      # ScenarioExpectations
 │   ├── results.py           # TurnScore, RunSummary
 │   └── foundry.py           # Azure AI Foundry types
-├── hooks/                   # Extensible hooks system
-│   ├── base.py              # TurnHook, ToolHook, PreScoreHook
-│   ├── registry.py          # HookRegistry
-│   └── builtin.py           # 5 built-in hooks
 ├── recorder.py              # EventRecorder - captures events to JSONL
 ├── wrappers.py              # EvaluationOrchestratorWrapper
 ├── scorer.py                # MetricsScorer - computes metrics
-├── validator.py             # ExpectationValidator - validates against YAML
+├── validator.py             # ExpectationValidator
 ├── scenario_runner.py       # ScenarioRunner + ComparisonRunner
 ├── foundry_exporter.py      # Azure AI Foundry integration
 ├── conftest.py              # Pytest fixtures
-├── test_scenarios.py        # Pytest test runner for scenarios
+├── test_scenarios.py        # Pytest test runner
 ├── cli/
-│   └── __main__.py          # CLI (score, scenario, compare, submit)
+│   └── __main__.py          # CLI (run, submit)
 ├── scenarios/
 │   ├── scenario.schema.json # JSON Schema for YAML validation
 │   ├── session_based/       # Multi-agent session scenarios
@@ -98,16 +59,12 @@ tests/evaluation/
 
 ### Session-Based Scenarios
 
-Test multi-agent conversations with handoffs:
-
 ```yaml
 # scenarios/session_based/banking_multi_agent.yaml
 scenario_name: banking_multi_agent
 session_config:
-  agents: [BankingConcierge, CardRecommendation, InvestmentAdvisor]
+  agents: [BankingConcierge, CardRecommendation]
   start_agent: BankingConcierge
-  generic_handoff:
-    enabled: true
 turns:
   - turn_id: turn_1
     user_input: "I'd like to check my account"
@@ -116,8 +73,6 @@ turns:
 ```
 
 ### A/B Comparison Scenarios
-
-Compare model configurations:
 
 ```yaml
 # scenarios/ab_tests/fraud_detection_comparison.yaml
@@ -132,74 +87,16 @@ turns:
     user_input: "I see charges I didn't make"
 ```
 
-### Model Profiles (DRY Configuration)
-
-Define reusable model configs to reduce YAML duplication:
-
-```yaml
-model_profiles:
-  gpt4o_fast:
-    deployment_id: gpt-4o
-    temperature: 0.6
-    max_tokens: 200
-
-variants:
-  - variant_id: baseline
-    model_profile: gpt4o_fast  # All agents inherit this config
-```
-
-### Compact Expectations
-
-Simplified shorthand syntax for turn expectations:
-
-```yaml
-turns:
-  - turn_id: turn_1
-    user_input: "Check my balance"
-    expect: [verify_identity, get_balance]  # Array shorthand for tools
-
-  - turn_id: turn_2
-    user_input: "Transfer to cards"
-    expect:
-      tools: [verify_identity]
-      handoff: CardAgent
-      contains: ["transferred"]
-      max_latency: 5000
-```
-
-### Hooks System
-
-Extend evaluation with custom analyzers:
-
-```yaml
-hooks:
-  on_turn_complete:
-    - builtin.log_metrics
-    - module: my_analyzers.sentiment
-      function: analyze_response
-  pre_score:
-    - builtin.aggregate_metrics
-```
-
 ## Key Components
 
 | Component | Purpose |
 |-----------|---------|
 | `EventRecorder` | Records orchestration events to JSONL |
-| `MetricsScorer` | Computes tool precision/recall, latency, groundedness |
+| `MetricsScorer` | Computes tool precision/recall, latency |
 | `ExpectationValidator` | Validates events against YAML expectations |
 | `ScenarioRunner` | Executes session-based scenarios |
-| `ComparisonRunner` | Runs A/B comparison tests with model profiles |
-| `HookRegistry` | Manages extensible hooks for custom analysis |
+| `ComparisonRunner` | Runs A/B comparison tests |
 | `FoundryExporter` | Exports to Azure AI Foundry format |
-| `ModelProfile` | Reusable model configuration template |
-
-## Pytest Markers
-
-```python
-@pytest.mark.evaluation  # All evaluation tests
-@pytest.mark.slow        # E2E tests that execute scenarios
-```
 
 ## Import Guards
 

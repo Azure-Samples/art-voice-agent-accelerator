@@ -197,6 +197,13 @@ AZURE_COSMOS_COLLECTION_NAME: str = os.getenv("AZURE_COSMOS_COLLECTION_NAME", ""
 
 
 # ==============================================================================
+# AZURE AI FOUNDRY (for evaluation)
+# ==============================================================================
+
+AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: str = os.getenv("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT", "")
+
+
+# ==============================================================================
 # VOICE & TTS SETTINGS
 # ==============================================================================
 # NOTE: Per-agent voice settings are now defined in each agent's agent.yaml.

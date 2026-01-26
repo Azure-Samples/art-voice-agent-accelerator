@@ -48,7 +48,6 @@ from tests.evaluation.schemas import (
 )
 from tests.evaluation.scorer import MetricsScorer
 from tests.evaluation.wrappers import EvaluationOrchestratorWrapper
-from tests.evaluation.generators import TurnExpander
 from apps.artagent.backend.registries.agentstore.base import ModelConfig
 from apps.artagent.backend.registries.agentstore.loader import (
     build_handoff_map,
@@ -235,12 +234,6 @@ class ScenarioRunner:
         self.output_dir = output_dir or Path("runs")
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Phase 2: Initialize hook registry
-        from tests.evaluation.hooks import HookRegistry
-        self._hook_registry = HookRegistry()
-        if self.scenario.get("hooks"):
-            self._hook_registry.load_from_config(self.scenario["hooks"])
-
     def _load_scenario(self, path: Path) -> dict[str, Any]:
         """Load and validate scenario YAML."""
         logger.info(f"Loading scenario from: {path}")
@@ -289,91 +282,8 @@ class ScenarioRunner:
         return scenario
 
     def _expand_turns(self, scenario: dict[str, Any]) -> dict[str, Any]:
-        """
-        Expand template variables and generators in scenario turns.
-
-        Phase 4: Supports dynamic turn content via:
-            - Template variables: {{variable_name}}
-            - Turn generators: generator: builtin.identity_verification
-
-        Args:
-            scenario: Loaded scenario dict with turns
-
-        Returns:
-            Scenario with expanded turns
-        """
-        turns = scenario.get("turns", [])
-        if not turns:
-            return scenario
-
-        # Check if any turn has templates or generators
-        has_templates = any(
-            "{{" in turn.get("user_input", "") or "generator" in turn
-            for turn in turns
-        )
-
-        if not has_templates:
-            logger.debug("No template variables or generators found - skipping expansion")
-            return scenario
-
-        # Load fixtures if specified
-        fixtures = self._load_fixtures(scenario)
-
-        # Build context from scenario metadata
-        context = {
-            "scenario_name": scenario.get("scenario_name", ""),
-            **scenario.get("metadata", {}).get("context", {}),
-        }
-
-        # Expand turns
-        expander = TurnExpander(fixtures=fixtures, context=context)
-        expanded_turns = expander.expand_turns(turns, fixtures=fixtures, context=context)
-
-        original_count = len(turns)
-        expanded_count = len(expanded_turns)
-
-        if expanded_count != original_count:
-            logger.info(
-                f"Turn expansion: {original_count} → {expanded_count} turns "
-                f"(+{expanded_count - original_count} from generators)"
-            )
-
-        # Return scenario with expanded turns
-        return {**scenario, "turns": expanded_turns}
-
-    def _load_fixtures(self, scenario: dict[str, Any]) -> dict[str, Any]:
-        """
-        Load test fixtures for template variable resolution.
-
-        Args:
-            scenario: Scenario dict with optional 'fixtures' key
-
-        Returns:
-            Dict with fixture data
-        """
-        fixtures_config = scenario.get("fixtures", {})
-
-        if not fixtures_config:
-            return {}
-
-        # If fixtures is a string, treat it as a file path
-        if isinstance(fixtures_config, str):
-            fixtures_path = self.scenario_path.parent / fixtures_config
-            if fixtures_path.exists():
-                with open(fixtures_path, encoding="utf-8") as f:
-                    if fixtures_path.suffix == ".json":
-                        return json.load(f)
-                    else:
-                        return yaml.safe_load(f) or {}
-            else:
-                logger.warning(f"Fixtures file not found: {fixtures_path}")
-                return {}
-
-        # If fixtures is a dict, use it directly
-        if isinstance(fixtures_config, dict):
-            return fixtures_config
-
-        return {}
+        """Return scenario unchanged (template expansion removed for simplicity)."""
+        return scenario
 
     def _normalize_scenario(self, scenario: dict[str, Any]) -> dict[str, Any]:
         """Convert legacy/template formats to normalized session_config format.
@@ -857,18 +767,6 @@ class ScenarioRunner:
             # Run turn (this will be recorded automatically)
             result = await eval_orchestrator.process_turn(context)
 
-            # Phase 2: Dispatch turn hooks
-            if self._hook_registry.has_turn_hooks:
-                if recorder.events:
-                    hook_ctx = {
-                        "scenario_name": scenario_name,
-                        "turn_id": turn_id,
-                        "expectations": turn_expectations,
-                    }
-                    await self._hook_registry.dispatch_turn_complete(
-                        recorder.events[-1], hook_ctx
-                    )
-
             # Update mock history if we aren't using the real orchestrator
             if use_mock:
                 memo_manager.append_to_history(agent_name, "user", user_input)
@@ -882,15 +780,6 @@ class ScenarioRunner:
         # Score the results
         scorer = MetricsScorer()
         events = scorer.load_events(self.output_dir / f"{run_id}_events.jsonl")
-
-        # Phase 2: Dispatch pre-score hooks
-        if self._hook_registry.has_pre_score_hooks:
-            hook_ctx = {
-                "scenario_name": scenario_name,
-                "run_id": run_id,
-                "expectations": self.scenario.get("expectations", {}),
-            }
-            await self._hook_registry.dispatch_pre_score(events, hook_ctx)
 
         summary = scorer.generate_summary(
             events,

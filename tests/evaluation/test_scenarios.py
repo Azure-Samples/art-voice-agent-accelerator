@@ -421,25 +421,36 @@ async def test_session_scenario_e2e(
 
     # --- STEP 3: Submit to Foundry (if enabled) ---
     if submit_to_foundry_flag:
-        foundry_files = list(scenario_output.rglob("foundry_eval.jsonl"))
-        if foundry_files:
-            data_path = foundry_files[0]
-            config_path = data_path.parent / "foundry_evaluators.json"
-            eval_name = f"{scenario_path.stem}_{data_path.parent.name.split('_')[-1]}"
+        if not foundry_endpoint:
+            pytest.fail(
+                "❌ --submit-to-foundry requires a Foundry endpoint. "
+                "Set --foundry-endpoint or AZURE_AI_FOUNDRY_PROJECT_ENDPOINT environment variable."
+            )
 
-            try:
-                result = await submit_to_foundry(
-                    data_path=data_path,
-                    evaluators_config_path=config_path if config_path.exists() else None,
-                    project_endpoint=foundry_endpoint,
-                    evaluation_name=eval_name,
-                    model_deployment_name=foundry_model,
-                )
-                studio_url = result.get("studio_url")
-                if studio_url:
-                    logger.info(f"🔗 View in portal: {studio_url}")
-            except Exception as e:
-                logger.error(f"❌ Foundry submission failed: {e}")
+        # Find foundry_eval.jsonl
+        foundry_files = list(scenario_output.rglob("foundry_eval.jsonl"))
+        if not foundry_files:
+            pytest.fail(
+                f"❌ No foundry_eval.jsonl found in {scenario_output}. "
+                f"Ensure scenario YAML has 'foundry_export.enabled: true'"
+            )
+        result = await submit_to_foundry(
+            data_path=data_path,
+            evaluators_config_path=config_path if config_path.exists() else None,
+            project_endpoint=foundry_endpoint,
+            evaluation_name=eval_name,
+            model_deployment_name=foundry_model,
+        )
+
+        studio_url = result.get("studio_url")
+        if studio_url:
+            logger.info(f"✅ Foundry submission complete")
+            logger.info(f"🔗 View in portal: {studio_url}")
+        else:
+            logger.warning(
+                "⚠️ Foundry submission completed but no studio_url returned. "
+                "Check Foundry prerequisites: storage account must be connected to project."
+            )
 
     # --- STEP 4: Assert Expectations Pass ---
     failed_turns = [v for v in validation_results if not v.passed]

@@ -100,7 +100,6 @@ from tests.evaluation.schemas import (
     TurnScore,
 )
 from tests.evaluation.scorer import MetricsScorer
-from tests.evaluation.hooks import HookRegistry
 from tests.evaluation.validator import (
     ExpectationValidator,
     TurnValidationResult,
@@ -115,7 +114,6 @@ __all__ = [
     "EventRecorder",
     "EvaluationOrchestratorWrapper",
     "MetricsScorer",
-    "HookRegistry",
     # Scenario runners
     "ScenarioRunner",
     "ComparisonRunner",

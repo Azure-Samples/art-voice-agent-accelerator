@@ -187,6 +187,9 @@ add_kv "azure/voicelive/endpoint" "$(get_azd_value AZURE_VOICELIVE_ENDPOINT)"
 add_kv "azure/voicelive/model" "$(get_azd_value AZURE_VOICELIVE_MODEL)"
 add_kv "azure/voicelive/resource-id" "$(get_azd_value AZURE_VOICELIVE_RESOURCE_ID)"
 
+# AI Foundry (for Evaluations SDK)
+add_kv "azure/ai-foundry/project-endpoint" "$(get_azd_value ai_foundry_project_endpoint)"
+
 # Environment metadata
 add_kv "app/environment" "$(get_azd_value AZURE_ENV_NAME)"
 

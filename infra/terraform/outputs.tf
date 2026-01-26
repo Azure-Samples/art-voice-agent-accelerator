@@ -226,6 +226,11 @@ output "ai_foundry_project_id" {
   value       = module.ai_foundry.project_id
 }
 
+output "ai_foundry_project_endpoint" {
+  description = "Endpoint URI for the AI Foundry project (used for Evaluations SDK)"
+  value       = module.ai_foundry.project_endpoint
+}
+
 output "ai_foundry_project_identity_principal_id" {
   description = "Managed identity principal ID assigned to the AI Foundry project"
   value       = module.ai_foundry.project_identity_principal_id

@@ -152,6 +152,8 @@ APPCONFIG_KEY_MAP: dict[str, str] = {
     
     # Application Insights
     "azure/appinsights/connection-string": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+    # AI Foundry
+    "azure/ai-foundry/project-endpoint": "AZURE_AI_FOUNDRY_PROJECT_ENDPOINT",
     # Pool Settings
     "app/pools/tts-size": "POOL_SIZE_TTS",
     "app/pools/stt-size": "POOL_SIZE_STT",

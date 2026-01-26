@@ -51,7 +51,7 @@ flowchart TB
 
     Measure LLM quality: tool precision, groundedness, latency
 
-    [:octicons-arrow-right-24: Evaluation Framework](evaluation-framework.md)
+    [:octicons-arrow-right-24: Evaluation Framework](evaluation.md)
 
 -   :material-chart-line:{ .lg .middle } **Load Testing**
 
@@ -60,14 +60,6 @@ flowchart TB
     WebSocket performance testing with Locust
 
     [:octicons-arrow-right-24: Load Testing](../operations/load-testing.md)
-
--   :material-file-document-outline:{ .lg .middle } **Scenario Reference**
-
-    ---
-
-    YAML format for defining evaluation scenarios
-
-    [:octicons-arrow-right-24: Scenario YAML Reference](evaluation-scenarios.md)
 
 </div>
 
@@ -140,7 +132,7 @@ make run_load_test_acs_media
     pytest tests/evaluation/test_scenarios.py -v
 
     # Via CLI
-    python -m tests.evaluation.cli scenario \
+    python -m tests.evaluation.cli run \
         --input tests/evaluation/scenarios/session_based/banking_multi_agent.yaml
     ```
 
@@ -172,14 +164,12 @@ make run_load_test_acs_media
 
 ```
 docs/testing/
-├── index.md                   # This overview page
-├── evaluation-framework.md    # Comprehensive evaluation guide
-├── evaluation-scenarios.md    # YAML scenario reference
-└── model-evaluation.md        # High-level evaluation concepts
+├── index.md        # This overview page
+└── evaluation.md   # Evaluation framework guide
 
 docs/operations/
-├── testing.md                 # Unit & integration tests
-└── load-testing.md            # Locust load testing
+├── testing.md      # Unit & integration tests
+└── load-testing.md # Locust load testing
 ```
 
 ---
@@ -192,13 +182,13 @@ docs/operations/
 :   Start with [Testing Framework](../operations/testing.md) → `pytest tests/ -v`
 
 :material-brain:{ .blue } **I want to evaluate agent quality**
-:   Read [Model Evaluation](model-evaluation.md) → [Evaluation Framework](evaluation-framework.md)
+:   Read [Evaluation Framework](evaluation.md)
 
 :material-chart-line:{ .orange } **I want to load test my deployment**
 :   Follow [Load Testing Guide](../operations/load-testing.md) → `make run_load_test_acs_media`
 
 :material-file-document:{ .purple } **I want to create custom scenarios**
-:   Check [Scenario YAML Reference](evaluation-scenarios.md)
+:   Check scenario examples in [Evaluation Framework](evaluation.md)
 
 </div>
 

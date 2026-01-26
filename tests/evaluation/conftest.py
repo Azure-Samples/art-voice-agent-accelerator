@@ -126,18 +126,37 @@ def submit_to_foundry_flag(request: pytest.FixtureRequest) -> bool:
 
 @pytest.fixture(scope="session")
 def foundry_endpoint(request: pytest.FixtureRequest) -> str | None:
-    """Get Foundry endpoint from CLI, environment, or app config."""
+    """Get Foundry endpoint from CLI, environment, or app config.
+    
+    Resolution order:
+    1. CLI option --foundry-endpoint
+    2. Environment variable AZURE_AI_FOUNDRY_PROJECT_ENDPOINT (set by App Config bootstrap)
+    3. Direct import from config module (fallback)
+    """
     # 1. CLI option takes precedence
     cli_endpoint = request.config.getoption("--foundry-endpoint")
     if cli_endpoint:
         return cli_endpoint
 
-    # 2. Direct environment variable
+    # 2. Environment variable (App Config bootstrap populates os.environ)
+    # This is checked AFTER bootstrap_appconfig() runs at module init
     env_endpoint = os.environ.get("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT")
     if env_endpoint:
         return env_endpoint
 
-    # 3. Try importing from app config (loads from .env.local / App Configuration)
+    # 3. Try get_config_value for dynamic lookup from App Configuration
+    try:
+        from apps.artagent.backend.config import get_config_value
+        config_endpoint = get_config_value(
+            "azure/ai-foundry/project-endpoint", 
+            "AZURE_AI_FOUNDRY_PROJECT_ENDPOINT"
+        )
+        if config_endpoint:
+            return config_endpoint
+    except (ImportError, Exception):
+        pass
+
+    # 4. Final fallback: direct import (for when settings loaded from .env.local)
     try:
         from apps.artagent.backend.config import AZURE_AI_FOUNDRY_PROJECT_ENDPOINT
         if AZURE_AI_FOUNDRY_PROJECT_ENDPOINT:

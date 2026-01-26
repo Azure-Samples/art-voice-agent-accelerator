@@ -79,3 +79,23 @@ thresholds:
   min_tool_precision: 0.4
   min_tool_recall: 0.4
   max_latency_p95_ms: 15000
+
+# Foundry export configuration
+foundry_export:
+  enabled: true
+  output_filename: foundry_eval.jsonl
+  context_source: evidence
+  evaluators:
+    - id: builtin.relevance
+      init_params:
+        deployment_name: gpt-4o
+      data_mapping:
+        query: "${data.query}"
+        response: "${data.response}"
+        context: "${data.context}"
+    - id: builtin.coherence
+      init_params:
+        deployment_name: gpt-4o
+      data_mapping:
+        query: "${data.query}"
+        response: "${data.response}"
