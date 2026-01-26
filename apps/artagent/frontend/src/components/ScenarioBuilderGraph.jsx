@@ -2609,7 +2609,9 @@ export default function ScenarioBuilderGraph({
         onScenarioCreated(data.config || config);
       }
 
+      // Refresh data to show saved changes immediately
       fetchSessionScenarios();
+      fetchAvailableAgents();
       setSuccess(editMode ? 'Scenario updated!' : 'Scenario created!');
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {

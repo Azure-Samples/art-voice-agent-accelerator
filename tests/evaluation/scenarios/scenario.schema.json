@@ -366,7 +366,7 @@
         },
         "reasoning_effort": {
           "type": "string",
-          "enum": ["low", "medium", "high"],
+          "enum": ["none", "low", "medium", "high"],
           "description": "Reasoning effort for o1/o3/o4 models"
         }
       }

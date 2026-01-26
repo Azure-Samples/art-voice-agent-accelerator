@@ -29,11 +29,45 @@ foundry_export:
 
 from __future__ import annotations
 
+import os
+import sys
+from pathlib import Path
+
+# =============================================================================
+# Early Bootstrap: Set up paths and load .env.local BEFORE any app imports
+# This ensures AZURE_APPCONFIG_ENDPOINT is available for bootstrap_appconfig()
+# =============================================================================
+
+os.environ.setdefault("EVAL_USE_REAL_AOAI", "1")
+
+_project_root = Path(__file__).resolve().parent.parent.parent
+_backend_dir = _project_root / "apps" / "artagent" / "backend"
+
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+if str(_backend_dir) not in sys.path:
+    sys.path.insert(0, str(_backend_dir))
+
+# Load .env.local before any imports that depend on environment variables
+_env_local = _project_root / ".env.local"
+_env_file = _project_root / ".env"
+try:
+    from dotenv import load_dotenv
+    if _env_local.exists():
+        load_dotenv(_env_local, override=False)
+    elif _env_file.exists():
+        load_dotenv(_env_file, override=False)
+except ImportError:
+    pass
+
+# =============================================================================
+# Now safe to import app modules
+# =============================================================================
+
 import copy
 import time
 import json
 from dataclasses import replace
-from pathlib import Path
 from typing import Any
 
 import yaml

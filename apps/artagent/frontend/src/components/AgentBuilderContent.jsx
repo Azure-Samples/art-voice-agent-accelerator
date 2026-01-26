@@ -1143,7 +1143,6 @@ export default function AgentBuilderContent({
 
   // Tool categories
   const [expandedCategories, setExpandedCategories] = useState({});
-  const [toolFilter, setToolFilter] = useState('all');
   // All templates displayed uniformly - no session vs built-in distinction
   const allTemplates = useMemo(
     () => availableTemplates || [],
@@ -1263,11 +1262,7 @@ export default function AgentBuilderContent({
     return grouped;
   }, [availableTools]);
 
-  const filteredTools = useMemo(() => {
-    if (toolFilter === 'all') return availableTools;
-    if (toolFilter === 'handoff') return availableTools.filter((t) => t.is_handoff);
-    return availableTools.filter((t) => !t.is_handoff);
-  }, [availableTools, toolFilter]);
+
 
   const greetingVars = useMemo(
     () => extractJinjaVariables(config.greeting),
@@ -2095,16 +2090,17 @@ export default function AgentBuilderContent({
                   <Typography variant="subtitle2" color="primary" sx={{ fontWeight: 600 }}>
                     🛠️ Available Tools ({config.tools.length} selected)
                   </Typography>
-                  <ToggleButtonGroup
-                    value={toolFilter}
-                    exclusive
-                    onChange={(e, v) => v && setToolFilter(v)}
+                  <Button
                     size="small"
+                    variant="text"
+                    href="https://aiappsgbbfactory.github.io/art-voice-agent-accelerator/architecture/registries/tool-catalog/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    startIcon={<InfoOutlinedIcon />}
+                    sx={{ textTransform: 'none', fontSize: 12 }}
                   >
-                    <ToggleButton value="all">All</ToggleButton>
-                    <ToggleButton value="normal">Tools</ToggleButton>
-                    <ToggleButton value="handoff">Handoffs</ToggleButton>
-                  </ToggleButtonGroup>
+                    View Tool Catalog
+                  </Button>
                 </Stack>
 
                 {Object.entries(toolsByCategory).map(([category, tools]) => (

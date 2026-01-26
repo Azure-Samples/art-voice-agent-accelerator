@@ -390,6 +390,17 @@ def _persist_scenario_to_redis(session_id: str, scenario: ScenarioConfig) -> Non
         # Also store legacy format for backward compatibility
         memo.set_corememory(SCENARIO_KEY_CONFIG, _serialize_scenario(scenario))
         
+        # CRITICAL: Update active_agent to the scenario's start_agent
+        # This ensures that when a new orchestrator syncs from MemoManager,
+        # it starts with the correct agent for the new scenario (not the old one)
+        if scenario.start_agent:
+            memo.set_corememory("active_agent", scenario.start_agent)
+            logger.debug(
+                "Set active_agent to scenario start_agent | session=%s agent=%s",
+                session_id,
+                scenario.start_agent,
+            )
+        
         # Schedule async persistence with proper error handling
         import asyncio
         try:
@@ -521,12 +532,24 @@ def set_session_scenario(session_id: str, scenario: ScenarioConfig) -> None:
     4. Schedules async persistence to Redis
 
     For guaranteed persistence, use set_session_scenario_async() in async contexts.
+    
+    Scenario names are normalized to lowercase for case-insensitive storage.
+    If a scenario with the same name (case-insensitive) already exists, it is updated.
     """
     if session_id not in _session_scenarios:
         _session_scenarios[session_id] = {}
     
-    _session_scenarios[session_id][scenario.name] = scenario
-    _active_scenario[session_id] = scenario.name
+    # Normalize scenario key to lowercase for case-insensitive storage
+    normalized_key = scenario.name.lower()
+    
+    # Remove any existing scenario with different casing (to avoid duplicates)
+    keys_to_remove = [k for k in _session_scenarios[session_id] if k.lower() == normalized_key and k != normalized_key]
+    for old_key in keys_to_remove:
+        del _session_scenarios[session_id][old_key]
+        logger.debug("Removed duplicate scenario key | session=%s old_key=%s new_key=%s", session_id, old_key, normalized_key)
+    
+    _session_scenarios[session_id][normalized_key] = scenario
+    _active_scenario[session_id] = normalized_key
 
     # Notify the orchestrator adapter if callback is registered
     adapter_updated = False
@@ -558,12 +581,24 @@ async def set_session_scenario_async(session_id: str, scenario: ScenarioConfig) 
     is persisted to Redis before returning to the caller.
 
     This prevents data loss on browser refresh or server restart.
+    
+    Scenario names are normalized to lowercase for case-insensitive storage.
+    If a scenario with the same name (case-insensitive) already exists, it is updated.
     """
     if session_id not in _session_scenarios:
         _session_scenarios[session_id] = {}
     
-    _session_scenarios[session_id][scenario.name] = scenario
-    _active_scenario[session_id] = scenario.name
+    # Normalize scenario key to lowercase for case-insensitive storage
+    normalized_key = scenario.name.lower()
+    
+    # Remove any existing scenario with different casing (to avoid duplicates)
+    keys_to_remove = [k for k in _session_scenarios[session_id] if k.lower() == normalized_key and k != normalized_key]
+    for old_key in keys_to_remove:
+        del _session_scenarios[session_id][old_key]
+        logger.debug("Removed duplicate scenario key | session=%s old_key=%s new_key=%s", session_id, old_key, normalized_key)
+    
+    _session_scenarios[session_id][normalized_key] = scenario
+    _active_scenario[session_id] = normalized_key
 
     # Notify the orchestrator adapter if callback is registered
     adapter_updated = False
@@ -619,6 +654,17 @@ async def _persist_scenario_to_redis_async(session_id: str, scenario: ScenarioCo
         
         # Also store legacy format for backward compatibility
         memo.set_corememory(SCENARIO_KEY_CONFIG, _serialize_scenario(scenario))
+        
+        # CRITICAL: Update active_agent to the scenario's start_agent
+        # This ensures that when a new orchestrator syncs from MemoManager,
+        # it starts with the correct agent for the new scenario (not the old one)
+        if scenario.start_agent:
+            memo.set_corememory("active_agent", scenario.start_agent)
+            logger.debug(
+                "Set active_agent to scenario start_agent | session=%s agent=%s",
+                session_id,
+                scenario.start_agent,
+            )
         
         # Await persistence to ensure completion
         await memo.persist_to_redis_async(_redis_manager)
@@ -695,7 +741,7 @@ def list_session_scenarios() -> dict[str, ScenarioConfig]:
 
 def list_session_scenarios_by_session(session_id: str) -> dict[str, ScenarioConfig]:
     """
-    Return all scenarios for a specific session.
+    Return all scenarios for a specific session (deduplicated by name, case-insensitive).
     
     Falls back to Redis if memory cache is empty.
     """
@@ -712,7 +758,13 @@ def list_session_scenarios_by_session(session_id: str) -> dict[str, ScenarioConf
                 len(scenarios),
             )
     
-    return dict(scenarios)
+    # Deduplicate by lowercase name (keep latest)
+    deduplicated: dict[str, ScenarioConfig] = {}
+    for key, scenario in scenarios.items():
+        normalized_key = key.lower()
+        deduplicated[normalized_key] = scenario
+    
+    return deduplicated
 
 
 __all__ = [

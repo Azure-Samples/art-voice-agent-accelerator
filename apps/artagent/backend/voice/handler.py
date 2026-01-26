@@ -1101,12 +1101,12 @@ class VoiceHandler:
         ws.state.event_loop = ctx.event_loop
 
     async def _initialize_active_agent(self) -> None:
-        """Initialize active agent from session agent or scenario config."""
+        """Initialize active agent from scenario config or session agent."""
         memory_manager = self._context.memo_manager
         config = self._config
         session_short = self._session_short
 
-        # Priority: 1. Session agent, 2. Scenario start_agent, 3. Default
+        # Priority: 1. Scenario start_agent (explicit user selection), 2. Session agent, 3. Default
         scenario_start_agent = None
         if config.scenario:
             try:
@@ -1124,17 +1124,19 @@ class VoiceHandler:
                 )
 
         session_agent = get_session_agent(config.session_id)
-        if session_agent:
-            start_agent_name = session_agent.name
-            logger.info(
-                "[%s] Session initialized with session agent: %s",
-                session_short,
-                start_agent_name,
-            )
-        elif scenario_start_agent:
+        
+        # Scenario start_agent takes priority - user explicitly selected the scenario
+        if scenario_start_agent:
             start_agent_name = scenario_start_agent
             logger.info(
                 "[%s] Session initialized with scenario agent: %s",
+                session_short,
+                start_agent_name,
+            )
+        elif session_agent:
+            start_agent_name = session_agent.name
+            logger.info(
+                "[%s] Session initialized with session agent: %s",
                 session_short,
                 start_agent_name,
             )

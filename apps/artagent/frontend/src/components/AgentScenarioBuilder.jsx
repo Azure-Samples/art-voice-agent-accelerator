@@ -166,6 +166,8 @@ export default function AgentScenarioBuilder({
     // Clear editing state after creation
     setEditingAgentFromScenario(null);
     setEditingAgentSessionId(null);
+    // Trigger refresh so scenario builder sees updated agents
+    setRefreshKey((prev) => prev + 1);
   }, [onAgentCreated]);
 
   const handleAgentUpdatedInternal = useCallback((config) => {
@@ -173,6 +175,8 @@ export default function AgentScenarioBuilder({
     // Clear editing state after update
     setEditingAgentFromScenario(null);
     setEditingAgentSessionId(null);
+    // Trigger refresh so scenario builder sees updated agents
+    setRefreshKey((prev) => prev + 1);
   }, [onAgentUpdated]);
 
   // Determine if we're in agent edit mode (either from prop or from scenario navigation)

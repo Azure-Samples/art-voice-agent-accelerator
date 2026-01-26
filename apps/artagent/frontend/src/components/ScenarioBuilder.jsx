@@ -2422,8 +2422,16 @@ export default function ScenarioBuilder({
             const sessionData = await sessionResponse.json();
             
             // Add session-custom scenarios first (marked as custom)
+            // Deduplicate by name (case-insensitive) to avoid duplicates
             if (sessionData.scenarios && sessionData.scenarios.length > 0) {
-              const customTemplates = sessionData.scenarios.map((scenario) => ({
+              const seenNames = new Set();
+              const uniqueScenarios = sessionData.scenarios.filter((scenario) => {
+                const normalizedName = scenario.name?.toLowerCase();
+                if (!normalizedName || seenNames.has(normalizedName)) return false;
+                seenNames.add(normalizedName);
+                return true;
+              });
+              const customTemplates = uniqueScenarios.map((scenario) => ({
                 id: `_custom_${scenario.name.replace(/\s+/g, '_').toLowerCase()}`,
                 name: `${scenario.icon || '🎭'} ${scenario.name || 'Custom Scenario'}`,
                 description: scenario.description || 'Your custom session scenario',
@@ -2542,7 +2550,14 @@ export default function ScenarioBuilder({
   useEffect(() => {
     if (availableAgents.length === 0) return;
     
-    const validAgentNames = new Set(availableAgents.map(a => a.name));
+    // Include both display name and original_name for custom session agents
+    // This handles cases where session agents are renamed to "{name} (session)" but
+    // the scenario config still references the original agent name
+    const validAgentNames = new Set();
+    availableAgents.forEach(a => {
+      validAgentNames.add(a.name);
+      if (a.original_name) validAgentNames.add(a.original_name);
+    });
     const invalidAgentsFound = [];
     
     setConfig((prev) => {

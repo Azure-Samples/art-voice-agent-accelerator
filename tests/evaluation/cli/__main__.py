@@ -21,10 +21,47 @@ Usage:
 
 from __future__ import annotations
 
-import argparse
-import asyncio
+import os
 import sys
 from pathlib import Path
+
+# =============================================================================
+# Early Bootstrap: Set up paths and load .env.local BEFORE any app imports
+# =============================================================================
+
+# Set flag so root conftest.py knows we're running real evals
+os.environ["EVAL_USE_REAL_AOAI"] = "1"
+
+# Find project root and set up Python paths
+_this_file = Path(__file__).resolve()
+_project_root = _this_file.parent.parent.parent.parent  # tests/evaluation/cli -> project root
+_backend_dir = _project_root / "apps" / "artagent" / "backend"
+
+# Add paths for imports (backend contains config/, src/, etc.)
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+if str(_backend_dir) not in sys.path:
+    sys.path.insert(0, str(_backend_dir))
+
+# Load .env.local FIRST - this provides AZURE_APPCONFIG_ENDPOINT
+_env_local = _project_root / ".env.local"
+_env_file = _project_root / ".env"
+
+try:
+    from dotenv import load_dotenv
+    if _env_local.exists():
+        load_dotenv(_env_local, override=False)
+    elif _env_file.exists():
+        load_dotenv(_env_file, override=False)
+except ImportError:
+    pass  # dotenv not available, rely on ambient env
+
+# =============================================================================
+# Now safe to import app modules
+# =============================================================================
+
+import argparse
+import asyncio
 
 from utils.ml_logging import get_logger
 

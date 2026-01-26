@@ -530,6 +530,12 @@ class LiveOrchestrator:
         # Clear cached HandoffService so it's recreated with new scenario
         self._handoff_service = None
 
+        # Clear cached orchestrator config so it's resolved with new scenario
+        # CRITICAL: Without this, _update_session_context() uses the OLD cached config
+        # and injects the wrong handoff instructions for the new scenario
+        if hasattr(self, "_cached_orchestrator_config"):
+            delattr(self, "_cached_orchestrator_config")
+
         # Clear visited agents for fresh scenario experience
         self.visited_agents.clear()
 
@@ -574,19 +580,53 @@ class LiveOrchestrator:
 
     def _schedule_scenario_session_update(self) -> None:
         """
-        Schedule a session update after scenario change.
-        
+        Schedule a full agent session update after scenario change.
+
+        This applies the new agent's complete session configuration (voice, tools,
+        VAD, instructions) - not just instructions. This is critical for scenario
+        switches to take effect properly in VoiceLive.
+
         This runs in the background to avoid blocking the scenario update call.
         """
         async def _do_update():
             try:
-                # Refresh context with new agent
-                self._refresh_session_context()
-                # Update VoiceLive session with new instructions
-                await self._update_session_context()
+                agent = self.agents.get(self.active)
+                if not agent:
+                    logger.warning(
+                        "🔄 VoiceLive scenario update failed - agent not found | agent=%s",
+                        self.active,
+                    )
+                    return
+
+                # Build system vars for the new agent
+                system_vars = dict(self._system_vars)
+                system_vars["active_agent"] = self.active
+
+                # Get session_id for the apply call
+                session_id = self._session_id
+
+                # CRITICAL: Apply the FULL agent session config, not just instructions
+                # This includes voice, tools, VAD settings, etc.
+                # This is the same as what _switch_to() does during handoffs
+                await agent.apply_voicelive_session(
+                    self.conn,
+                    system_vars=system_vars,
+                    say=None,  # Don't trigger a greeting on scenario switch
+                    session_id=session_id,
+                    call_connection_id=self.call_connection_id,
+                )
+
+                # Update messenger's active agent
+                if self.messenger:
+                    try:
+                        self.messenger.set_active_agent(self.active)
+                    except AttributeError:
+                        pass
+
                 logger.info(
-                    "🔄 VoiceLive session updated for new agent | agent=%s",
+                    "🔄 VoiceLive session fully updated for scenario change | agent=%s session=%s",
                     self.active,
+                    session_id,
                 )
             except Exception:
                 logger.warning("Failed to update session after scenario change", exc_info=True)

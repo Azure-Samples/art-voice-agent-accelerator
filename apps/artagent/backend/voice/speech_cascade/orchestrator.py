@@ -1408,36 +1408,60 @@ class CascadeOrchestratorAdapter:
         top_p_attr = streaming_params.get("top_p")
         max_tokens_attr = streaming_params.get("max_tokens") or streaming_params.get("max_completion_tokens")
 
+        # Extract endpoint preference and reasoning params from model_config for logging
+        endpoint_pref = getattr(model_config, "endpoint_preference", "auto") if model_config else "auto"
+        reasoning_effort = getattr(model_config, "reasoning_effort", None) if model_config else None
+        verbosity = getattr(model_config, "verbosity", None) if model_config else None
+
         # Create span with GenAI semantic conventions
+        span_attributes = {
+            "gen_ai.operation.name": "invoke_agent",
+            "gen_ai.agent.name": self._active_agent,
+            "gen_ai.agent.description": f"Voice agent: {self._active_agent}",
+            "gen_ai.provider.name": "azure.ai.openai",
+            "gen_ai.request.model": model_name,
+            "gen_ai.request.max_tokens": max_tokens_attr,
+            "gen_ai.request.endpoint_preference": endpoint_pref,
+            "session.id": self.config.session_id or "",
+            "rt.session.id": self.config.session_id or "",
+            "rt.call.connection_id": self.config.call_connection_id or "",
+            # Azure Monitor semantic conventions
+            "dependency.type": "Azure OpenAI",
+            "peer.service": "azure.ai.openai",
+            "component": "cascade_adapter",
+            "cascade.streaming": True,
+            "cascade.tool_loop_iteration": _iteration,
+        }
+        # Add chat completions params (always used for streaming)
+        span_attributes["gen_ai.request.temperature"] = temp_attr
+        span_attributes["gen_ai.request.top_p"] = top_p_attr
+        # Add responses API params if configured
+        if reasoning_effort:
+            span_attributes["gen_ai.request.reasoning_effort"] = reasoning_effort
+        if verbosity is not None:
+            span_attributes["gen_ai.request.verbosity"] = verbosity
+
         with tracer.start_as_current_span(
             f"invoke_agent {self._active_agent}",
             kind=SpanKind.CLIENT,
-            attributes={
-                "gen_ai.operation.name": "invoke_agent",
-                "gen_ai.agent.name": self._active_agent,
-                "gen_ai.agent.description": f"Voice agent: {self._active_agent}",
-                "gen_ai.provider.name": "azure.ai.openai",
-                "gen_ai.request.model": model_name,
-                "gen_ai.request.temperature": temp_attr,
-                "gen_ai.request.top_p": top_p_attr,
-                "gen_ai.request.max_tokens": max_tokens_attr,
-                "session.id": self.config.session_id or "",
-                "rt.session.id": self.config.session_id or "",
-                "rt.call.connection_id": self.config.call_connection_id or "",
-                # Azure Monitor semantic conventions
-                "dependency.type": "Azure OpenAI",
-                "peer.service": "azure.ai.openai",
-                "component": "cascade_adapter",
-                "cascade.streaming": True,
-                "cascade.tool_loop_iteration": _iteration,
-            },
+            attributes=span_attributes,
         ) as span:
             try:
+                # Build log message based on endpoint preference
+                # Streaming always uses chat.completions, but show configured params appropriately
+                if endpoint_pref == "responses":
+                    # Responses API config: show reasoning-specific parameters
+                    params_str = f"reasoning_effort={reasoning_effort or 'N/A'} verbosity={verbosity if verbosity is not None else 'N/A'} max_tokens={max_tokens_attr or 'N/A'}"
+                else:
+                    # Chat Completions config: show traditional parameters
+                    params_str = f"temp={temp_attr if temp_attr is not None else 'N/A'} top_p={top_p_attr if top_p_attr is not None else 'N/A'} max_tokens={max_tokens_attr or 'N/A'}"
+
                 logger.info(
-                    "Starting LLM request (streaming) | agent=%s model=%s temp=%s iteration=%d tools=%d",
+                    "Starting LLM request (streaming) | agent=%s model=%s endpoint=%s %s iteration=%d tools=%d",
                     self._active_agent,
                     model_name,
-                    temp_attr if temp_attr is not None else "N/A",
+                    endpoint_pref,
+                    params_str,
                     _iteration,
                     len(tools) if tools else 0,
                 )

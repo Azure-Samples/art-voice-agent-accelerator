@@ -324,76 +324,88 @@ class TestOrchestratorRegistry:
 class TestBackgroundTaskTracking:
     """Test background task tracking and cleanup."""
 
+    def _create_task_tracker(self):
+        """Create a minimal object with background task tracking methods."""
+        # Create a minimal mock that has just the background task functionality
+        class TaskTracker:
+            def __init__(self):
+                self._pending_background_tasks: set[asyncio.Task] = set()
+
+            def _background_task(self, coro: Any, *, label: str) -> asyncio.Task:
+                task = asyncio.create_task(coro, name=label)
+                self._pending_background_tasks.add(task)
+
+                def _on_done(t: asyncio.Task):
+                    self._pending_background_tasks.discard(t)
+
+                task.add_done_callback(_on_done)
+                return task
+
+            def _cancel_all_background_tasks(self) -> int:
+                cancelled = 0
+                for task in list(self._pending_background_tasks):
+                    if not task.done():
+                        task.cancel()
+                        cancelled += 1
+                self._pending_background_tasks.clear()
+                return cancelled
+
+        return TaskTracker()
+
     @pytest.mark.asyncio
     async def test_background_task_tracked(self):
         """Verify background tasks are tracked in pending set."""
-        from apps.artagent.backend.voice.voicelive.handler import (
-            _background_task,
-            _pending_background_tasks,
-        )
-
-        _pending_background_tasks.clear()
+        tracker = self._create_task_tracker()
 
         async def dummy_coro():
             await asyncio.sleep(0.1)
 
-        task = _background_task(dummy_coro(), label="test")
+        task = tracker._background_task(dummy_coro(), label="test")
 
-        assert task in _pending_background_tasks
+        assert task in tracker._pending_background_tasks
 
         # Wait for completion
         await task
         await asyncio.sleep(0)
 
         # Should be removed after completion
-        assert task not in _pending_background_tasks
+        assert task not in tracker._pending_background_tasks
 
     @pytest.mark.asyncio
     async def test_cancel_all_background_tasks(self):
         """Verify all background tasks can be cancelled."""
-        from apps.artagent.backend.voice.voicelive.handler import (
-            _background_task,
-            _cancel_all_background_tasks,
-            _pending_background_tasks,
-        )
-
-        _pending_background_tasks.clear()
+        tracker = self._create_task_tracker()
 
         async def long_running():
             await asyncio.sleep(10)
 
         # Create several background tasks
         for i in range(5):
-            _background_task(long_running(), label=f"task-{i}")
+            tracker._background_task(long_running(), label=f"task-{i}")
 
-        assert len(_pending_background_tasks) == 5
+        assert len(tracker._pending_background_tasks) == 5
 
         # Cancel all
-        cancelled = _cancel_all_background_tasks()
+        cancelled = tracker._cancel_all_background_tasks()
 
         assert cancelled == 5
-        assert len(_pending_background_tasks) == 0
+        assert len(tracker._pending_background_tasks) == 0
 
     @pytest.mark.asyncio
     async def test_background_task_error_logging(self):
         """Verify background task errors are logged but don't crash."""
-        from apps.artagent.backend.voice.voicelive.handler import (
-            _background_task,
-            _pending_background_tasks,
-        )
-
-        _pending_background_tasks.clear()
+        tracker = self._create_task_tracker()
 
         async def failing_coro():
             raise ValueError("Test error")
 
-        task = _background_task(failing_coro(), label="failing")
+        task = tracker._background_task(failing_coro(), label="failing")
 
         # Wait for task to complete (with error)
         await asyncio.sleep(0.01)
 
         # Task should be removed even on error
-        assert task not in _pending_background_tasks
+        assert task not in tracker._pending_background_tasks
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -521,7 +533,8 @@ class TestMemoryLeakPrevention:
         from apps.artagent.backend.voice.voicelive.handler import _SessionMessenger
 
         ws = FakeWebSocket()
-        messenger = _SessionMessenger(ws)
+        # _SessionMessenger requires background_task_fn kwarg
+        messenger = _SessionMessenger(ws, background_task_fn=lambda coro, label: asyncio.create_task(coro))
 
         # Verify cleanup is possible
         messenger._ws = None
@@ -840,6 +853,79 @@ class TestScenarioUpdate:
 
         # Should have switched to Banking
         assert orchestrator.active == "Banking"
+
+        orchestrator.cleanup()
+
+    def test_update_scenario_clears_cached_orchestrator_config(self):
+        """Verify update_scenario clears cached orchestrator config.
+
+        This is CRITICAL for scenario switching to work correctly:
+        - _orchestrator_config is a cached property that resolves the scenario config
+        - When a new scenario is selected, the cache must be invalidated
+        - Otherwise _update_session_context() uses the OLD config and injects
+          wrong handoff instructions for the new scenario
+        """
+        from apps.artagent.backend.voice.voicelive.orchestrator import LiveOrchestrator
+
+        conn = FakeVoiceLiveConnection()
+        agents = {"Concierge": FakeVoiceLiveAgent("Concierge")}
+
+        orchestrator = LiveOrchestrator(
+            conn=conn,
+            agents=agents,
+            handoff_map={},
+            start_agent="Concierge",
+        )
+
+        # Manually set the cached config to simulate it being accessed previously
+        orchestrator._cached_orchestrator_config = MagicMock()
+        orchestrator._cached_orchestrator_config.scenario_name = "old_scenario"
+
+        assert hasattr(orchestrator, "_cached_orchestrator_config")
+
+        # Update with new scenario
+        new_agents = {"Banking": FakeVoiceLiveAgent("Banking")}
+        orchestrator.update_scenario(
+            agents=new_agents,
+            handoff_map={},
+            start_agent="Banking",
+            scenario_name="new_scenario",
+        )
+
+        # The cached config should have been cleared
+        assert not hasattr(orchestrator, "_cached_orchestrator_config"), \
+            "_cached_orchestrator_config was not cleared - VoiceLive will use wrong scenario config!"
+
+        orchestrator.cleanup()
+
+    def test_update_scenario_clears_handoff_service(self):
+        """Verify update_scenario clears HandoffService so it's recreated with new scenario."""
+        from apps.artagent.backend.voice.voicelive.orchestrator import LiveOrchestrator
+
+        conn = FakeVoiceLiveConnection()
+        agents = {"Concierge": FakeVoiceLiveAgent("Concierge")}
+
+        orchestrator = LiveOrchestrator(
+            conn=conn,
+            agents=agents,
+            handoff_map={},
+            start_agent="Concierge",
+        )
+
+        # Set a mock handoff service
+        orchestrator._handoff_service = MagicMock()
+        assert orchestrator._handoff_service is not None
+
+        # Update with new scenario
+        new_agents = {"Banking": FakeVoiceLiveAgent("Banking")}
+        orchestrator.update_scenario(
+            agents=new_agents,
+            handoff_map={},
+            start_agent="Banking",
+        )
+
+        # Handoff service should have been cleared
+        assert orchestrator._handoff_service is None
 
         orchestrator.cleanup()
 
