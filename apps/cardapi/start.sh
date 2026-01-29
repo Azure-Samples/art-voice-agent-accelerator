@@ -8,7 +8,7 @@ echo "====================================="
 echo ""
 
 # Check if running from cardapi directory
-if [ ! -f "database/decline_codes.json" ]; then
+if [ ! -f "database/decline_codes_policy_pack.json" ]; then
     echo "Error: Must run from apps/cardapi directory"
     exit 1
 fi

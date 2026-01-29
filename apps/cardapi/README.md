@@ -15,17 +15,17 @@ The Card Decline API provides:
 ┌─────────────────┐
 │   AI Agent      │
 └────────┬────────┘
-         │ MCP Protocol
+         │ MCP Protocol (stdio)
          ↓
 ┌─────────────────┐
 │   MCP Server    │
-│  (Port 8001)    │
+│  (Port 80 HTTP) │
 └────────┬────────┘
          │ HTTP
          ↓
 ┌─────────────────┐      ┌──────────────────┐
 │ FastAPI Backend │ ───→ │ decline_codes    │
-│  (Port 8000)    │      │     .json        │
+│  (Port 8000)    │      │   .json          │
 └─────────────────┘      └──────────────────┘
 ```
 
@@ -55,7 +55,7 @@ curl http://localhost:8000/api/v1/search?q=insufficient
 curl http://localhost:8000/api/v1/codes?code_type=numeric
 ```
 
-### 2. MCP Server (`/mcp`)
+### 2. MCP Server (`/mcp_app`)
 
 Model Context Protocol server that wraps the backend API for AI agent interaction.
 
@@ -67,10 +67,11 @@ Model Context Protocol server that wraps the backend API for AI agent interactio
 
 ### 3. Database (`/database`)
 
-JSON document database (`decline_codes.json`) containing:
+JSON document database (`decline_codes_policy_pack.json`) containing:
 - **Numeric codes** (Base24 system)
 - **Alphanumeric codes** (FAST system)
 - Descriptions, detailed information, and recommended actions
+- Policy pack data: script references, orchestrator actions, contextual rules, and escalation configurations
 
 ## Local Development
 
@@ -94,7 +95,7 @@ JSON document database (`decline_codes.json`) containing:
 
 3. **Install MCP dependencies:**
    ```bash
-   cd ../mcp
+   cd ../mcp_app
    pip install -r requirements.txt
    ```
 
@@ -103,6 +104,7 @@ JSON document database (`decline_codes.json`) containing:
    export CARDAPI_BACKEND_URL=http://localhost:8000
    python service.py
    ```
+   The MCP server will be running and listening for connections
 
 ### Testing the API
 
@@ -134,7 +136,7 @@ docker run -p 8000:8000 cardapi-backend
 **MCP Server:**
 ```bash
 docker build -f Dockerfile.mcp -t cardapi-mcp .
-docker run -e CARDAPI_BACKEND_URL=http://backend:8000 -p 8001:8001 cardapi-mcp
+docker run -e CARDAPI_BACKEND_URL=http://backend:8000 -p 80:80 cardapi-mcp
 ```
 
 ## Azure Deployment
@@ -218,7 +220,7 @@ Response: Code 51 indicates Insufficient funds. Actions: Transfer funds if appli
 
 ### Updating Decline Codes
 
-1. Edit `database/decline_codes.json`
+1. Edit `database/decline_codes_policy_pack.json`
 2. Validate JSON structure
 3. Restart backend service (auto-reloads on startup)
 
@@ -259,5 +261,6 @@ When adding new features:
 
 ## References
 
-- [DeclineCodes.md](../DeclineCodes.md) - Source data reference
-- [CardDeclineAPI.md](../CardDeclineAPI.md) - Original requirements
+- [QUICKSTART.md](./QUICKSTART.md) - Quick start guide for the Card Decline API
+- [CARDAPI_USAGE_GUIDE.md](./backend/CARDAPI_USAGE_GUIDE.md) - Detailed usage guide
+- [CARDAPI_MCP_UPDATES.md](./mcp_app/CARDAPI_MCP_UPDATES.md) - MCP server updates and details

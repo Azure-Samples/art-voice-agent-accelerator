@@ -52,7 +52,7 @@ def main():
 
     # Load decline codes from JSON
     script_dir = Path(__file__).parent.parent
-    data_file = script_dir / "database" / "decline_codes.json"
+    data_file = script_dir / "database" / "decline_codes_policy_pack.json"
 
     if not data_file.exists():
         print(f"ERROR: Data file not found: {data_file}")
@@ -154,6 +154,31 @@ def main():
 
         print(f"✓ Inserted {len(alpha_codes)} alphanumeric codes")
 
+        # Insert scripts
+        scripts = {
+            "_id": "scripts",
+            "scripts": data.get("scripts", {})
+        }
+        try:
+            collection.insert_one(scripts)
+            print(f"✓ Inserted scripts dictionary with {len(data.get('scripts', {}))} scripts")
+        except DuplicateKeyError:
+            collection.replace_one({"_id": "scripts"}, scripts, upsert=True)
+            print(f"✓ Updated scripts dictionary with {len(data.get('scripts', {}))} scripts")
+
+        # Insert global_rules if present
+        if data.get("global_rules"):
+            global_rules = {
+                "_id": "global_rules",
+                "rules": data.get("global_rules", [])
+            }
+            try:
+                collection.insert_one(global_rules)
+                print(f"✓ Inserted {len(data.get('global_rules', []))} global rules")
+            except DuplicateKeyError:
+                collection.replace_one({"_id": "global_rules"}, global_rules, upsert=True)
+                print(f"✓ Updated {len(data.get('global_rules', []))} global rules")
+
         # Verify counts
         total = collection.count_documents({})
         numeric_count = collection.count_documents({"code_type": "numeric"})
@@ -163,6 +188,8 @@ def main():
         print(f"  - Total documents: {total}")
         print(f"  - Numeric codes: {numeric_count}")
         print(f"  - Alphanumeric codes: {alpha_count}")
+        print(f"  - Scripts: {len(data.get('scripts', {}))}")
+        print(f"  - Global rules: {len(data.get('global_rules', []))}")
 
     except Exception as e:
         print(f"ERROR: Failed to load data: {e}")

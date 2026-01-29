@@ -15,6 +15,8 @@ agents:
   - BankingConcierge
   - CardRecommendation
   - InvestmentAdvisor
+  - DeclineSpecialist
+  - FraudAgent
 
 # Handoff behavior - default for unlisted routes
 handoff_type: announced
@@ -73,6 +75,17 @@ handoffs:
       - Wants wealth management or portfolio advice
       - Has questions about market conditions or investment strategies
 
+  - from: BankingConcierge
+    to: DeclineSpecialist
+    tool: handoff_to_agent
+    type: announced
+    share_context: true
+    handoff_condition: |
+      Transfer to DeclineSpecialist when the customer:
+      - Mentions a declined transaction or payment issue
+      - Asks about reasons for a declined card or payment
+      - Needs assistance resolving a declined transaction
+
   # ─────────────────────────────────────────────────────────────────────────────
   # Cross-Specialist Handoffs (expertise-based routing)
   # ─────────────────────────────────────────────────────────────────────────────
@@ -97,6 +110,29 @@ handoffs:
       - Shifts the conversation from investments to cards
       - Asks about spending tools or payment methods
       - Wants a card with investment rewards or benefits
+
+  - from: BankingConcierge
+    to: FraudAgent
+    tool: handoff_to_agent
+    type: announced
+    share_context: true
+    handoff_condition: |
+      Transfer to FraudAgent when the customer:
+      - Reports suspected fraudulent activity on their account
+      - Asks about fraud prevention or security measures
+      - Needs to dispute a transaction due to fraud
+
+  - from: DeclineSpecialist
+    to: FraudAgent
+    tool: handoff_to_agent
+    type: announced
+    share_context: true
+    handoff_condition: |
+      Transfer to FraudAgent when the customer:
+      - Indicated by Orchestrator Actions from the decline code.
+      - Indicates that a declined transaction may be due to fraud
+      - Expresses concern about unauthorized activity on their account
+      - Requests assistance with disputing a potentially fraudulent transaction
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Return to BankingConcierge (all specialists can return)

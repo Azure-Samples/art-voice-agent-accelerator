@@ -248,7 +248,7 @@ resource "azurerm_container_app" "cardapi_mcp" {
   }
 
   ingress {
-    external_enabled = false  # MCP server is internal only
+    external_enabled = true  # MCP server exposed for external tool calls
     target_port      = 80
     traffic_weight {
       percentage      = 100
@@ -371,4 +371,9 @@ output "CARDAPI_BACKEND_URL" {
 output "CARDAPI_MCP_FQDN" {
   description = "Card API MCP internal FQDN"
   value       = azurerm_container_app.cardapi_mcp.ingress[0].fqdn
+}
+
+output "CARDAPI_CONTAINER_APP_URL" {
+  description = "Card API MCP Container App public URL (for agent integration)"
+  value       = "https://${azurerm_container_app.cardapi_mcp.ingress[0].fqdn}"
 }

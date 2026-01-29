@@ -1,16 +1,31 @@
 """
 MCP Server for Card Decline Code Lookup.
 Provides Model Context Protocol interface for AI agents to query decline codes.
+
+Implements MCP standard patterns:
+- Resources: Expose decline code data as readable resources
+- Tools: Functions for querying and searching codes
+- Prompts: Templates for common workflows
 """
 import asyncio
+import json
 import os
-import logging
 from typing import Any, Dict, List, Optional
 
 import httpx
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
+from mcp.types import (
+    Resource,
+    ResourceTemplate,
+    Tool,
+    Prompt,
+    PromptArgument,
+    PromptMessage,
+    TextContent,
+    ImageContent,
+    EmbeddedResource,
+)
 from aiohttp import web
 
 from utils.ml_logging import get_logger
@@ -24,12 +39,200 @@ HEALTH_PORT = 80
 
 
 class CardDeclineCodeMCPServer:
-    """MCP Server for card decline code lookups."""
+    """MCP Server for card decline code lookups following MCP best practices."""
     
     def __init__(self):
         self.server = Server("card-decline-codes")
         self.backend_url = BACKEND_URL
+        self.setup_resources()
+        self.setup_prompts()
         self.setup_tools()
+    
+    def setup_resources(self):
+        """Register MCP resources for decline code data."""
+        
+        @self.server.list_resources()
+        async def list_resources() -> List[Resource]:
+            """List available resources."""
+            return [
+                Resource(
+                    uri="decline-codes://database/all",
+                    name="All Decline Codes",
+                    description="Complete database of all decline codes with full details",
+                    mimeType="application/json"
+                ),
+                Resource(
+                    uri="decline-codes://database/metadata",
+                    name="Database Metadata",
+                    description="Metadata about the decline codes database",
+                    mimeType="application/json"
+                )
+            ]
+        
+        @self.server.list_resource_templates()
+        async def list_resource_templates() -> List[ResourceTemplate]:
+            """List resource URI templates."""
+            return [
+                ResourceTemplate(
+                    uriTemplate="decline-code://{code}",
+                    name="Decline Code Details",
+                    description="Get detailed information about a specific decline code",
+                    mimeType="application/json"
+                )
+            ]
+        
+        @self.server.read_resource()
+        async def read_resource(uri: str) -> str:
+            """Read resource content by URI."""
+            try:
+                if uri == "decline-codes://database/all":
+                    # Get all codes
+                    async with httpx.AsyncClient() as client:
+                        response = await client.get(f"{self.backend_url}/api/v1/codes", timeout=10.0)
+                        response.raise_for_status()
+                        return json.dumps(response.json(), indent=2)
+                
+                elif uri == "decline-codes://database/metadata":
+                    # Get metadata
+                    async with httpx.AsyncClient() as client:
+                        response = await client.get(f"{self.backend_url}/api/v1/metadata", timeout=10.0)
+                        response.raise_for_status()
+                        return json.dumps(response.json(), indent=2)
+                
+                elif uri.startswith("decline-code://"):
+                    # Get specific code
+                    code = uri.replace("decline-code://", "")
+                    async with httpx.AsyncClient() as client:
+                        response = await client.get(f"{self.backend_url}/api/v1/codes/{code}", timeout=10.0)
+                        response.raise_for_status()
+                        return json.dumps(response.json(), indent=2)
+                
+                else:
+                    return json.dumps({"error": f"Unknown resource URI: {uri}"})
+            
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 404:
+                    return json.dumps({"error": f"Resource not found: {uri}"})
+                return json.dumps({"error": f"Backend error: {e.response.status_code}"})
+            except Exception as e:
+                logger.error(f"Error reading resource {uri}: {e}", exc_info=True)
+                return json.dumps({"error": str(e)})
+    
+    def setup_prompts(self):
+        """Register MCP prompts for common workflows."""
+        
+        @self.server.list_prompts()
+        async def list_prompts() -> List[Prompt]:
+            """List available prompts."""
+            return [
+                Prompt(
+                    name="investigate-decline",
+                    description="Investigate a card decline code and provide customer guidance",
+                    arguments=[
+                        PromptArgument(
+                            name="code",
+                            description="The decline code to investigate",
+                            required=True
+                        )
+                    ]
+                ),
+                Prompt(
+                    name="troubleshoot-issue",
+                    description="Troubleshoot a customer issue by searching relevant decline codes",
+                    arguments=[
+                        PromptArgument(
+                            name="issue_description",
+                            description="Description of the customer's issue",
+                            required=True
+                        )
+                    ]
+                ),
+                Prompt(
+                    name="escalation-workflow",
+                    description="Check if a decline code requires escalation and provide workflow",
+                    arguments=[
+                        PromptArgument(
+                            name="code",
+                            description="The decline code to check",
+                            required=True
+                        )
+                    ]
+                )
+            ]
+        
+        @self.server.get_prompt()
+        async def get_prompt(name: str, arguments: Dict[str, str]) -> List[PromptMessage]:
+            """Get prompt content."""
+            if name == "investigate-decline":
+                code = arguments.get("code", "")
+                return [
+                    PromptMessage(
+                        role="user",
+                        content=TextContent(
+                            type="text",
+                            text=f"""I need to investigate decline code {code}. Please:
+
+1. Look up the code details including description, information, and recommended actions
+2. Provide the customer service scripts that should be used
+3. List any orchestrator actions that should be taken
+4. Check if escalation is required and to which team
+5. Note any contextual rules that might apply
+
+Use the lookup_decline_code tool to get this information."""
+                        )
+                    )
+                ]
+            
+            elif name == "troubleshoot-issue":
+                issue = arguments.get("issue_description", "")
+                return [
+                    PromptMessage(
+                        role="user",
+                        content=TextContent(
+                            type="text",
+                            text=f"""A customer is experiencing: {issue}
+
+Please help troubleshoot by:
+1. Searching for relevant decline codes related to this issue
+2. Identifying the most likely decline code(s)
+3. Providing the recommended actions for each code
+4. Suggesting next steps for resolution
+
+Use the search_decline_codes tool to find relevant codes."""
+                        )
+                    )
+                ]
+            
+            elif name == "escalation-workflow":
+                code = arguments.get("code", "")
+                return [
+                    PromptMessage(
+                        role="user",
+                        content=TextContent(
+                            type="text",
+                            text=f"""For decline code {code}, check the escalation requirements:
+
+1. Look up the code details
+2. Check if escalation is required
+3. Identify the escalation target team
+4. Provide the escalation workflow steps
+5. Note any contextual rules that affect escalation
+
+Use the lookup_decline_code tool to get escalation information."""
+                        )
+                    )
+                ]
+            
+            else:
+                return [
+                    PromptMessage(
+                        role="user",
+                        content=TextContent(
+                            type="text",
+                            text=f"Unknown prompt: {name}"
+                        )
+                    )
+                ]
     
     def setup_tools(self):
         """Register MCP tools."""
@@ -40,7 +243,7 @@ class CardDeclineCodeMCPServer:
             return [
                 Tool(
                     name="lookup_decline_code",
-                    description="Look up a specific card decline code to get its description, detailed information, and recommended actions. Use this when you know the exact decline code.",
+                    description="Look up a specific card decline code to get its description, detailed information, recommended actions, customer service scripts (with resolved content), orchestrator actions, contextual rules, and escalation requirements. Use this when you know the exact decline code.",
                     inputSchema={
                         "type": "object",
                         "properties": {
@@ -54,7 +257,7 @@ class CardDeclineCodeMCPServer:
                 ),
                 Tool(
                     name="search_decline_codes",
-                    description="Search for decline codes by description, information, or action keywords. Use this when you need to find codes related to a specific issue or symptom.",
+                    description="Search for decline codes by description, information, or action keywords. Returns complete policy pack data including scripts, orchestrator actions, and escalation info. Use this when you need to find codes related to a specific issue or symptom.",
                     inputSchema={
                         "type": "object",
                         "properties": {
@@ -73,7 +276,7 @@ class CardDeclineCodeMCPServer:
                 ),
                 Tool(
                     name="get_all_decline_codes",
-                    description="Get all available decline codes, optionally filtered by type (numeric/alphanumeric). Use this to browse all codes or get an overview.",
+                    description="Get all available decline codes with complete policy pack data (scripts, orchestrator actions, escalation), optionally filtered by type (numeric/alphanumeric). Use this to browse all codes or get an overview.",
                     inputSchema={
                         "type": "object",
                         "properties": {
@@ -143,6 +346,47 @@ class CardDeclineCodeMCPServer:
 """
                 for action in data['actions']:
                     result += f"\n- {action}"
+                
+                # Add orchestrator actions if present
+                if data.get('orchestrator_actions'):
+                    result += f"\n\n**Orchestrator Actions:**"
+                    for action in data['orchestrator_actions']:
+                        result += f"\n- {action}"
+                
+                # Add script references with resolved content
+                if data.get('scripts'):
+                    result += f"\n\n**Customer Service Scripts:**"
+                    for script in data['scripts']:
+                        result += f"\n\n**{script['title']}** (Ref: {script['ref']})"
+                        if script.get('channels'):
+                            result += f"\n- Channels: {', '.join(script['channels'])}"
+                        result += f"\n- Script: {script['text']}"
+                        if script.get('notes'):
+                            result += f"\n- Notes: {script['notes']}"
+                
+                # Add contextual rules
+                if data.get('contextual_rules'):
+                    result += f"\n\n**Contextual Rules:**"
+                    for i, rule in enumerate(data['contextual_rules'], 1):
+                        result += f"\n\n{i}. **Condition:** {rule.get('if', {})}"
+                        if rule.get('add_scripts'):
+                            result += f"\n   **Additional Scripts:**"
+                            for script in rule['add_scripts']:
+                                result += f"\n   - {script['title']}: {script['text']}"
+                        if rule.get('escalation'):
+                            esc = rule['escalation']
+                            if esc.get('required'):
+                                result += f"\n   **Escalation Required:** {esc.get('target', 'Yes')}"
+                        if rule.get('orchestrator_actions'):
+                            result += f"\n   **Actions:** {', '.join(rule['orchestrator_actions'])}"
+                
+                # Add escalation information
+                if data.get('escalation'):
+                    esc = data['escalation']
+                    if esc.get('required'):
+                        result += f"\n\n**Escalation Required:** {esc.get('target', 'Yes')}"
+                    elif esc.get('target'):
+                        result += f"\n\n**Escalation Target:** {esc['target']}"
                 
                 logger.info(f"Successfully retrieved decline code: {code}")
                 return [TextContent(type="text", text=result)]
@@ -288,19 +532,54 @@ async def health_check(request):
     return web.Response(text='{"status":"healthy"}', content_type='application/json')
 
 
-async def run_health_server():
-    """Run the health check HTTP server."""
-    try:
-        health_app = web.Application()
-        health_app.router.add_get("/health", health_check)
-        health_app.router.add_get("/ready", health_check)
-        health_app.router.add_get("/", health_check)
+def _flatten_text(contents: List[TextContent]) -> str:
+    """Flatten MCP TextContent responses into a single string."""
+    return "\n".join(content.text for content in contents)
 
-        runner = web.AppRunner(health_app)
+
+async def tool_lookup_decline_code(request: web.Request) -> web.Response:
+    """HTTP wrapper for MCP lookup_decline_code tool."""
+    code = (request.query.get("code") or "").strip()
+    if not code:
+        return web.json_response({"success": False, "message": "code is required"}, status=400)
+
+    server: CardDeclineCodeMCPServer = request.app["mcp_server"]
+    result = await server.lookup_decline_code(code)
+    return web.json_response({"success": True, "result": _flatten_text(result)})
+
+
+async def tool_search_decline_codes(request: web.Request) -> web.Response:
+    """HTTP wrapper for MCP search_decline_codes tool."""
+    query = (request.query.get("query") or "").strip()
+    code_type = (request.query.get("code_type") or "").strip() or None
+    if not query:
+        return web.json_response({"success": False, "message": "query is required"}, status=400)
+
+    server: CardDeclineCodeMCPServer = request.app["mcp_server"]
+    result = await server.search_decline_codes(query=query, code_type=code_type)
+    return web.json_response({"success": True, "result": _flatten_text(result)})
+
+
+async def run_health_server():
+    """Run the health check and HTTP tool server."""
+    try:
+        http_app = web.Application()
+        http_app["mcp_server"] = CardDeclineCodeMCPServer()
+
+        # Health endpoints
+        http_app.router.add_get("/health", health_check)
+        http_app.router.add_get("/ready", health_check)
+        http_app.router.add_get("/", health_check)
+
+        # Tool endpoints
+        http_app.router.add_get("/tools/lookup_decline_code", tool_lookup_decline_code)
+        http_app.router.add_get("/tools/search_decline_codes", tool_search_decline_codes)
+
+        runner = web.AppRunner(http_app, access_log=None)
         await runner.setup()
         site = web.TCPSite(runner, '0.0.0.0', HEALTH_PORT)
         await site.start()
-        logger.info(f"Health check server started on port {HEALTH_PORT}")
+        logger.info(f"HTTP server started on port {HEALTH_PORT}")
 
         # Keep the server running
         await asyncio.Event().wait()
@@ -318,7 +597,7 @@ async def main():
     try:
         logger.info("Initializing Card Decline Code MCP Server")
         
-        # Start health server in background task
+        # Start HTTP server (health + tools) in background task
         health_task = asyncio.create_task(run_health_server())
 
         # If the health server ever exits, log the reason

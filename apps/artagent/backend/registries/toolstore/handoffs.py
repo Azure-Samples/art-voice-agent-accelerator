@@ -111,6 +111,31 @@ handoff_fraud_agent_schema: dict[str, Any] = {
     },
 }
 
+handoff_decline_specialist_schema: dict[str, Any] = {
+    "name": "handoff_decline_specialist",
+    "description": (
+        "Transfer to Decline Specialist for debit card decline inquiries and resolution. "
+        "Use when customer needs help understanding why their card was declined, "
+        "or needs to resolve a declined transaction."
+        + SILENT_HANDOFF_NOTE
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "client_id": {"type": "string", "description": "Customer identifier"},
+            "decline_code": {
+                "type": "string",
+                "description": "Decline code if available (e.g., '02', '51', 'C1')",
+            },
+            "issue_summary": {
+                "type": "string",
+                "description": "Brief summary of the decline issue",
+            },
+        },
+        "required": ["client_id"],
+    },
+}
+
 handoff_to_auth_schema: dict[str, Any] = {
     "name": "handoff_to_auth",
     "description": (
@@ -492,6 +517,36 @@ async def handoff_fraud_agent(args: dict[str, Any]) -> dict[str, Any]:
         context={
             "client_id": client_id,
             "fraud_type": fraud_type,
+            "issue_summary": issue_summary,
+            "handoff_timestamp": _utc_now(),
+            "previous_agent": "Concierge",
+        },
+        extra={"should_interrupt_playback": True},
+    )
+
+
+async def handoff_decline_specialist(args: dict[str, Any]) -> dict[str, Any]:
+    """Transfer to Decline Specialist for card decline inquiries."""
+    client_id = (args.get("client_id") or "").strip()
+    decline_code = (args.get("decline_code") or "").strip()
+    issue_summary = (args.get("issue_summary") or "").strip()
+
+    if not client_id:
+        return {"success": False, "message": "client_id is required."}
+
+    logger.info(
+        "💳 Handoff to DeclineSpecialist | client=%s code=%s",
+        client_id,
+        decline_code or "(unknown)",
+    )
+
+    return _build_handoff_payload(
+        target_agent="DeclineSpecialist",
+        message="",
+        summary=f"Card decline: {decline_code or issue_summary or 'declined transaction'}",
+        context={
+            "client_id": client_id,
+            "decline_code": decline_code,
             "issue_summary": issue_summary,
             "handoff_timestamp": _utc_now(),
             "previous_agent": "Concierge",
@@ -921,6 +976,13 @@ register_tool(
     handoff_fraud_agent,
     is_handoff=True,
     tags={"handoff", "fraud"},
+)
+register_tool(
+    "handoff_decline_specialist",
+    handoff_decline_specialist_schema,
+    handoff_decline_specialist,
+    is_handoff=True,
+    tags={"handoff", "banking", "decline-codes"},
 )
 register_tool(
     "handoff_to_auth",

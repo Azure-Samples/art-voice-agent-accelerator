@@ -143,6 +143,7 @@ tools:
   # Handoffs to Specialists
   - handoff_card_recommendation        # Credit card recommendations
   - handoff_investment_advisor         # Investment & retirement
+  - handoff_decline_specialist         # Handle declined transactions
 
   # Escalation
   - escalate_human

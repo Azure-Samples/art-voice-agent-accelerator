@@ -1,0 +1,193 @@
+{
+  "metadata": {
+    "title": "{{BANK_NAME}} - Debit Card and ATM Card Declined Reason Codes",
+    "description": "Policy pack for handling card decline codes. Numeric codes processed via {{NUMERIC_PROCESSOR}}, alphanumeric codes via {{ALPHANUMERIC_PROCESSOR}}",
+    "version": "{{VERSION_DATE}}",
+    "notes": [
+      "If decline code is numeric, decline was processed on {{NUMERIC_PROCESSOR}}",
+      "If decline code is alphanumeric, decline was processed on {{ALPHANUMERIC_PROCESSOR}}",
+      "Transaction descriptions for declined/rejected transactions typically begin with 'Rej'"
+    ]
+  },
+{
+  "metadata": {
+    "title": "{{BANK_NAME}} - Debit Card and ATM Card Declined Reason Codes",
+    "description": "Policy pack for handling card decline codes. Numeric codes processed via {{NUMERIC_PROCESSOR}}, alphanumeric codes via {{ALPHANUMERIC_PROCESSOR}}",
+    "version": "{{VERSION_DATE}}",
+    "notes": [
+      "If decline code is numeric, decline was processed on {{NUMERIC_PROCESSOR}}",
+      "If decline code is alphanumeric, decline was processed on {{ALPHANUMERIC_PROCESSOR}}",
+      "Transaction descriptions for declined/rejected transactions typically begin with 'Rej'"
+    ]
+  },
+  "numeric_codes": [
+    {
+      "code": "{{CODE}}",
+      "description": "{{DESCRIPTION}}",
+      "information": "{{CUSTOMER_FACING_INFORMATION}}",
+      "actions": [
+        "{{ACTION_1}}",
+        "{{ACTION_2}}"
+      ]
+    },
+    {
+      "code": "{{CODE}}",
+      "description": "{{DESCRIPTION}}",
+      "information": "{{CUSTOMER_FACING_INFORMATION}}",
+      "actions": [
+        "{{ACTION_1}}",
+        "{{ACTION_2}}"
+      ],
+      "script_refs": [
+        "{{SCRIPT_REF_1}}"
+      ],
+      "orchestrator_actions": [
+        "{{ORCHESTRATOR_ACTION_1}}"
+      ],
+      "contextual_rules": [
+        {
+          "if": {
+            "condition_key": "{{CONDITION_VALUE}}"
+          },
+          "then": {
+            "add_script_refs": ["{{SCRIPT_REF_2}}"],
+            "escalation": {
+              "required": true,
+              "target": "{{ESCALATION_TARGET}}"
+            }
+          }
+        }
+      ],
+      "escalation": {
+        "required": false
+      }
+    }
+  ],
+  "alphanumeric_codes": [
+    {
+      "code": "{{CODE}}",
+      "description": "{{DESCRIPTION}}",
+      "information": "{{CUSTOMER_FACING_INFORMATION}}",
+      "actions": [
+        "{{ACTION_1}}",
+        "{{ACTION_2}}"
+      ]
+    },
+    {
+      "code": "{{CODE_RANGE}}",
+      "description": "{{DESCRIPTION}}",
+      "information": "{{CUSTOMER_FACING_INFORMATION}}",
+      "actions": [
+        "{{ACTION_1}}"
+      ],
+      "escalation": {
+        "required": true,
+        "target": "{{ESCALATION_TARGET}}"
+      }
+    },
+    {
+      "code": "{{CODE}}",
+      "description": "{{DESCRIPTION}}",
+      "information": "{{CUSTOMER_FACING_INFORMATION}}",
+      "actions": [
+        "{{ACTION_1}}",
+        "{{ACTION_2}}"
+      ],
+      "script_refs": [
+        "{{SCRIPT_REF_1}}"
+      ],
+      "orchestrator_actions": [
+        "{{ORCHESTRATOR_ACTION_1}}"
+      ],
+      "contextual_rules": [
+        {
+          "if": {
+            "blockedStatus": "{{STATUS_VALUE}}"
+          },
+          "escalation": {
+            "required": false
+          },
+          "orchestrator_actions": [
+            "{{ORCHESTRATOR_ACTION_2}}"
+          ]
+        },
+        {
+          "if": {
+            "blockedStatusNotIn": ["{{STATUS_VALUE_1}}", "{{STATUS_VALUE_2}}"]
+          },
+          "escalation": {
+            "required": true,
+            "target": "{{ESCALATION_TARGET}}"
+          }
+        }
+      ]
+    }
+  ],
+  "scripts": {
+    "{{SCRIPT_ID_1}}": {
+      "title": "{{SCRIPT_TITLE}}",
+      "channels": [
+        "chat",
+        "voice",
+        "sms"
+      ],
+      "text": "{{CUSTOMER_FACING_SCRIPT_TEXT}}",
+      "notes": "{{INTERNAL_NOTES}}"
+    },
+    "{{SCRIPT_ID_2}}": {
+      "title": "{{SCRIPT_TITLE}}",
+      "channels": [
+        "chat",
+        "voice",
+        "sms"
+      ],
+      "text": "{{CUSTOMER_FACING_SCRIPT_TEXT}}",
+      "notes": "{{INTERNAL_NOTES}}"
+    }
+  },
+  "global_rules": [
+    {
+      "id": "{{RULE_ID_1}}",
+      "if": {
+        "code": "{{CODE}}",
+        "condition_key": "{{CONDITION_VALUE}}"
+      },
+      "then": {
+        "script_ref": "{{SCRIPT_ID}}",
+        "orchestrator_actions": [
+          "{{ORCHESTRATOR_ACTION}}"
+        ],
+        "escalation": {
+          "required": false
+        }
+      }
+    },
+    {
+      "id": "{{RULE_ID_2}}",
+      "if": {
+        "custom_condition": "{{CONDITION}}"
+      },
+      "then": {
+        "script_ref": "{{SCRIPT_ID}}",
+        "escalation": {
+          "required": true,
+          "target": "{{ESCALATION_TARGET}}"
+        }
+      }
+    }
+  ],
+  "escalation_targets": [
+    {
+      "name": "{{ESCALATION_TARGET_NAME}}",
+      "description": "{{ESCALATION_TARGET_DESCRIPTION}}",
+      "contact_info": "{{CONTACT_ROUTING_KEY}}"
+    }
+  ],
+  "orchestrator_actions": [
+    {
+      "action": "{{ACTION_NAME}}",
+      "description": "{{ACTION_DESCRIPTION}}",
+      "parameters": {}
+    }
+  ]
+}

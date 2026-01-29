@@ -20,7 +20,7 @@ docker run -p 8000:8000 cardapi-backend
 
 # Build and run MCP
 docker build -f Dockerfile.mcp -t cardapi-mcp .
-docker run -e CARDAPI_BACKEND_URL=http://backend:8000 -p 8001:8001 cardapi-mcp
+docker run -e CARDAPI_BACKEND_URL=http://backend:8000 -p 80:80 cardapi-mcp
 ```
 
 ### Azure Deployment
@@ -148,7 +148,7 @@ lsof -i :8000
 tail -f apps/cardapi/backend.log
 
 # Verify database exists
-ls -la apps/cardapi/database/decline_codes.json
+ls -la apps/cardapi/database/decline_codes_policy_pack.json
 ```
 
 ### MCP connection issues
@@ -183,12 +183,12 @@ apps/cardapi/
 │   ├── main.py              # FastAPI application
 │   ├── requirements.txt     # Python dependencies
 │   └── __init__.py
-├── mcp/
+├── mcp_app/
 │   ├── service.py          # MCP server
 │   ├── requirements.txt    # Python dependencies
 │   └── __init__.py
 ├── database/
-│   └── decline_codes.json  # Decline codes database
+│   └── decline_codes_policy_pack.json  # Decline codes policy pack database
 ├── Dockerfile.backend      # Backend container
 ├── Dockerfile.mcp          # MCP container
 ├── README.md               # Full documentation
@@ -200,8 +200,8 @@ apps/cardapi/
 
 ## 🔗 Related Files
 
-- `apps/DeclineCodes.md` - Source data reference
-- `apps/CardDeclineAPI.md` - Requirements specification
+- [CARDAPI_USAGE_GUIDE.md](backend/CARDAPI_USAGE_GUIDE.md) - Detailed usage guide
+- [CARDAPI_MCP_UPDATES.md](mcp_app/CARDAPI_MCP_UPDATES.md) - MCP server updates
 - `infra/terraform/cardapi.tf` - Azure infrastructure
 - `azure.yaml` - Deployment configuration
 
@@ -221,7 +221,7 @@ apps/cardapi/
 
 ## 🆘 Support
 
-- Check logs: `backend.log` and `mcp.log`
+- Check logs: `backend.log` and `mcp_app.log`
 - Verify health: `curl localhost:8000/health`
 - Run tests: `./test_api.py`
 - Review errors in Application Insights (Azure deployment)

@@ -117,18 +117,53 @@ app.add_middleware(
 )
 
 
-class DeclineCode(BaseModel):
-    """Model for decline code information."""
+class EscalationConfig(BaseModel):
+    """Escalation configuration for a decline code."""
+    required: bool = Field(..., description="Whether escalation is required")
+    target: Optional[str] = Field(None, description="Escalation target (e.g., FRAUD_SERVICING, LOAN_LOC_SERVICE_CENTER)")
+
+
+class Script(BaseModel):
+    """Resolved script content."""
+    ref: str = Field(..., description="Script reference identifier")
+    title: str = Field(..., description="Script title")
+    channels: Optional[List[str]] = Field(None, description="Applicable channels (chat, voice, sms)")
+    text: str = Field(..., description="Script text content")
+    notes: Optional[str] = Field(None, description="Additional notes or context")
+
+
+class ContextualRule(BaseModel):
+    """Contextual rule for conditional actions."""
+    if_condition: dict = Field(..., alias="if", description="Condition to check")
+    add_script_refs: Optional[List[str]] = Field(None, description="Additional script references to add")
+    add_scripts: Optional[List[Script]] = Field(None, description="Resolved scripts for add_script_refs")
+    escalation: Optional[EscalationConfig] = Field(None, description="Override escalation configuration")
+    orchestrator_actions: Optional[List[str]] = Field(None, description="Override orchestrator actions")
+    
+    class Config:
+        populate_by_name = True
+
+
+class DeclineCodePolicy(BaseModel):
+    """Model for decline code information with policy pack details."""
     code: str = Field(..., description="The decline code (numeric or alphanumeric)")
     description: str = Field(..., description="Brief description of the decline reason")
     information: str = Field(..., description="Detailed information about the decline")
     actions: List[str] = Field(..., description="Recommended actions to resolve the decline")
     code_type: str = Field(..., description="Type of code: 'numeric' (Base24) or 'alphanumeric' (FAST)")
+    script_refs: Optional[List[str]] = Field(None, description="References to customer service scripts")
+    scripts: Optional[List[Script]] = Field(None, description="Resolved script content for script_refs")
+    orchestrator_actions: Optional[List[str]] = Field(None, description="Actions for voice agent orchestrator")
+    contextual_rules: Optional[List[ContextualRule]] = Field(None, description="Conditional rules based on context")
+    escalation: Optional[EscalationConfig] = Field(None, description="Escalation requirements")
+
+    class Config:
+        populate_by_name = True  # Allow both 'if' and 'if_condition'
 
 
 class DeclineCodesResponse(BaseModel):
     """Response model for decline codes list."""
-    codes: List[DeclineCode]
+    codes: List[DeclineCodePolicy]
     total: int = Field(..., description="Total number of codes returned")
 
 
@@ -214,35 +249,98 @@ async def load_decline_codes() -> None:
         
         numeric: list = []
         alpha: list = []
+        scripts_dict: dict = {}
+        global_rules: list = []
+        metadata: dict = {}
+        
         for doc in documents:
             code_type = (doc.get("code_type") or "").lower()
             if code_type == "numeric":
                 numeric.append(doc)
             elif code_type == "alphanumeric":
                 alpha.append(doc)
+            elif "scripts" in doc:
+                # This is the scripts document
+                scripts_dict = doc.get("scripts", {})
+            elif "rules" in doc:
+                # This is the global_rules document
+                global_rules = doc.get("rules", [])
+            elif doc.get("title") or doc.get("description"):
+                # This looks like metadata
+                metadata = doc
             else:
-                logger.warning("Skipping document with unknown code_type: %s", doc)
+                logger.warning("Skipping document with unknown structure: %s", doc)
 
         return {
-            "metadata": {
+            "metadata": metadata or {
                 "source": "azure_cosmosdb",
                 "database": database_name,
                 "collection": collection_name,
             },
             "numeric_codes": numeric,
             "alphanumeric_codes": alpha,
+            "scripts": scripts_dict,
+            "global_rules": global_rules,
         }
 
     try:
         decline_codes_data = await asyncio.to_thread(_load_from_cosmos)
         logger.info(
-            "Loaded %s numeric and %s alphanumeric decline codes from Cosmos DB",
+            "Loaded %s numeric, %s alphanumeric decline codes, %s scripts from Cosmos DB",
             len(decline_codes_data.get("numeric_codes", [])),
             len(decline_codes_data.get("alphanumeric_codes", [])),
+            len(decline_codes_data.get("scripts", {})),
         )
     except Exception as e:
         logger.error(f"Failed to load decline codes from Cosmos DB: {e}")
         # Don't re-raise - let the app continue with empty data
+
+
+def _get_scripts_dict() -> dict:
+    """Get scripts dictionary from loaded data."""
+    return decline_codes_data.get("scripts", {})
+
+
+def _resolve_script_refs(script_refs: Optional[List[str]]) -> Optional[List[Script]]:
+    """Resolve script references to actual script objects."""
+    if not script_refs:
+        return None
+    
+    scripts_dict = _get_scripts_dict()
+    resolved_scripts = []
+    
+    for ref in script_refs:
+        if ref in scripts_dict:
+            script_data = scripts_dict[ref]
+            resolved_scripts.append(Script(
+                ref=ref,
+                title=script_data.get("title", ""),
+                channels=script_data.get("channels"),
+                text=script_data.get("text", ""),
+                notes=script_data.get("notes")
+            ))
+        else:
+            logger.warning(f"Script reference '{ref}' not found in scripts dictionary")
+    
+    return resolved_scripts if resolved_scripts else None
+
+
+def _enrich_code_data(code_data: dict) -> dict:
+    """Enrich decline code data with resolved scripts."""
+    enriched = code_data.copy()
+    
+    # Resolve main script references
+    if enriched.get("script_refs"):
+        enriched["scripts"] = _resolve_script_refs(enriched.get("script_refs"))
+    
+    # Resolve contextual rule scripts
+    if enriched.get("contextual_rules"):
+        contextual_rules = enriched.get("contextual_rules", [])
+        for rule in contextual_rules:
+            if rule.get("add_script_refs"):
+                rule["add_scripts"] = _resolve_script_refs(rule.get("add_script_refs"))
+    
+    return enriched
 
 
 @app.on_event("startup")
@@ -296,6 +394,8 @@ async def get_all_codes(
     Get all decline codes, optionally filtered by type.
     
     - **code_type**: Optional filter for 'numeric' or 'alphanumeric' codes
+    
+    Returns complete policy pack data for each code including resolved script content.
     """
     try:
         if not decline_codes_data.get("numeric_codes") and not decline_codes_data.get("alphanumeric_codes"):
@@ -308,11 +408,13 @@ async def get_all_codes(
         
         if code_type is None or code_type.lower() == "numeric":
             for code_data in decline_codes_data.get("numeric_codes", []):
-                codes.append(DeclineCode(**code_data))
+                enriched = _enrich_code_data(code_data)
+                codes.append(DeclineCodePolicy(**enriched))
         
         if code_type is None or code_type.lower() == "alphanumeric":
             for code_data in decline_codes_data.get("alphanumeric_codes", []):
-                codes.append(DeclineCode(**code_data))
+                enriched = _enrich_code_data(code_data)
+                codes.append(DeclineCodePolicy(**enriched))
         
         return DeclineCodesResponse(codes=codes, total=len(codes))
     except HTTPException:
@@ -322,12 +424,15 @@ async def get_all_codes(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@app.get("/api/v1/codes/{code}", response_model=DeclineCode)
+@app.get("/api/v1/codes/{code}", response_model=DeclineCodePolicy)
 async def get_code(code: str):
     """
-    Get information for a specific decline code.
+    Get information for a specific decline code, including policy pack data.
     
     - **code**: The decline code to lookup (e.g., '02', '51', 'C1', 'RT')
+    
+    Returns all available data for the code including script_refs, orchestrator_actions, 
+    contextual_rules, escalation information, and resolved script content.
     """
     try:
         if not decline_codes_data.get("numeric_codes") and not decline_codes_data.get("alphanumeric_codes"):
@@ -341,12 +446,14 @@ async def get_code(code: str):
         # Search in numeric codes
         for code_data in decline_codes_data.get("numeric_codes", []):
             if code_data["code"] == code_upper:
-                return DeclineCode(**code_data)
+                enriched = _enrich_code_data(code_data)
+                return DeclineCodePolicy(**enriched)
         
         # Search in alphanumeric codes
         for code_data in decline_codes_data.get("alphanumeric_codes", []):
             if code_data["code"] == code_upper:
-                return DeclineCode(**code_data)
+                enriched = _enrich_code_data(code_data)
+                return DeclineCodePolicy(**enriched)
         
         logger.warning(f"Decline code not found: {code}")
         raise HTTPException(status_code=404, detail=f"Decline code '{code}' not found")
@@ -367,6 +474,8 @@ async def search_codes(
     
     - **q**: Search query string
     - **code_type**: Optional filter for 'numeric' or 'alphanumeric' codes
+    
+    Returns complete policy pack data for matching codes including resolved script content.
     """
     try:
         if not decline_codes_data.get("numeric_codes") and not decline_codes_data.get("alphanumeric_codes"):
@@ -389,12 +498,14 @@ async def search_codes(
         if code_type is None or code_type.lower() == "numeric":
             for code_data in decline_codes_data.get("numeric_codes", []):
                 if matches_query(code_data):
-                    matching_codes.append(DeclineCode(**code_data, code_type="numeric"))
+                    enriched = _enrich_code_data(code_data)
+                    matching_codes.append(DeclineCodePolicy(**enriched))
         
         if code_type is None or code_type.lower() == "alphanumeric":
             for code_data in decline_codes_data.get("alphanumeric_codes", []):
                 if matches_query(code_data):
-                    matching_codes.append(DeclineCode(**code_data, code_type="alphanumeric"))
+                    enriched = _enrich_code_data(code_data)
+                    matching_codes.append(DeclineCodePolicy(**enriched))
         
         logger.info(f"Search for '{q}' found {len(matching_codes)} codes")
         return DeclineCodesResponse(codes=matching_codes, total=len(matching_codes))

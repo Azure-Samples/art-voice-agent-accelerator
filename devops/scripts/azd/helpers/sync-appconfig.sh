@@ -190,6 +190,13 @@ add_kv "azure/voicelive/resource-id" "$(get_azd_value AZURE_VOICELIVE_RESOURCE_I
 # AI Foundry (for Evaluations SDK)
 add_kv "azure/ai-foundry/project-endpoint" "$(get_azd_value ai_foundry_project_endpoint)"
 
+# Application Services
+# CardAPI MCP server endpoint
+cardapi_url=$(get_azd_value CARDAPI_CONTAINER_APP_URL)
+if [[ -n "$cardapi_url" ]]; then
+    add_kv "app/cardapi/mcp-url" "$cardapi_url"
+fi
+
 # Environment metadata
 add_kv "app/environment" "$(get_azd_value AZURE_ENV_NAME)"
 

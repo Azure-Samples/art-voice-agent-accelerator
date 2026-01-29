@@ -238,6 +238,7 @@ def initialize_tools() -> int:
         ("call_transfer", lambda: __import__("apps.artagent.backend.registries.toolstore.call_transfer", fromlist=[""])),
         ("compliance", lambda: __import__("apps.artagent.backend.registries.toolstore.compliance", fromlist=[""])),
         ("customer_intelligence", lambda: __import__("apps.artagent.backend.registries.toolstore.customer_intelligence", fromlist=[""])),
+        ("decline_codes", lambda: __import__("apps.artagent.backend.registries.toolstore.decline_codes", fromlist=[""])),
         ("escalation", lambda: __import__("apps.artagent.backend.registries.toolstore.escalation", fromlist=[""])),
         ("fraud", lambda: __import__("apps.artagent.backend.registries.toolstore.fraud", fromlist=[""])),
         ("handoffs", lambda: __import__("apps.artagent.backend.registries.toolstore.handoffs", fromlist=[""])),
