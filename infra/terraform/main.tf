@@ -59,7 +59,7 @@ provider "azapi" {
 data "azuread_client_config" "current" {}
 
 data "external" "git_commit" {
-  program = ["git", "rev-parse", "--short", "HEAD"]
+  program     = ["sh", "-c", "printf '{\"commit\": \"%s\"}' \"$(git rev-parse --short HEAD)\""]
   working_dir = path.module
 }
 
@@ -96,7 +96,7 @@ locals {
     "deployed_by"  = coalesce(var.deployed_by, local.principal_id)
     # To bypass Azure policy which enforces private networking configuration for nonprod environments
     "SecurityControl" = var.environment_name != "prod" ? "Ignore" : null
-    "git-commit"   = data.external.git_commit.result["stdout"]
+    "git-commit"   = data.external.git_commit.result["commit"]
 
   }
 
