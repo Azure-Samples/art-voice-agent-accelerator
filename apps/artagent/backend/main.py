@@ -15,7 +15,8 @@ Startup Steps:
     4. warmup   - Token pre-fetch, connection warmup
     5. services - Cosmos DB, ACS, phrase manager
     6. agents   - Load unified agents and scenarios
-    7. events   - Register event handlers
+    7. mcp      - Validate MCP server connections
+    8. events   - Register event handlers
 """
 
 from __future__ import annotations
@@ -63,6 +64,7 @@ from lifecycle.steps import (
     register_core_state_step,
     register_event_handlers_step,
     register_external_services_step,
+    register_mcp_servers_step,
     register_speech_pools_step,
     register_warmup_step,
 )
@@ -109,6 +111,7 @@ async def lifespan(app: FastAPI):
     register_warmup_step(manager, app)
     register_external_services_step(manager, app)
     register_agents_step(manager, app)
+    register_mcp_servers_step(manager, app)
     register_event_handlers_step(manager, app)
 
     # Run startup

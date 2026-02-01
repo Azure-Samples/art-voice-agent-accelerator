@@ -974,8 +974,64 @@ class LiveOrchestrator:
             start_span.set_attribute("voicelive.agent_count", len(self.agents))
             logger.info("[Orchestrator] Starting with agent: %s", self.active)
             self._system_vars = dict(system_vars or {})
+            
+            # Initialize MCP servers for the active agent (non-blocking)
+            await self._init_mcp_for_agent(self.active)
+            
             await self._switch_to(self.active, self._system_vars)
             start_span.set_status(trace.StatusCode.OK)
+
+    async def _init_mcp_for_agent(self, agent_name: str) -> None:
+        """
+        Initialize MCP server connections for an agent's configured servers.
+        
+        Connects to MCP servers listed in the agent's mcp_servers field.
+        Tools from connected servers become available for the session.
+        
+        Args:
+            agent_name: Name of the agent to initialize MCP for
+        """
+        if not self._memo_manager:
+            return
+            
+        agent = self.agents.get(agent_name)
+        if not agent or not agent.mcp_servers:
+            return
+            
+        try:
+            from apps.artagent.backend.registries.toolstore.mcp import get_mcp_configs_for_agent
+            
+            configs = get_mcp_configs_for_agent(agent.mcp_servers)
+            if not configs:
+                logger.debug(
+                    "[LiveOrchestrator] No MCP servers configured for agent %s",
+                    agent_name,
+                )
+                return
+                
+            results = await self._memo_manager.init_mcp_servers(configs)
+            
+            connected = [name for name, success in results.items() if success]
+            failed = [name for name, success in results.items() if not success]
+            
+            if connected:
+                logger.info(
+                    "[LiveOrchestrator] MCP servers connected for %s: %s",
+                    agent_name,
+                    connected,
+                )
+            if failed:
+                logger.warning(
+                    "[LiveOrchestrator] MCP servers failed for %s: %s",
+                    agent_name,
+                    failed,
+                )
+        except Exception as exc:
+            logger.warning(
+                "[LiveOrchestrator] MCP initialization failed for %s: %s",
+                agent_name,
+                exc,
+            )
 
     async def handle_event(self, event):
         """Route VoiceLive events to audio + handoff logic."""

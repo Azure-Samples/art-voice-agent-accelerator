@@ -604,11 +604,28 @@ async def readiness_check(
 
     response_time = round((time.time() - start_time) * 1000, 2)
 
+    # Get MCP servers status from app state (populated at startup)
+    mcp_servers_raw = getattr(request.app.state, "mcp_servers_status", {}) or {}
+    mcp_servers = None
+    if mcp_servers_raw:
+        from apps.artagent.backend.api.v1.schemas.health import MCPServerStatus
+        mcp_servers = {
+            name: MCPServerStatus(
+                name=name,
+                status=info.get("status", "unknown"),
+                url=info.get("url", ""),
+                tools_count=info.get("tools_count", 0),
+                error=info.get("error"),
+            )
+            for name, info in mcp_servers_raw.items()
+        }
+
     response_data = ReadinessResponse(
         status=overall_status,
         timestamp=time.time(),
         response_time_ms=response_time,
         checks=health_checks,
+        mcp_servers=mcp_servers,
     )
 
     # Return appropriate status code

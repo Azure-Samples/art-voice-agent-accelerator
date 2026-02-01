@@ -110,7 +110,7 @@ turns:
 
   # Turn 3: Verify DeclineSpecialist responds appropriately
   - turn_id: turn_3
-    user_input: "What does that decline code mean?"
+    user_input: "What does that decline code 55 mean?"
     expectations:
       # DeclineSpecialist should look up decline information
       tools_called: []

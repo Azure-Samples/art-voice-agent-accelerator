@@ -4,6 +4,9 @@ Decline Code Tools
 
 Tools for querying card decline codes via the MCP server.
 Connects to the Card Decline Code MCP service for policy pack information.
+
+These tools use the MCP server's tool endpoints (not the raw CardAPI backend)
+to leverage MCP's standardized tool interface and formatted responses.
 """
 
 from __future__ import annotations
@@ -71,32 +74,32 @@ search_decline_codes_schema: dict[str, Any] = {
 # CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# CardAPI backend endpoint - loaded from App Configuration (set during postprovision)
-# Defaults to localhost:8000 for local development (matches launch.json Card API config)
-def get_cardapi_url() -> str:
-    """Get the cardapi backend URL from app config or environment.
-    
+
+def get_mcp_server_url() -> str:
+    """Get the CardAPI MCP server URL from app config or environment.
+
     Priority:
-    1. CARDAPI_URL environment variable (set by app config loading)
-    2. Localhost default (for local development)
+    1. MCP_SERVER_CARDAPI_URL environment variable (set by app config loading)
+    2. CARDAPI_MCP_URL environment variable (alternative)
+    3. Localhost default (for local development - matches launch.json MCP Server config)
     """
-    url = os.getenv("CARDAPI_URL")
+    url = os.getenv("MCP_SERVER_CARDAPI_URL") or os.getenv("CARDAPI_MCP_URL")
     if url:
         return url.rstrip("/")
-    return "http://localhost:8000"
+    return "http://localhost:8080"
 
 
-CARDAPI_URL = get_cardapi_url()
-CARDAPI_REQUEST_TIMEOUT = 10.0  # seconds
+MCP_SERVER_URL = get_mcp_server_url()
+MCP_REQUEST_TIMEOUT = 30.0  # seconds (MCP calls may take longer than direct API)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# EXECUTORS
+# EXECUTORS (via MCP Server Tool Endpoints)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
 async def lookup_decline_code(args: dict[str, Any]) -> dict[str, Any]:
-    """Look up a specific decline code via CardAPI backend."""
+    """Look up a specific decline code via CardAPI MCP server tool endpoint."""
     code = (args.get("code") or "").strip()
 
     if not code:
@@ -106,26 +109,33 @@ async def lookup_decline_code(args: dict[str, Any]) -> dict[str, Any]:
         }
 
     try:
-        logger.info("Looking up decline code: %s", code)
-        
-        async with httpx.AsyncClient(timeout=CARDAPI_REQUEST_TIMEOUT) as client:
-            # Call CardAPI backend directly
+        logger.info("Looking up decline code via MCP: %s (server=%s)", code, MCP_SERVER_URL)
+
+        async with httpx.AsyncClient(timeout=MCP_REQUEST_TIMEOUT) as client:
+            # Call MCP server tool endpoint
             response = await client.get(
-                f"{CARDAPI_URL}/api/v1/codes/{code}",
+                f"{MCP_SERVER_URL}/tools/lookup_decline_code",
+                params={"code": code},
             )
             response.raise_for_status()
-            
+
             data = response.json()
-            logger.debug("Successfully retrieved decline code data: %s", code)
-            
-            return {
-                "success": True,
-                "code": code,
-                "result": data,
-            }
+            logger.debug("MCP lookup_decline_code response: success=%s", data.get("success"))
+
+            if data.get("success"):
+                return {
+                    "success": True,
+                    "code": code,
+                    "result": data.get("result", ""),
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": data.get("message", f"Decline code '{code}' not found."),
+                }
 
     except httpx.HTTPStatusError as e:
-        error_msg = f"Decline code lookup failed: {e.response.status_code} {e.response.text}"
+        error_msg = f"MCP tool call failed: {e.response.status_code} {e.response.text}"
         logger.warning(error_msg)
         return {
             "success": False,
@@ -133,7 +143,7 @@ async def lookup_decline_code(args: dict[str, Any]) -> dict[str, Any]:
             "error": str(e),
         }
     except httpx.ConnectError:
-        error_msg = f"Could not connect to CardAPI at {CARDAPI_URL}"
+        error_msg = f"Could not connect to CardAPI MCP server at {MCP_SERVER_URL}"
         logger.error(error_msg)
         return {
             "success": False,
@@ -141,7 +151,7 @@ async def lookup_decline_code(args: dict[str, Any]) -> dict[str, Any]:
             "error": error_msg,
         }
     except Exception as e:
-        logger.exception("Error looking up decline code: %s", code)
+        logger.exception("Error looking up decline code via MCP: %s", code)
         return {
             "success": False,
             "message": "Error retrieving decline code information.",
@@ -150,7 +160,7 @@ async def lookup_decline_code(args: dict[str, Any]) -> dict[str, Any]:
 
 
 async def search_decline_codes(args: dict[str, Any]) -> dict[str, Any]:
-    """Search for decline codes matching query keywords."""
+    """Search for decline codes via CardAPI MCP server tool endpoint."""
     query = (args.get("query") or "").strip()
     code_type = (args.get("code_type") or "").strip() or None
 
@@ -161,32 +171,43 @@ async def search_decline_codes(args: dict[str, Any]) -> dict[str, Any]:
         }
 
     try:
-        logger.info("Searching decline codes: query=%s, type=%s", query, code_type)
-        
-        params: dict[str, str] = {"q": query}
+        logger.info(
+            "Searching decline codes via MCP: query=%s, type=%s (server=%s)",
+            query,
+            code_type,
+            MCP_SERVER_URL,
+        )
+
+        params: dict[str, str] = {"query": query}
         if code_type:
             params["code_type"] = code_type
-        
-        async with httpx.AsyncClient(timeout=CARDAPI_REQUEST_TIMEOUT) as client:
+
+        async with httpx.AsyncClient(timeout=MCP_REQUEST_TIMEOUT) as client:
+            # Call MCP server tool endpoint
             response = await client.get(
-                f"{CARDAPI_URL}/api/v1/search",
+                f"{MCP_SERVER_URL}/tools/search_decline_codes",
                 params=params,
             )
             response.raise_for_status()
-            
+
             data = response.json()
-            logger.debug("Successfully searched decline codes with query: %s", query)
-            
-            return {
-                "success": True,
-                "query": query,
-                "code_type": code_type,
-                "results": data.get("codes", []),
-                "count": data.get("total", 0),
-            }
+            logger.debug("MCP search_decline_codes response: success=%s", data.get("success"))
+
+            if data.get("success"):
+                return {
+                    "success": True,
+                    "query": query,
+                    "code_type": code_type,
+                    "result": data.get("result", ""),
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": data.get("message", "Search failed."),
+                }
 
     except httpx.HTTPStatusError as e:
-        error_msg = f"Decline code search failed: {e.response.status_code} {e.response.text}"
+        error_msg = f"MCP tool call failed: {e.response.status_code} {e.response.text}"
         logger.warning(error_msg)
         return {
             "success": False,
@@ -194,7 +215,7 @@ async def search_decline_codes(args: dict[str, Any]) -> dict[str, Any]:
             "error": str(e),
         }
     except httpx.ConnectError:
-        error_msg = f"Could not connect to CardAPI at {CARDAPI_URL}"
+        error_msg = f"Could not connect to CardAPI MCP server at {MCP_SERVER_URL}"
         logger.error(error_msg)
         return {
             "success": False,
@@ -202,7 +223,7 @@ async def search_decline_codes(args: dict[str, Any]) -> dict[str, Any]:
             "error": error_msg,
         }
     except Exception as e:
-        logger.exception("Error searching decline codes: %s", query)
+        logger.exception("Error searching decline codes via MCP: %s", query)
         return {
             "success": False,
             "message": "Error searching decline codes.",
@@ -218,12 +239,12 @@ register_tool(
     "lookup_decline_code",
     lookup_decline_code_schema,
     lookup_decline_code,
-    tags={"banking", "decline-codes", "cardapi"},
+    tags={"banking", "decline-codes", "cardapi", "mcp"},
 )
 
 register_tool(
     "search_decline_codes",
     search_decline_codes_schema,
     search_decline_codes,
-    tags={"banking", "decline-codes", "cardapi", "search"},
+    tags={"banking", "decline-codes", "cardapi", "search", "mcp"},
 )

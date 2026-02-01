@@ -175,6 +175,8 @@ set_kv "azure/redis/port" "$(get_azd_value REDIS_PORT)" && ((count++)) || ((erro
 # Cosmos DB
 set_kv "azure/cosmos/database-name" "$(get_azd_value AZURE_COSMOS_DATABASE_NAME)" && ((count++)) || ((errors++))
 set_kv "azure/cosmos/collection-name" "$(get_azd_value AZURE_COSMOS_COLLECTION_NAME)" && ((count++)) || ((errors++))
+# Cosmos Entra connection string (Key Vault reference with OIDC auth for managed identity)
+set_kv_ref "azure/cosmos/connection-string" "cosmos-entra-connection-string" && ((count++)) || ((errors++))
 
 # Storage
 set_kv "azure/storage/account-name" "$(get_azd_value AZURE_STORAGE_ACCOUNT_NAME)" && ((count++)) || ((errors++))
@@ -203,17 +205,23 @@ if [[ -n "$ai_foundry_project_id" ]]; then
     fi
 fi
 
-# Application Services
-cardapi_url=$(get_azd_value CARDAPI_BACKEND_URL)
-if [[ -n "$cardapi_url" ]]; then
-    set_kv "app/cardapi/url" "$cardapi_url" && ((count++)) || ((errors++))
-fi
-
-# Application Services
-# CardAPI MCP server endpoint
+# CardAPI MCP server endpoint (self-contained, direct Cosmos DB access)
 cardapi_url=$(get_azd_value CARDAPI_CONTAINER_APP_URL)
 if [[ -n "$cardapi_url" ]]; then
+    # Backend expects this key to load MCP_SERVER_CARDAPI_URL
+    set_kv "app/mcp/servers/cardapi/url" "$cardapi_url" && ((count++)) || ((errors++))
+    # Legacy key for backward compatibility
     set_kv "app/cardapi/mcp-url" "$cardapi_url"
+fi
+
+# CardAPI MCP auth settings (for EasyAuth-protected deployments)
+cardapi_auth_enabled=$(get_azd_value CARDAPI_MCP_AUTH_ENABLED)
+cardapi_app_id=$(get_azd_value CARDAPI_MCP_APP_ID)
+if [[ -n "$cardapi_auth_enabled" ]]; then
+    set_kv "app/mcp/servers/cardapi/auth-enabled" "$cardapi_auth_enabled" && ((count++)) || ((errors++))
+fi
+if [[ -n "$cardapi_app_id" ]]; then
+    set_kv "app/mcp/servers/cardapi/app-id" "$cardapi_app_id" && ((count++)) || ((errors++))
 fi
 
 # Environment metadata

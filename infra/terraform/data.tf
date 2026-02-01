@@ -139,9 +139,11 @@ resource "azapi_resource" "mongo_firewall_all" {
 
 
 # Store Entra ID connection string in Key Vault
+# NOTE: The base connectionString has user:password placeholders and SCRAM-SHA-256,
+# which are incompatible with OIDC. We build a clean OIDC connection string instead.
 resource "azurerm_key_vault_secret" "cosmos_entra_connection_string" {
   name         = "cosmos-entra-connection-string"
-  value        = "${data.azapi_resource.mongo_cluster_info.output.properties.connectionString}?authSource=%24external&authMechanism=MONGODB-OIDC"
+  value        = "mongodb+srv://${azapi_resource.mongoCluster.name}.mongocluster.cosmos.azure.com/?tls=true&authMechanism=MONGODB-OIDC&retrywrites=false&maxIdleTimeMS=120000"
   key_vault_id = azurerm_key_vault.main.id
 
   depends_on = [azurerm_role_assignment.keyvault_admin, data.azapi_resource.mongo_cluster_info]

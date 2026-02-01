@@ -69,6 +69,8 @@ class ToolInfo(BaseModel):
     is_handoff: bool = False
     tags: list[str] = []
     parameters: dict[str, Any] | None = None
+    source: str = "local"  # "local" or "mcp"
+    mcp_server: str | None = None  # Server name if source is "mcp"
 
 
 class VoiceInfo(BaseModel):
@@ -335,6 +337,8 @@ async def list_available_tools(
             is_handoff=defn.is_handoff,
             tags=list(defn.tags),
             parameters=params,
+            source=defn.source.value if hasattr(defn.source, 'value') else str(defn.source),
+            mcp_server=defn.mcp_server,
         )
         tools_list.append(tool_info)
 

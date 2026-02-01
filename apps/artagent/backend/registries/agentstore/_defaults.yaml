@@ -68,6 +68,20 @@ session:
   
   tool_choice: auto
 
+# ─────────────────────────────────────────────────────────────────────────────
+# MCP Servers (external tool providers)
+# ─────────────────────────────────────────────────────────────────────────────
+# Connect to external MCP servers to expose additional tools to the agent.
+# Each server name must be defined in the application's MCP server configuration.
+# The agent will receive tools prefixed with the server name (e.g., cardapi_lookup_decline_code)
+#
+# Example:
+#   mcp_servers:
+#     - cardapi      # Connect to Card API MCP server
+#     - knowledge    # Connect to Knowledge Base MCP server
+# ─────────────────────────────────────────────────────────────────────────────
+# mcp_servers: []
+
 # Template variables (available in prompts)
 # AVOID: Hardcoding values directly in prompts
 # INSTEAD: Use Jinja template edits with the pipe | notation for dynamic substitution

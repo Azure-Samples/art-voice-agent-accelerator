@@ -468,6 +468,72 @@ class CascadeOrchestratorAdapter:
         """
         return self.handoff_service.get_handoff_target(tool_name)
 
+    # ─────────────────────────────────────────────────────────────────
+    # MCP Server Integration
+    # ─────────────────────────────────────────────────────────────────
+
+    async def _init_mcp_for_agent(self, agent_name: str, memo_manager: MemoManager | None) -> None:
+        """
+        Initialize MCP server connections for an agent's configured servers.
+        
+        Connects to MCP servers listed in the agent's mcp_servers field.
+        Tools from connected servers become available for the session.
+        
+        Args:
+            agent_name: Name of the agent to initialize MCP for
+            memo_manager: MemoManager instance for session state
+        """
+        if not memo_manager:
+            return
+            
+        agent = self.agents.get(agent_name)
+        if not agent or not agent.mcp_servers:
+            return
+            
+        # Check if already initialized for this agent
+        if hasattr(self, "_mcp_initialized_agents"):
+            if agent_name in self._mcp_initialized_agents:
+                return
+        else:
+            self._mcp_initialized_agents = set()
+            
+        try:
+            from apps.artagent.backend.registries.toolstore.mcp import get_mcp_configs_for_agent
+            
+            configs = get_mcp_configs_for_agent(agent.mcp_servers)
+            if not configs:
+                logger.debug(
+                    "[CascadeOrchestrator] No MCP servers configured for agent %s",
+                    agent_name,
+                )
+                return
+                
+            results = await memo_manager.init_mcp_servers(configs)
+            
+            self._mcp_initialized_agents.add(agent_name)
+            
+            connected = [name for name, success in results.items() if success]
+            failed = [name for name, success in results.items() if not success]
+            
+            if connected:
+                logger.info(
+                    "[CascadeOrchestrator] MCP servers connected for %s: %s",
+                    agent_name,
+                    connected,
+                )
+            if failed:
+                logger.warning(
+                    "[CascadeOrchestrator] MCP servers failed for %s: %s",
+                    agent_name,
+                    failed,
+                )
+        except Exception as exc:
+            logger.warning(
+                "[CascadeOrchestrator] MCP initialization failed for %s: %s",
+                agent_name,
+                exc,
+            )
+
     def _get_tools_with_handoffs(self, agent: UnifiedAgent) -> list[dict[str, Any]]:
         """
         Get agent tools with centralized handoff tool injection.
@@ -881,6 +947,9 @@ class CascadeOrchestratorAdapter:
             if memo_manager:
                 self.sync_from_memo_manager(memo_manager)
                 self._current_memo_manager = memo_manager
+                
+                # Initialize MCP servers for active agent (non-blocking)
+                await self._init_mcp_for_agent(self._active_agent, memo_manager)
 
                 # Get history and append current user message
                 history = list(memo_manager.get_history(self._active_agent) or [])

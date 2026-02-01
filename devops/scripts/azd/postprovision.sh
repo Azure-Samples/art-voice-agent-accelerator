@@ -626,6 +626,115 @@ task_enable_easyauth() {
 }
 
 # ============================================================================
+# Task 7: Enable EasyAuth for CardAPI MCP (Optional)
+# ============================================================================
+
+task_enable_easyauth_cardapi_mcp() {
+    header "🔐 Task 7: CardAPI MCP Authentication (EasyAuth)"
+    
+    local easyauth_script="$HELPERS_DIR/enable-easyauth-cardapi-mcp.sh"
+    
+    if [[ ! -f "$easyauth_script" ]]; then
+        warn "enable-easyauth-cardapi-mcp.sh not found, skipping"
+        footer
+        return 0
+    fi
+    
+    # Check if EasyAuth was already enabled (via azd env)
+    local easyauth_configured
+    easyauth_configured=$(azd_get "CARDAPI_MCP_EASYAUTH_ENABLED" "false")
+    
+    if [[ "$easyauth_configured" == "true" ]]; then
+        success "CardAPI MCP EasyAuth already configured (CARDAPI_MCP_EASYAUTH_ENABLED=true)"
+        footer
+        return 0
+    fi
+    
+    local resource_group container_app uami_client_id
+    resource_group=$(azd_get "AZURE_RESOURCE_GROUP")
+    container_app=$(azd_get "CARDAPI_MCP_CONTAINER_APP_NAME")
+    uami_client_id=$(azd_get "CARDAPI_MCP_UAI_CLIENT_ID")
+    
+    if [[ -z "$resource_group" || -z "$container_app" || -z "$uami_client_id" ]]; then
+        warn "Missing required values for CardAPI MCP EasyAuth configuration"
+        [[ -z "$resource_group" ]] && warn "  - AZURE_RESOURCE_GROUP not set"
+        [[ -z "$container_app" ]] && warn "  - CARDAPI_MCP_CONTAINER_APP_NAME not set"
+        [[ -z "$uami_client_id" ]] && warn "  - CARDAPI_MCP_UAI_CLIENT_ID not set"
+        footer
+        return 1
+    fi
+    
+    if is_ci; then
+        # In CI mode, automatically enable EasyAuth if not already enabled
+        log "Enabling CardAPI MCP EasyAuth (CI mode)…"
+        if AZD_LOG_IN_BOX=true bash "$easyauth_script" -g "$resource_group" -a "$container_app" -i "$uami_client_id"; then
+            success "CardAPI MCP EasyAuth enabled"
+            # Set azd env variable to prevent re-running
+            azd_set "CARDAPI_MCP_EASYAUTH_ENABLED" "true"
+            # Output to GitHub Actions environment (if running in GitHub Actions)
+            if [[ -n "${GITHUB_ENV:-}" ]]; then
+                echo "CARDAPI_MCP_EASYAUTH_ENABLED=true" >> "$GITHUB_ENV"
+                info "Set CARDAPI_MCP_EASYAUTH_ENABLED=true in GitHub Actions environment"
+            fi
+        else
+            warn "Failed to enable CardAPI MCP EasyAuth"
+        fi
+        footer
+        return 0
+    fi
+    
+    # Interactive mode
+    log ""
+    log "EasyAuth adds Microsoft Entra ID authentication to the CardAPI MCP server."
+    log "Users/tools will need to authenticate to access decline code data."
+    log ""
+    log "Benefits:"
+    log "  • Secure access with Microsoft Entra ID"
+    log "  • No secrets to manage (uses Federated Identity Credentials)"
+    log "  • Works with your organization's identity policies"
+    log ""
+    log "  1) Enable EasyAuth now"
+    log "  2) Skip for now (can enable later)"
+    log ""
+    log "(Auto-skipping in 15 seconds if no input...)"
+    
+    if read -t 15 -rp "│ Choice (1-2): " choice; then
+        : # Got input
+    else
+        log ""
+        info "No input received, skipping CardAPI MCP EasyAuth configuration"
+        choice="2"
+    fi
+    
+    case "$choice" in
+        1)
+            log ""
+            log "Enabling CardAPI MCP EasyAuth..."
+            if AZD_LOG_IN_BOX=true bash "$easyauth_script" -g "$resource_group" -a "$container_app" -i "$uami_client_id"; then
+                success "CardAPI MCP EasyAuth enabled successfully"
+                # Set azd env variable to prevent re-running
+                azd_set "CARDAPI_MCP_EASYAUTH_ENABLED" "true"
+                log ""
+                log "The CardAPI MCP server now requires authentication."
+                log "Tools/users will be redirected to Microsoft login."
+            else
+                fail "Failed to enable CardAPI MCP EasyAuth"
+            fi
+            ;;
+        *)
+            info "Skipped - you can enable CardAPI MCP EasyAuth later by running:"
+            log ""
+            log "  ./devops/scripts/azd/helpers/enable-easyauth-cardapi-mcp.sh \\"
+            log "    -g \"$resource_group\" \\"
+            log "    -a \"$container_app\" \\"
+            log "    -i \"$uami_client_id\""
+            ;;
+    esac
+    
+    footer
+}
+
+# ============================================================================
 # Main
 # ============================================================================
 
@@ -641,6 +750,7 @@ main() {
     task_sync_appconfig || true
     task_generate_env_local || true
     task_enable_easyauth || true
+    task_enable_easyauth_cardapi_mcp || true
     show_summary
 }
 

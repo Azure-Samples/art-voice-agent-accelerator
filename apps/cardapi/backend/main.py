@@ -3,20 +3,24 @@ FastAPI backend for Card Decline Code Lookup API.
 Provides REST endpoints for querying decline codes and their descriptions.
 
 Configuration:
-    - Loads from Azure App Configuration
+    - Loads from Azure App Configuration when deployed
+    - Falls back to local JSON file for development
     - AZURE_COSMOS_CONNECTION_STRING: From App Config → azure/cosmos/connection-string
     - AZURE_COSMOS_DATABASE_NAME: Database name (default: cardapi)
     - AZURE_COSMOS_COLLECTION_NAME: Collection name (default: declinecodes)
 """
 import asyncio
+import json
 import os
 import sys
 from pathlib import Path
 from typing import List, Optional
 
 # Add workspace root to path (/app is the root in container, main.py is at /app/backend/main.py)
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+workspace_root = Path(__file__).resolve().parent.parent.parent.parent
+sys.path.insert(0, str(workspace_root))
 
+print(f"[Bootstrap] Workspace root: {workspace_root}", flush=True)
 print("[Bootstrap] Starting App Configuration load...", flush=True)
 
 # Bootstrap Azure App Configuration to load secrets from Key Vault
@@ -173,118 +177,117 @@ class HealthResponse(BaseModel):
     message: str
 
 
-# In-memory cache of decline codes loaded from Cosmos DB
+# In-memory cache of decline codes loaded from Cosmos DB or local file
 decline_codes_data: dict = {}
+
+# Path to local JSON file (for development fallback)
+LOCAL_DATA_FILE = Path(__file__).parent.parent / "database" / "decline_codes_policy_pack.json"
+
+
+def _load_from_local_file() -> dict:
+    """Load decline codes from local JSON file (development fallback)."""
+    logger.info(f"Loading decline codes from local file: {LOCAL_DATA_FILE}")
+    
+    with open(LOCAL_DATA_FILE) as f:
+        data = json.load(f)
+    
+    # Add code_type field to each code based on which array it came from
+    numeric_codes = data.get("numeric_codes", [])
+    for code in numeric_codes:
+        code["code_type"] = "numeric"
+    
+    alphanumeric_codes = data.get("alphanumeric_codes", [])
+    for code in alphanumeric_codes:
+        code["code_type"] = "alphanumeric"
+    
+    return {
+        "metadata": data.get("metadata", {"source": "local_file"}),
+        "numeric_codes": numeric_codes,
+        "alphanumeric_codes": alphanumeric_codes,
+        "scripts": data.get("scripts", {}),
+        "global_rules": data.get("global_rules", []),
+    }
+
+
+def _load_from_cosmos() -> dict:
+    """Load decline codes from Cosmos DB using the shared library."""
+    from src.cosmosdb.manager import CosmosDBMongoCoreManager
+    
+    database_name = os.getenv("AZURE_COSMOS_DATABASE_NAME") or "cardapi"
+    collection_name = os.getenv("AZURE_COSMOS_COLLECTION_NAME") or "declinecodes"
+    
+    logger.info(f"Connecting to Cosmos DB: database={database_name}, collection={collection_name}")
+    
+    manager = CosmosDBMongoCoreManager(
+        database_name=database_name,
+        collection_name=collection_name,
+    )
+    
+    # Query all documents
+    documents = manager.query_documents({}, projection={"_id": 0})
+    
+    numeric: list = []
+    alpha: list = []
+    scripts_dict: dict = {}
+    global_rules: list = []
+    metadata: dict = {}
+    
+    for doc in documents:
+        code_type = (doc.get("code_type") or "").lower()
+        if code_type == "numeric":
+            numeric.append(doc)
+        elif code_type == "alphanumeric":
+            alpha.append(doc)
+        elif "scripts" in doc:
+            scripts_dict = doc.get("scripts", {})
+        elif "rules" in doc:
+            global_rules = doc.get("rules", [])
+        elif doc.get("title") or doc.get("description"):
+            metadata = doc
+        else:
+            logger.warning("Skipping document with unknown structure: %s", doc)
+    
+    manager.close_connection()
+    
+    return {
+        "metadata": metadata or {
+            "source": "azure_cosmosdb",
+            "database": database_name,
+            "collection": collection_name,
+        },
+        "numeric_codes": numeric,
+        "alphanumeric_codes": alpha,
+        "scripts": scripts_dict,
+        "global_rules": global_rules,
+    }
 
 
 async def load_decline_codes() -> None:
-    """Load decline codes from Azure Cosmos DB (Mongo API) using OIDC authentication."""
+    """Load decline codes from Cosmos DB or local file fallback."""
     global decline_codes_data
 
     connection_string = os.getenv("AZURE_COSMOS_CONNECTION_STRING")
-    database_name = os.getenv("AZURE_COSMOS_DATABASE_NAME") or "cardapi"
-    collection_name = os.getenv("AZURE_COSMOS_COLLECTION_NAME") or "declinecodes"
 
-    # If no connection string, provide default data or skip loading
+    # Use local file if no Cosmos connection string is set
     if not connection_string:
-        logger.info("No AZURE_COSMOS_CONNECTION_STRING set; Cosmos DB disabled")
-        decline_codes_data = {
-            "metadata": {"source": "disabled"},
-            "numeric_codes": [],
-            "alphanumeric_codes": [],
-        }
+        logger.info("No AZURE_COSMOS_CONNECTION_STRING set; using local file fallback")
+        if LOCAL_DATA_FILE.exists():
+            decline_codes_data = _load_from_local_file()
+            logger.info(
+                "Loaded %s numeric, %s alphanumeric decline codes from local file",
+                len(decline_codes_data.get("numeric_codes", [])),
+                len(decline_codes_data.get("alphanumeric_codes", [])),
+            )
+        else:
+            logger.warning(f"Local data file not found: {LOCAL_DATA_FILE}")
+            decline_codes_data = {
+                "metadata": {"source": "disabled"},
+                "numeric_codes": [],
+                "alphanumeric_codes": [],
+            }
         return
 
-    def _load_from_cosmos() -> dict:
-        """Load decline codes using OIDC authentication (same pattern as cosmos_init.py)."""
-        import re
-        from azure.identity import DefaultAzureCredential
-        from pymongo import MongoClient
-        from pymongo.auth_oidc import OIDCCallback, OIDCCallbackContext, OIDCCallbackResult
-        
-        # Azure Identity callback for OIDC
-        class AzureIdentityTokenCallback(OIDCCallback):
-            def __init__(self, credential):
-                self.credential = credential
-
-            def fetch(self, context: OIDCCallbackContext) -> OIDCCallbackResult:
-                token = self.credential.get_token(
-                    "https://ossrdbms-aad.database.windows.net/.default"
-                ).token
-                return OIDCCallbackResult(access_token=token)
-            
-        # Extract cluster name from connection string, stripping any <user>:<password>@ prefix
-        match = re.search(r"mongodb\+srv://(?:<[^>]+>:<[^>]+>@)?([^./?]+)", connection_string)
-        if match:
-            cluster_name = match.group(1)
-        else:
-            raise ValueError(f"Could not determine cluster name from connection string: {connection_string[:50]}...")
-        
-        # Setup Azure Identity credential for OIDC
-        credential = DefaultAzureCredential()
-        auth_callback = AzureIdentityTokenCallback(credential)
-        auth_properties = {
-            "OIDC_CALLBACK": auth_callback,
-        }
-        
-        # Allow Cosmos DB MongoDB cluster hosts for OIDC
-        os.environ.setdefault("MONGODB_OIDC_ALLOWED_HOSTS", "*.mongocluster.cosmos.azure.com")
-        
-        # Build OIDC connection string
-        oidc_connection_string = f"mongodb+srv://{cluster_name}.mongocluster.cosmos.azure.com/"
-        
-        logger.info(f"Connecting to Cosmos DB cluster: {cluster_name}")
-        
-        client = MongoClient(
-            oidc_connection_string,
-            connectTimeoutMS=120000,
-            tls=True,
-            retryWrites=False,
-            authMechanism="MONGODB-OIDC",
-            authMechanismProperties=auth_properties,
-        )
-        
-        # Query all documents
-        db = client[database_name]
-        collection = db[collection_name]
-        documents = list(collection.find({}, projection={"_id": 0}))
-        
-        numeric: list = []
-        alpha: list = []
-        scripts_dict: dict = {}
-        global_rules: list = []
-        metadata: dict = {}
-        
-        for doc in documents:
-            code_type = (doc.get("code_type") or "").lower()
-            if code_type == "numeric":
-                numeric.append(doc)
-            elif code_type == "alphanumeric":
-                alpha.append(doc)
-            elif "scripts" in doc:
-                # This is the scripts document
-                scripts_dict = doc.get("scripts", {})
-            elif "rules" in doc:
-                # This is the global_rules document
-                global_rules = doc.get("rules", [])
-            elif doc.get("title") or doc.get("description"):
-                # This looks like metadata
-                metadata = doc
-            else:
-                logger.warning("Skipping document with unknown structure: %s", doc)
-
-        return {
-            "metadata": metadata or {
-                "source": "azure_cosmosdb",
-                "database": database_name,
-                "collection": collection_name,
-            },
-            "numeric_codes": numeric,
-            "alphanumeric_codes": alpha,
-            "scripts": scripts_dict,
-            "global_rules": global_rules,
-        }
-
+    # Load from Cosmos DB
     try:
         decline_codes_data = await asyncio.to_thread(_load_from_cosmos)
         logger.info(
@@ -294,8 +297,17 @@ async def load_decline_codes() -> None:
             len(decline_codes_data.get("scripts", {})),
         )
     except Exception as e:
-        logger.error(f"Failed to load decline codes from Cosmos DB: {e}")
-        # Don't re-raise - let the app continue with empty data
+        logger.error(f"Failed to load from Cosmos DB: {e}")
+        # Fall back to local file
+        if LOCAL_DATA_FILE.exists():
+            logger.info("Falling back to local file after Cosmos DB failure")
+            decline_codes_data = _load_from_local_file()
+        else:
+            decline_codes_data = {
+                "metadata": {"source": "error"},
+                "numeric_codes": [],
+                "alphanumeric_codes": [],
+            }
 
 
 def _get_scripts_dict() -> dict:

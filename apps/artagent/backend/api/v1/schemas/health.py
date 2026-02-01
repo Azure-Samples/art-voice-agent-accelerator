@@ -9,6 +9,32 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class MCPServerStatus(BaseModel):
+    """Status of an individual MCP server."""
+
+    name: str = Field(..., description="MCP server name", example="cardapi")
+    status: str = Field(
+        ...,
+        description="Server health status",
+        json_schema_extra={"example": "healthy", "enum": ["healthy", "unhealthy", "unreachable", "error"]},
+    )
+    url: str = Field(..., description="Server URL", example="http://cardapi-mcp:80")
+    tools_count: int = Field(default=0, description="Number of tools discovered", example=4)
+    error: str | None = Field(None, description="Error message if unhealthy", example=None)
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "name": "cardapi",
+                "status": "healthy",
+                "url": "http://cardapi-mcp:80",
+                "tools_count": 4,
+                "error": None,
+            }
+        }
+    )
+
+
 class PoolMetrics(BaseModel):
     """Resource pool metrics for monitoring warm pool behavior."""
 
@@ -202,6 +228,21 @@ class ReadinessResponse(BaseModel):
         ..., description="Total time taken for all checks in milliseconds", example=45.2
     )
     checks: list[ServiceCheck] = Field(..., description="Individual component health checks")
+    mcp_servers: dict[str, MCPServerStatus] | None = Field(
+        None,
+        description="MCP server status information",
+        json_schema_extra={
+            "example": {
+                "cardapi": {
+                    "name": "cardapi",
+                    "status": "healthy",
+                    "url": "http://cardapi-mcp:80",
+                    "tools_count": 4,
+                    "error": None,
+                }
+            }
+        },
+    )
     event_system: dict[str, Any] | None = Field(
         None,
         description="Event system status information",
@@ -229,6 +270,15 @@ class ReadinessResponse(BaseModel):
                         "details": "Client initialized",
                     },
                 ],
+                "mcp_servers": {
+                    "cardapi": {
+                        "name": "cardapi",
+                        "status": "healthy",
+                        "url": "http://cardapi-mcp:80",
+                        "tools_count": 4,
+                        "error": None,
+                    }
+                },
                 "event_system": {
                     "is_healthy": True,
                     "handlers_count": 7,

@@ -131,7 +131,7 @@ Best for: Speed to production, lowest latency requirements.
 
 > **Note**: Podman is fully supported as a Docker alternative. See [Using Podman](docs/deployment/PODMAN.md) for setup instructions.
 
-### ⚡ Fastest Path (15 minutes)
+### ⚡ Fastest Path (~25 minutes)
 
 ```bash
 # 1. Clone the repository
@@ -142,7 +142,7 @@ cd art-voice-agent-accelerator
 azd auth login
 
 # 3. Deploy everything
-azd up   # ~15 min for complete infra and code deployment
+azd up   # ~25 min total (15-20 infra + 5-10 app container build/push)
 ```
 
 > [!NOTE]
@@ -173,7 +173,7 @@ azd up   # ~15 min for complete infra and code deployment
 ### 📚 Documentation Guides
 
 - Start here: [Getting started](https://aiappsgbbfactory.github.io/art-voice-agent-accelerator/getting-started/)
-- Deploy in ~15 minutes: [Quick start](https://aiappsgbbfactory.github.io/art-voice-agent-accelerator/getting-started/quickstart/)
+- Deploy in ~25 minutes (15-20 infra + 5-10 app container build/push): [Quick start](https://aiappsgbbfactory.github.io/art-voice-agent-accelerator/getting-started/quickstart/)
 - Run locally: [Local development](https://aiappsgbbfactory.github.io/art-voice-agent-accelerator/getting-started/local-development/)
 - Setup: [Prerequisites](https://aiappsgbbfactory.github.io/art-voice-agent-accelerator/getting-started/prerequisites/)
 - Try the UI: [Demo guide](https://aiappsgbbfactory.github.io/art-voice-agent-accelerator/getting-started/demo-guide/)
