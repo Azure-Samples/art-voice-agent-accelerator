@@ -168,22 +168,61 @@ task_cardapi_provision() {
         return 1
     fi
     
-    # Get OIDC connection string from Key Vault (uses Azure Managed Identity)
-    local oidc_conn_str
-    oidc_conn_str=$(az keyvault secret show --vault-name "$keyvault" --name "cosmos-entra-connection-string" --query value -o tsv 2>/dev/null || echo "")
+    # Get Cosmos DB connection details
+    # Priority: OIDC/Entra ID (works with az login in CI/CD) > Admin credentials (fallback)
+    local cosmos_oidc_conn_str cosmos_admin_password cosmos_hostname
     
-    if [[ -z "$oidc_conn_str" ]]; then
-        warn "OIDC connection string not available in Key Vault"
+    # Get the OIDC connection string (preferred - works in both CI/CD and local dev)
+    cosmos_oidc_conn_str=$(az keyvault secret show --vault-name "$keyvault" --name "cosmos-entra-connection-string" --query value -o tsv 2>/dev/null || echo "")
+    
+    # Also get admin credentials as fallback
+    cosmos_admin_password=$(az keyvault secret show --vault-name "$keyvault" --name "cosmos-admin-password" --query value -o tsv 2>/dev/null || echo "")
+    
+    # Extract hostname from OIDC connection string (e.g., mongodb+srv://clustername.mongocluster.cosmos.azure.com/...)
+    if [[ -n "$cosmos_oidc_conn_str" ]]; then
+        # Extract the full hostname including domain
+        cosmos_hostname=$(echo "$cosmos_oidc_conn_str" | sed -n 's|mongodb+srv://\([^/?]*\).*|\1|p')
+    fi
+    
+    if [[ -z "$cosmos_oidc_conn_str" ]] && [[ -z "$cosmos_admin_password" ]]; then
+        warn "No Cosmos DB credentials available in Key Vault"
         footer
         return 1
     fi
     
-    log "Connecting to Cosmos DB via Azure Identity (OIDC)..."
+    # Determine which auth method to use - prefer OIDC (Entra ID)
+    local use_oidc_auth=false
+    if [[ -n "$cosmos_oidc_conn_str" ]]; then
+        use_oidc_auth=true
+        log "Using Entra ID (OIDC) authentication for Cosmos DB provisioning..."
+    elif [[ -n "$cosmos_admin_password" ]] && [[ -n "$cosmos_hostname" ]]; then
+        log "Falling back to admin credentials for Cosmos DB provisioning..."
+    else
+        warn "Could not determine authentication method for Cosmos DB"
+        footer
+        return 1
+    fi
     
-    # Export environment variables for provisioning script - OIDC auth path
-    export AZURE_COSMOS_CONNECTION_STRING="$oidc_conn_str"
+    # Export environment variables for provisioning script
     export AZURE_COSMOS_DATABASE_NAME="cardapi"
     export AZURE_COSMOS_COLLECTION_NAME="declinecodes"
+    
+    if [[ "$use_oidc_auth" == "true" ]]; then
+        # OIDC auth path - uses az login credentials (works in CI/CD after azure/login@v2)
+        export AZURE_COSMOS_CONNECTION_STRING="$cosmos_oidc_conn_str"
+        # Unset admin vars to ensure OIDC path is used
+        unset COSMOS_ADMIN_USERNAME
+        unset COSMOS_ADMIN_PASSWORD
+        unset COSMOS_HOSTNAME
+    else
+        # Admin auth path - fallback
+        export COSMOS_ADMIN_USERNAME="cosmosadmin"
+        export COSMOS_ADMIN_PASSWORD="$cosmos_admin_password"
+        export COSMOS_HOSTNAME="$cosmos_hostname"
+        log "Admin password length: ${#cosmos_admin_password} chars"
+        # Unset OIDC var to ensure admin path is used
+        unset AZURE_COSMOS_CONNECTION_STRING
+    fi
     
     local provision_script="$(pwd)/apps/cardapi/scripts/provision_data.py"
     if [[ ! -f "$provision_script" ]]; then
@@ -206,8 +245,11 @@ task_cardapi_provision() {
         warn "CardAPI data provisioning may have failed (non-critical)"
     fi
     
-    # Clean up environment variables
+    # Clean up environment variables (security: don't leave credentials in env)
     unset AZURE_COSMOS_CONNECTION_STRING
+    unset COSMOS_ADMIN_USERNAME
+    unset COSMOS_ADMIN_PASSWORD
+    unset COSMOS_HOSTNAME
     
     footer
 }

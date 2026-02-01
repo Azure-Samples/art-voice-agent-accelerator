@@ -58,6 +58,11 @@ provider "azapi" {
 
 data "azuread_client_config" "current" {}
 
+data "external" "git_commit" {
+  program = ["git", "rev-parse", "--short", "HEAD"]
+  working_dir = path.module
+}
+
 # ============================================================================
 # RANDOM RESOURCES
 # ============================================================================
@@ -84,13 +89,15 @@ locals {
   # Common tags
   tags = {
     "azd-env-name" = var.environment_name
-    "hidden-title" = "Real Time Audio ${var.environment_name}"
-    "project"      = "gbb-ai-audio-agent"
+    "hidden-title" = "Azure Real-Time Audio ${var.environment_name}"
+    "project"      = "ART Voice Agent Accelerator"
     "environment"  = var.environment_name
     "deployment"   = "terraform"
     "deployed_by"  = coalesce(var.deployed_by, local.principal_id)
     # To bypass Azure policy which enforces private networking configuration for nonprod environments
     "SecurityControl" = var.environment_name != "prod" ? "Ignore" : null
+    "git-commit"   = data.external.git_commit.result["stdout"]
+
   }
 
   voice_live_available_regions = ["eastus2", "westus2", "swedencentral", "southeastasia"]

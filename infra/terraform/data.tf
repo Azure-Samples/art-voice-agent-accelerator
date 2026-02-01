@@ -150,9 +150,11 @@ resource "azurerm_key_vault_secret" "cosmos_entra_connection_string" {
 }
 
 # Generate random password for Cosmos DB admin
+# NOTE: Limited special chars to avoid URL/connection string issues
 resource "random_password" "cosmos_admin" {
-  length  = 16
-  special = true
+  length           = 24
+  special          = true
+  override_special = "!#$^*()-_=+"
 }
 
 # Store Cosmos DB admin password in Key Vault
