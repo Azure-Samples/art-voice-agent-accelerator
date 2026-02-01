@@ -223,7 +223,7 @@ if [[ -n "$ai_foundry_project_id" ]]; then
 fi
 
 # CardAPI MCP server endpoint (self-contained, direct Cosmos DB access)
-# Priority: 1. Environment variable override, 2. azd env value, 3. Existing App Config value
+# Priority: 1. Environment variable override, 2. azd env value, 3. Azure CLI query, 4. Existing App Config value
 cardapi_url=""
 
 # Check for environment variable override (from GitHub Actions or local)
@@ -235,6 +235,22 @@ else
     cardapi_url=$(get_azd_value CARDAPI_CONTAINER_APP_URL)
     if [[ -n "$cardapi_url" ]]; then
         info "Using CARDAPI_CONTAINER_APP_URL from azd env: $cardapi_url"
+    fi
+fi
+
+# If still empty, query Azure directly for the Container App FQDN
+if [[ -z "$cardapi_url" ]]; then
+    resource_group=$(get_azd_value AZURE_RESOURCE_GROUP)
+    if [[ -n "$resource_group" ]]; then
+        # Find cardapi container app by name pattern
+        cardapi_fqdn=$(az containerapp list \
+            --resource-group "$resource_group" \
+            --query "[?contains(name, 'cardapi')].properties.configuration.ingress.fqdn" \
+            --output tsv 2>/dev/null | head -1 || echo "")
+        if [[ -n "$cardapi_fqdn" ]]; then
+            cardapi_url="https://${cardapi_fqdn}"
+            info "Discovered CardAPI MCP URL from Azure: $cardapi_url"
+        fi
     fi
 fi
 
