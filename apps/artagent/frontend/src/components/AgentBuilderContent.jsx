@@ -170,6 +170,16 @@ const styles = {
   },
 };
 
+const formatMcpTransport = (transport) => {
+  if (!transport) return null;
+  const normalized = String(transport).toLowerCase();
+  if (normalized === 'streamable-http') return 'HTTP';
+  if (normalized === 'sse') return 'SSE';
+  if (normalized === 'http') return 'HTTP';
+  if (normalized === 'stdio') return 'STDIO';
+  return normalized.toUpperCase();
+};
+
 const CASCADE_MODEL_PRESETS = [
   { id: 'gpt-4o', label: 'gpt-4o' },
   { id: 'gpt-4o-mini', label: 'gpt-4o-mini' },
@@ -923,6 +933,26 @@ function ToolDetailsDialog({ open, onClose, tool }) {
             </Typography>
           </Box>
 
+          {(tool.source === 'mcp' || tool.mcp_server) && (
+            <Box>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
+                MCP Source
+              </Typography>
+              <Stack direction="row" flexWrap="wrap" gap={1}>
+                <Chip
+                  size="small"
+                  label={`server: ${tool.mcp_server || 'unknown'}`}
+                />
+                {tool.mcp_transport && (
+                  <Chip
+                    size="small"
+                    label={`protocol: ${formatMcpTransport(tool.mcp_transport)}`}
+                  />
+                )}
+              </Stack>
+            </Box>
+          )}
+
           {tool.tags?.length > 0 && (
             <Box>
               <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
@@ -1031,7 +1061,7 @@ export default function AgentBuilderContent({
   const [newMcpServer, setNewMcpServer] = useState({
     name: '',
     url: '',
-    transport: 'sse',
+    transport: 'streamable-http',
     timeout: 30,
     auth_token: '',
     auth_method: 'none', // 'none', 'token', or 'oauth'
@@ -1312,7 +1342,7 @@ export default function AgentBuilderContent({
         const data = await response.json();
         setSuccess(`MCP server "${newMcpServer.name}" added with ${data.server?.tools_count || 0} tools`);
         setShowAddMcpDialog(false);
-        setNewMcpServer({ name: '', url: '', transport: 'sse', timeout: 30, auth_token: '', auth_method: 'none', oauth: { client_id: '', auth_url: '', token_url: '', scope: '' } });
+        setNewMcpServer({ name: '', url: '', transport: 'streamable-http', timeout: 30, auth_token: '', auth_method: 'none', oauth: { client_id: '', auth_url: '', token_url: '', scope: '' } });
         setMcpTestResult(null);
         // Refresh servers and tools
         await Promise.all([fetchMcpServers(), fetchAvailableTools()]);
@@ -1482,13 +1512,16 @@ export default function AgentBuilderContent({
   // COMPUTED
   // ─────────────────────────────────────────────────────────────────────────
 
-  // Organize tools into categories with handoffs first, then MCP, then others
+  // Organize tools into categories with MCP first, then handoffs, then others
   const toolsByCategory = useMemo(() => {
     const grouped = {};
     
-    // Sort tools to ensure handoffs appear first
+    // Sort tools to ensure MCP tools appear first, then handoffs
     const sortedTools = [...availableTools].sort((a, b) => {
-      // Handoffs first
+      // MCP first
+      if (a.source === 'mcp' && b.source !== 'mcp') return -1;
+      if (a.source !== 'mcp' && b.source === 'mcp') return 1;
+      // Handoffs second
       if (a.is_handoff && !b.is_handoff) return -1;
       if (!a.is_handoff && b.is_handoff) return 1;
       // Then sort by name
@@ -1500,7 +1533,8 @@ export default function AgentBuilderContent({
       if (tool.is_handoff) {
         category = '🔀 Handoffs';
       } else if (tool.source === 'mcp') {
-        category = `🔌 MCP: ${tool.mcp_server || 'unknown'}`;
+        const transportLabel = formatMcpTransport(tool.mcp_transport);
+        category = `🔌 MCP: ${tool.mcp_server || 'unknown'}${transportLabel ? ` (${transportLabel})` : ''}`;
       } else {
         category = tool.tags?.[0] || 'General';
       }
@@ -1508,12 +1542,12 @@ export default function AgentBuilderContent({
       grouped[category].push(tool);
     });
     
-    // Sort categories to put Handoffs first, then MCP, then others
+    // Sort categories to put MCP first, then Handoffs, then others
     const sortedKeys = Object.keys(grouped).sort((a, b) => {
-      if (a.startsWith('🔀')) return -1;
-      if (b.startsWith('🔀')) return 1;
       if (a.startsWith('🔌')) return -1;
       if (b.startsWith('🔌')) return 1;
+      if (a.startsWith('🔀')) return -1;
+      if (b.startsWith('🔀')) return 1;
       return a.localeCompare(b);
     });
     
@@ -2617,13 +2651,24 @@ export default function AgentBuilderContent({
                                     />
                                   )}
                                   {tool.source === 'mcp' && (
-                                    <Chip 
-                                      label={`MCP: ${tool.mcp_server}`} 
-                                      size="small" 
-                                      color="info"
-                                      variant="outlined"
-                                      sx={{ height: 16, fontSize: 9, ml: 0.5 }} 
-                                    />
+                                    <>
+                                      <Chip 
+                                        label={`MCP: ${tool.mcp_server}`} 
+                                        size="small" 
+                                        color="info"
+                                        variant="outlined"
+                                        sx={{ height: 16, fontSize: 9, ml: 0.5 }} 
+                                      />
+                                      {tool.mcp_transport && (
+                                        <Chip
+                                          label={formatMcpTransport(tool.mcp_transport)}
+                                          size="small"
+                                          color="info"
+                                          variant="outlined"
+                                          sx={{ height: 16, fontSize: 9 }}
+                                        />
+                                      )}
+                                    </>
                                   )}
                                 </Stack>
                               }
@@ -3583,7 +3628,7 @@ export default function AgentBuilderContent({
         onClose={() => {
           setShowAddMcpDialog(false);
           setMcpTestResult(null);
-          setNewMcpServer({ name: '', url: '', transport: 'sse', timeout: 30, auth_token: '', auth_method: 'none', oauth: { client_id: '', auth_url: '', token_url: '', scope: '' } });
+          setNewMcpServer({ name: '', url: '', transport: 'streamable-http', timeout: 30, auth_token: '', auth_method: 'none', oauth: { client_id: '', auth_url: '', token_url: '', scope: '' } });
         }}
         maxWidth="sm"
         fullWidth
@@ -3602,7 +3647,7 @@ export default function AgentBuilderContent({
             onClick={() => {
               setShowAddMcpDialog(false);
               setMcpTestResult(null);
-              setNewMcpServer({ name: '', url: '', transport: 'sse', timeout: 30, auth_token: '', auth_method: 'none', oauth: { client_id: '', auth_url: '', token_url: '', scope: '' } });
+              setNewMcpServer({ name: '', url: '', transport: 'streamable-http', timeout: 30, auth_token: '', auth_method: 'none', oauth: { client_id: '', auth_url: '', token_url: '', scope: '' } });
             }}
           >
             <CloseIcon />
@@ -3814,7 +3859,7 @@ export default function AgentBuilderContent({
             onClick={() => {
               setShowAddMcpDialog(false);
               setMcpTestResult(null);
-              setNewMcpServer({ name: '', url: '', transport: 'sse', timeout: 30, auth_token: '', auth_method: 'none', oauth: { client_id: '', auth_url: '', token_url: '', scope: '' } });
+              setNewMcpServer({ name: '', url: '', transport: 'streamable-http', timeout: 30, auth_token: '', auth_method: 'none', oauth: { client_id: '', auth_url: '', token_url: '', scope: '' } });
             }}
           >
             Cancel

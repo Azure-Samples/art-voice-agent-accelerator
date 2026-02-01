@@ -553,6 +553,26 @@ const BackendIndicator = ({ url, onConfigureClick, onStatusChange, onAgentSelect
                   const background = isHealthy ? '#f0fdf4' : '#fef2f2';
                   const border = isHealthy ? '#bbf7d0' : '#fecaca';
                   const statusColor = isHealthy ? '#166534' : '#dc2626';
+                  
+                  // Format tool names (truncate if > 3)
+                  const toolNames = server.tool_names || [];
+                  const displayTools = toolNames.length > 3 
+                    ? [...toolNames.slice(0, 3), `+${toolNames.length - 3} more`]
+                    : toolNames;
+                  
+                  // Extract endpoint from URL (mask long URLs)
+                  const maskUrl = (url) => {
+                    if (!url) return 'N/A';
+                    try {
+                      const parsed = new URL(url);
+                      const host = parsed.hostname.length > 30 
+                        ? parsed.hostname.slice(0, 15) + '...' + parsed.hostname.slice(-10)
+                        : parsed.hostname;
+                      return `${parsed.protocol}//${host}${parsed.pathname}`;
+                    } catch {
+                      return url.length > 50 ? url.slice(0, 25) + '...' + url.slice(-20) : url;
+                    }
+                  };
 
                   return (
                     <div 
@@ -590,29 +610,45 @@ const BackendIndicator = ({ url, onConfigureClick, onStatusChange, onAgentSelect
                         </div>
                       </div>
                       
-                      {/* Server Info */}
+                      {/* Server Description */}
                       <div style={{
                         fontSize: '9px',
                         color: '#64748b',
-                        marginBottom: '4px',
+                        marginBottom: '6px',
                         lineHeight: '1.4',
                       }}>
-                        MCP Tool Provider - {server.tools_count || 0} tools available
+                        MCP Tool Provider - Model Context Protocol server
+                      </div>
+
+                      {/* Server Details (verbose like other health checks) */}
+                      <div style={{
+                        fontSize: '9px',
+                        color: statusColor,
+                        fontFamily: 'monospace',
+                        background: 'rgba(255,255,255,0.5)',
+                        padding: '6px 8px',
+                        borderRadius: '4px',
+                        wordBreak: 'break-word',
+                        lineHeight: '1.6',
+                      }}>
+                        <div>📡 Protocol: {server.transport || 'streamable-http'}</div>
+                        <div>🌐 Endpoint: {maskUrl(server.url)}</div>
+                        <div>🧰 Tools ({server.tools_count || 0}): {displayTools.length > 0 ? displayTools.join(', ') : 'none'}</div>
                       </div>
 
                       {/* Error Details */}
                       {server.error && (
                         <div style={{
                           fontSize: '9px',
-                          color: statusColor,
-                          marginTop: '4px',
+                          color: '#dc2626',
+                          marginTop: '6px',
                           fontFamily: 'monospace',
-                          background: 'rgba(255,255,255,0.5)',
+                          background: 'rgba(254,226,226,0.5)',
                           padding: '4px 6px',
                           borderRadius: '4px',
                           wordBreak: 'break-word',
                         }}>
-                          {String(server.error)}
+                          ❌ {String(server.error)}
                         </div>
                       )}
                     </div>
