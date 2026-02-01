@@ -71,6 +71,7 @@ class ToolInfo(BaseModel):
     parameters: dict[str, Any] | None = None
     source: str = "local"  # "local" or "mcp"
     mcp_server: str | None = None  # Server name if source is "mcp"
+    mcp_transport: str | None = None  # Transport/protocol if source is "mcp"
 
 
 class VoiceInfo(BaseModel):
@@ -339,6 +340,7 @@ async def list_available_tools(
             parameters=params,
             source=defn.source.value if hasattr(defn.source, 'value') else str(defn.source),
             mcp_server=defn.mcp_server,
+            mcp_transport=defn.mcp_transport,
         )
         tools_list.append(tool_info)
 

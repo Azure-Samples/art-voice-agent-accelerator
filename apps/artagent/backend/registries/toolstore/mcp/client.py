@@ -20,11 +20,35 @@ logger = get_logger("mcp.client")
 
 
 class MCPTransport(str, Enum):
-    """Supported MCP transport types."""
+    """Supported MCP transport types.
+    
+    Per MCP spec 2025-11-25:
+    - STREAMABLE_HTTP: New HTTP-based transport (recommended for deployed servers)
+    - SSE: Server-Sent Events (legacy, still supported)
+    - STDIO: Standard I/O for local CLI usage
+    - HTTP: Generic HTTP (alias for streamable-http)
+    """
 
+    STREAMABLE_HTTP = "streamable-http"
     SSE = "sse"
     STDIO = "stdio"
     HTTP = "http"
+    
+    @classmethod
+    def _missing_(cls, value: object) -> "MCPTransport | None":
+        """Handle transport type aliases and normalize values."""
+        if isinstance(value, str):
+            normalized = value.lower().replace("_", "-")
+            # Map aliases to canonical values
+            aliases = {
+                "streamable-http": cls.STREAMABLE_HTTP,
+                "streamablehttp": cls.STREAMABLE_HTTP,
+                "http": cls.HTTP,
+                "sse": cls.SSE,
+                "stdio": cls.STDIO,
+            }
+            return aliases.get(normalized)
+        return None
 
 
 @dataclass
@@ -33,7 +57,7 @@ class MCPServerConfig:
 
     name: str
     url: str
-    transport: MCPTransport | str = MCPTransport.SSE
+    transport: MCPTransport | str = MCPTransport.STREAMABLE_HTTP
     timeout: float = 30.0
     retry_attempts: int = 3
     retry_delay: float = 1.0
@@ -41,7 +65,11 @@ class MCPServerConfig:
 
     def __post_init__(self) -> None:
         if isinstance(self.transport, str):
-            self.transport = MCPTransport(self.transport.lower())
+            try:
+                self.transport = MCPTransport(self.transport.lower())
+            except ValueError:
+                logger.warning(f"Unknown transport '{self.transport}', defaulting to streamable-http")
+                self.transport = MCPTransport.STREAMABLE_HTTP
 
 
 @dataclass
@@ -187,30 +215,8 @@ class MCPClientSession:
         Tries to fetch tool schemas from the /tools/list endpoint first,
         falls back to hardcoded schemas for known CardAPI tools.
         """
-        try:
-            # Try to get tools via /tools/list endpoint (dynamic discovery)
-            response = await self._client.get("/tools/list")
-            if response.status_code == 200:
-                data = response.json()
-                tools_data = data.get("tools", [])
-                self._tools = [
-                    MCPToolInfo(
-                        name=t["name"],
-                        description=t.get("description", f"Tool: {t['name']}"),
-                        input_schema=t.get("input_schema", {"type": "object", "properties": {}}),
-                        server_name=self.config.name,
-                    )
-                    for t in tools_data
-                ]
-                logger.info(
-                    f"Discovered {len(self._tools)} tools from MCP server {self.config.name} via /tools/list"
-                )
-                return
-        except Exception as e:
-            logger.warning(f"Dynamic tool discovery failed for {self.config.name}, using fallback: {e}")
-
-        # Fallback: hardcoded schemas for known CardAPI tools
-        try:
+        def _load_cardapi_fallback() -> None:
+            # CardAPI MCP server does not expose /tools/list; use the known static tool set.
             self._tools = [
                 MCPToolInfo(
                     name="lookup_decline_code",
@@ -275,7 +281,9 @@ class MCPClientSession:
                 ),
                 MCPToolInfo(
                     name="get_decline_codes_metadata",
-                    description="Get metadata about the decline codes database, including total counts and system information.",
+                    description=(
+                        "Get metadata about the decline codes database, including total counts and system information."
+                    ),
                     input_schema={
                         "type": "object",
                         "properties": {},
@@ -284,10 +292,48 @@ class MCPClientSession:
                 ),
             ]
             logger.info(
-                f"Discovered {len(self._tools)} tools from MCP server {self.config.name}"
+                "Discovered %d tools from MCP server %s (CardAPI fallback)",
+                len(self._tools),
+                self.config.name,
             )
+
+        if self.config.name.lower() == "cardapi":
+            _load_cardapi_fallback()
+            return
+
+        try:
+            # Try to get tools via /tools/list endpoint (dynamic discovery)
+            response = await self._client.get("/tools/list")
+            if response.status_code == 200:
+                data = response.json()
+                tools_data = data.get("tools", [])
+                self._tools = [
+                    MCPToolInfo(
+                        name=t["name"],
+                        description=t.get("description", f"Tool: {t['name']}"),
+                        input_schema=t.get("input_schema", {"type": "object", "properties": {}}),
+                        server_name=self.config.name,
+                    )
+                    for t in tools_data
+                ]
+                logger.info(
+                    f"Discovered {len(self._tools)} tools from MCP server {self.config.name} via /tools/list"
+                )
+                return
+
+            logger.warning(
+                "MCP server %s returned %s for /tools/list; no fallback available",
+                self.config.name,
+                response.status_code,
+            )
+            self._tools = []
+            return
         except Exception as e:
-            logger.error(f"Failed to discover tools from {self.config.name}: {e}")
+            logger.warning(
+                "Dynamic tool discovery failed for %s via /tools/list: %s",
+                self.config.name,
+                e,
+            )
             self._tools = []
 
     async def list_tools(self) -> list[MCPToolInfo]:

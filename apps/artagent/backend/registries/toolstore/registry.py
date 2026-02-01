@@ -52,6 +52,7 @@ class ToolDefinition:
     tags: set[str] = field(default_factory=set)
     source: ToolSource = ToolSource.LOCAL
     mcp_server: str | None = None  # Server name if source is MCP
+    mcp_transport: str | None = None  # Transport/protocol if source is MCP (streamable-http/sse/stdio)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -72,6 +73,7 @@ def register_tool(
     override: bool = False,
     source: ToolSource = ToolSource.LOCAL,
     mcp_server: str | None = None,
+    mcp_transport: str | None = None,
 ) -> None:
     """
     Register a tool with schema and executor.
@@ -84,6 +86,7 @@ def register_tool(
     :param override: If True, allow overriding existing registration
     :param source: Tool source (LOCAL or MCP)
     :param mcp_server: MCP server name if source is MCP
+    :param mcp_transport: MCP transport/protocol if source is MCP (streamable-http/sse/stdio)
     """
     if name in _TOOL_DEFINITIONS and not override:
         logger.debug("Tool '%s' already registered, skipping", name)
@@ -98,6 +101,7 @@ def register_tool(
         tags=tags or set(),
         source=source,
         mcp_server=mcp_server,
+        mcp_transport=mcp_transport,
     )
     logger.debug("Registered tool: %s (handoff=%s, source=%s)", name, is_handoff, source.value)
 
@@ -155,6 +159,7 @@ def register_mcp_tool(
     *,
     tags: set[str] | None = None,
     override: bool = False,
+    mcp_transport: str | None = None,
 ) -> None:
     """
     Register a tool from an MCP server.
@@ -162,6 +167,7 @@ def register_mcp_tool(
     :param name: Tool name (should be prefixed with server name, e.g., "cardapi_lookup")
     :param schema: OpenAI-compatible function schema
     :param mcp_server: Name of the MCP server providing this tool
+    :param mcp_transport: MCP transport/protocol (streamable-http/sse/stdio)
     :param executor: Async function that proxies to the MCP server
     :param tags: Optional categorization tags
     :param override: If True, allow overriding existing registration
@@ -175,6 +181,7 @@ def register_mcp_tool(
         override=override,
         source=ToolSource.MCP,
         mcp_server=mcp_server,
+        mcp_transport=mcp_transport,
     )
 
 

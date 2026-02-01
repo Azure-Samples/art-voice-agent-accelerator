@@ -89,11 +89,11 @@ class MCPServerRequest(BaseModel):
     )
     url: str = Field(
         ...,
-        description="HTTP endpoint URL for the MCP server (e.g., 'http://localhost:8080')",
+        description="HTTP endpoint URL for the MCP server (e.g., 'http://localhost:8080/mcp')",
     )
     transport: str = Field(
-        default="sse",
-        description="Transport type: 'sse' (Server-Sent Events), 'http', or 'stdio'",
+        default="streamable-http",
+        description="Transport type: 'streamable-http' (MCP spec 2025-11-25), 'sse', or 'stdio'",
     )
     timeout: float = Field(
         default=30.0,
@@ -229,6 +229,7 @@ async def _sync_app_state_mcp_status(app_state: Any) -> None:
     
     for name, config in all_servers.items():
         url = config["url"]
+        transport = config.get("transport", "streamable-http")
         headers = config.get("headers", {})
         
         # Quick health check
@@ -249,6 +250,7 @@ async def _sync_app_state_mcp_status(app_state: Any) -> None:
         mcp_status[name] = {
             "status": "healthy" if is_healthy else "unhealthy",
             "url": url,
+            "transport": transport,
             "tools_count": tools_count,
             "tool_names": tool_names,
             "error": error,
@@ -348,7 +350,12 @@ async def _discover_and_register_tools(
             ):
                 async def executor(args: dict) -> dict:
                     """Execute MCP tool via HTTP endpoint with authentication."""
-                    tool_endpoint = f"{mcp_url.rstrip('/')}/tools/{tool_original_name}"
+                    # Strip /mcp suffix if present - REST tool endpoints are at /tools/*
+                    # while MCP JSON-RPC endpoint is at /mcp
+                    base_url = mcp_url.rstrip("/")
+                    if base_url.endswith("/mcp"):
+                        base_url = base_url[:-4]
+                    tool_endpoint = f"{base_url}/tools/{tool_original_name}"
                     try:
                         async with httpx.AsyncClient(timeout=mcp_timeout) as client:
                             response = await client.get(
@@ -394,6 +401,7 @@ async def _discover_and_register_tools(
                 name=prefixed_name,
                 schema=schema,
                 mcp_server=name,
+                mcp_transport=transport,
                 executor=executor,
                 override=True,
             )
@@ -453,7 +461,7 @@ async def list_mcp_servers(request: Request) -> dict[str, Any]:
             MCPServerInfo(
                 name=name,
                 url=url,
-                transport=config.get("transport", "sse"),
+                transport=config.get("transport", "streamable-http"),
                 timeout=timeout,
                 status="healthy" if is_healthy else "unhealthy",
                 tools_count=tools_count,
@@ -933,7 +941,7 @@ async def oauth_callback(
         _RUNTIME_MCP_SERVERS[server_name] = {
             "name": server_name,
             "url": pending["url"],
-            "transport": "sse",
+            "transport": "streamable-http",
             "timeout": MCP_SERVER_TIMEOUT,
             "headers": {"Authorization": f"Bearer {access_token}"},
             "oauth_config": oauth_config,

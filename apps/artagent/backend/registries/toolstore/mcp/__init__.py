@@ -78,7 +78,7 @@ def get_mcp_configs_for_agent(mcp_server_names: list[str]) -> list[MCPServerConf
         configs.append(MCPServerConfig(
             name=config_dict["name"],
             url=config_dict["url"],
-            transport=MCPTransport(config_dict.get("transport", "sse")),
+            transport=MCPTransport(config_dict.get("transport", "streamable-http")),
             timeout=config_dict.get("timeout", 30.0),
         ))
         
