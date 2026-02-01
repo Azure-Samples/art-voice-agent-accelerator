@@ -86,18 +86,15 @@ locals {
   email_sender_username     = "noreply"
   email_sender_display_name = "Real-Time Voice Notifications"
 
-  # Common tags
+  # Common tags (excludes volatile values to prevent unnecessary resource updates)
   tags = {
-    "azd-env-name" = var.environment_name
-    "hidden-title" = "Azure Real-Time Audio ${var.environment_name}"
-    "project"      = "ART Voice Agent Accelerator"
-    "environment"  = var.environment_name
-    "deployment"   = "terraform"
-    "deployed_by"  = coalesce(var.deployed_by, local.principal_id)
-    # To bypass Azure policy which enforces private networking configuration for nonprod environments
+    "azd-env-name"    = var.environment_name
+    "hidden-title"    = "Azure Real-Time Audio ${var.environment_name}"
+    "project"         = "ART Voice Agent Accelerator"
+    "environment"     = var.environment_name
+    "deployment"      = "terraform"
+    "deployed_by"     = coalesce(var.deployed_by, local.principal_id)
     "SecurityControl" = var.environment_name != "prod" ? "Ignore" : null
-    "git-commit"   = data.external.git_commit.result["commit"]
-
   }
 
   voice_live_available_regions = ["eastus2", "westus2", "swedencentral", "southeastasia"]
