@@ -91,8 +91,10 @@ def main():
                     print(f"[DEBUG] Auto-negotiated method also failed: {fallback_error}", file=sys.stderr)
                     raise conn_error  # Raise original error for better diagnostics
         else:
-            # Use OIDC authentication (same pattern as main.py)
+            # Use OIDC authentication with Azure CLI credentials (works locally and in CI/CD)
             import re
+            from azure.identity import DefaultAzureCredential
+            
             connection_string = os.getenv("AZURE_COSMOS_CONNECTION_STRING")
             
             # Extract cluster name from connection string, stripping any <user>:<password>@ prefix
@@ -102,12 +104,13 @@ def main():
             else:
                 raise ValueError(f"Could not determine cluster name from connection string: {connection_string[:50]}...")
             
-            # Use PyMongo's built-in Azure OIDC environment
-            # This handles Managed Identity authentication automatically
-            auth_properties = {
-                "ENVIRONMENT": "azure",
-                "TOKEN_RESOURCE": "https://ossrdbms-aad.database.windows.net/.default",
-            }
+            # Use DefaultAzureCredential which tries: Environment > CLI > Managed Identity
+            credential = DefaultAzureCredential()
+            
+            # Define OIDC callback that uses Azure Identity SDK
+            def oidc_callback(context):
+                token = credential.get_token("https://ossrdbms-aad.database.windows.net/.default")
+                return {"access_token": token.token, "expires_in_seconds": 3600}
             
             # Build OIDC connection string
             oidc_connection_string = f"mongodb+srv://{cluster_name}.mongocluster.cosmos.azure.com/"
@@ -118,7 +121,7 @@ def main():
                 tls=True,
                 retryWrites=False,
                 authMechanism="MONGODB-OIDC",
-                authMechanismProperties=auth_properties,
+                authMechanismProperties={"OIDC_CALLBACK": oidc_callback},
             )
             client.admin.command("ping")
             print(f"✓ Connected to Cosmos DB cluster: {cluster_name}")

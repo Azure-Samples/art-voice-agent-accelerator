@@ -190,13 +190,13 @@ task_cardapi_provision() {
         return 1
     fi
     
-    # Determine which auth method to use - prefer OIDC (Entra ID)
-    local use_oidc_auth=false
-    if [[ -n "$cosmos_oidc_conn_str" ]]; then
-        use_oidc_auth=true
+    # Determine which auth method to use - prefer admin credentials (simpler for provisioning)
+    local use_admin_auth=false
+    if [[ -n "$cosmos_admin_password" ]] && [[ -n "$cosmos_hostname" ]]; then
+        use_admin_auth=true
+        log "Using admin credentials for Cosmos DB provisioning..."
+    elif [[ -n "$cosmos_oidc_conn_str" ]]; then
         log "Using Entra ID (OIDC) authentication for Cosmos DB provisioning..."
-    elif [[ -n "$cosmos_admin_password" ]] && [[ -n "$cosmos_hostname" ]]; then
-        log "Falling back to admin credentials for Cosmos DB provisioning..."
     else
         warn "Could not determine authentication method for Cosmos DB"
         footer
@@ -207,21 +207,21 @@ task_cardapi_provision() {
     export AZURE_COSMOS_DATABASE_NAME="cardapi"
     export AZURE_COSMOS_COLLECTION_NAME="declinecodes"
     
-    if [[ "$use_oidc_auth" == "true" ]]; then
-        # OIDC auth path - uses az login credentials (works in CI/CD after azure/login@v2)
-        export AZURE_COSMOS_CONNECTION_STRING="$cosmos_oidc_conn_str"
-        # Unset admin vars to ensure OIDC path is used
-        unset COSMOS_ADMIN_USERNAME
-        unset COSMOS_ADMIN_PASSWORD
-        unset COSMOS_HOSTNAME
-    else
-        # Admin auth path - fallback
+    if [[ "$use_admin_auth" == "true" ]]; then
+        # Admin auth path - preferred for provisioning (simpler, no SDK dependencies)
         export COSMOS_ADMIN_USERNAME="cosmosadmin"
         export COSMOS_ADMIN_PASSWORD="$cosmos_admin_password"
         export COSMOS_HOSTNAME="$cosmos_hostname"
         log "Admin password length: ${#cosmos_admin_password} chars"
         # Unset OIDC var to ensure admin path is used
         unset AZURE_COSMOS_CONNECTION_STRING
+    else
+        # OIDC auth path - uses az login credentials (works in CI/CD after azure/login@v2)
+        export AZURE_COSMOS_CONNECTION_STRING="$cosmos_oidc_conn_str"
+        # Unset admin vars to ensure OIDC path is used
+        unset COSMOS_ADMIN_USERNAME
+        unset COSMOS_ADMIN_PASSWORD
+        unset COSMOS_HOSTNAME
     fi
     
     local provision_script="$(pwd)/apps/cardapi/scripts/provision_data.py"
