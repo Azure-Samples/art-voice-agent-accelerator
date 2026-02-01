@@ -65,6 +65,7 @@ resource "azapi_resource" "mongoCluster" {
   type                      = "Microsoft.DocumentDB/mongoClusters@2025-08-01-preview"
   parent_id                 = azurerm_resource_group.main.id
   schema_validation_enabled = false
+  ignore_missing_property   = true
   name                      = local.resource_names.cosmos
   location                  = var.location
   body = {
@@ -104,9 +105,10 @@ resource "azapi_resource" "mongoCluster" {
   }
   tags = local.tags
 
-  # Suppress diffs for allowedModes array ordering
+  # Suppress diffs for volatile properties
   lifecycle {
     ignore_changes = [
+      tags,
       body["properties"]["authConfig"]["allowedModes"],
       output["properties"]["authConfig"]["allowedModes"],
       output["properties"]["backup"]["earliestRestoreTime"],

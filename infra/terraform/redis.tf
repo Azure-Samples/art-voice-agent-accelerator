@@ -13,10 +13,11 @@ import {
 }
 */
 resource "azapi_resource" "redisEnterprise" {
-  type      = "Microsoft.Cache/redisEnterprise@2024-09-01-preview"
-  parent_id = azurerm_resource_group.main.id
-  name      = replace(local.resource_names.redis, "-", "")
-  location  = azurerm_resource_group.main.location
+  type                    = "Microsoft.Cache/redisEnterprise@2024-09-01-preview"
+  parent_id               = azurerm_resource_group.main.id
+  name                    = replace(local.resource_names.redis, "-", "")
+  location                = azurerm_resource_group.main.location
+  ignore_missing_property = true
   body = {
     properties = {
       highAvailability  = var.enable_redis_ha ? "Enabled" : "Disabled"
@@ -27,6 +28,10 @@ resource "azapi_resource" "redisEnterprise" {
     }
   }
   tags = local.tags
+
+  lifecycle {
+    ignore_changes = [tags]
+  }
 }
 
 # Redis Enterprise Database with RBAC authentication

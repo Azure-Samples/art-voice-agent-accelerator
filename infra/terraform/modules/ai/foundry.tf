@@ -19,6 +19,7 @@ resource "azapi_resource" "ai_foundry_account" {
   parent_id                 = var.resource_group_id
   location                  = var.location
   schema_validation_enabled = false
+  ignore_missing_property   = true
   tags                      = var.tags
 
   body = {
@@ -42,6 +43,10 @@ resource "azapi_resource" "ai_foundry_account" {
     "properties.endpoint",
     "properties.endpoints"
   ]
+
+  lifecycle {
+    ignore_changes = [tags]
+  }
 }
 
 
@@ -69,6 +74,7 @@ resource "azapi_resource" "ai_foundry_project" {
   parent_id                 = azapi_resource.ai_foundry_account.id
   location                  = var.location
   schema_validation_enabled = false
+  ignore_missing_property   = true
 
   body = {
 

@@ -59,7 +59,7 @@ resource "azapi_resource" "acs" {
   }
   lifecycle {
     ignore_changes = [
-      # Ignore changes to identity to prevent recreation
+      tags,
       identity,
     ]
   }
