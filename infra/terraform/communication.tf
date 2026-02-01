@@ -1,7 +1,34 @@
 # ============================================================================
-# AZURE COMMUNICATION SERVICES EMAIL
+# AZURE COMMUNICATION SERVICES EMAIL (Optional - not required for voice)
 # ============================================================================
+
+# State migration: handle existing deployments without count index
+moved {
+  from = azurerm_email_communication_service.main
+  to   = azurerm_email_communication_service.main[0]
+}
+
+moved {
+  from = azurerm_email_communication_service_domain.managed
+  to   = azurerm_email_communication_service_domain.managed[0]
+}
+
+moved {
+  from = azurerm_email_communication_service_domain_sender_username.default
+  to   = azurerm_email_communication_service_domain_sender_username.default[0]
+}
+
+# Remove old azurerm association from state (replaced by azapi_update_resource)
+# The domain link already exists in Azure, so we just forget the old resource
+removed {
+  from = azurerm_communication_service_email_domain_association.example
+  lifecycle {
+    destroy = false
+  }
+}
+
 resource "azurerm_email_communication_service" "main" {
+  count               = var.enable_acs_email ? 1 : 0
   name                = local.resource_names.email_service
   resource_group_name = azurerm_resource_group.main.name
   data_location       = var.acs_data_location
@@ -9,29 +36,32 @@ resource "azurerm_email_communication_service" "main" {
 }
 
 resource "azurerm_email_communication_service_domain" "managed" {
+  count                            = var.enable_acs_email ? 1 : 0
   name                             = local.resource_names.email_domain
-  email_service_id                 = azurerm_email_communication_service.main.id
+  email_service_id                 = azurerm_email_communication_service.main[0].id
   domain_management                = "AzureManaged"
   user_engagement_tracking_enabled = false
 }
 
 
 resource "azurerm_email_communication_service_domain_sender_username" "default" {
-  email_service_domain_id = azurerm_email_communication_service_domain.managed.id
+  count                   = var.enable_acs_email ? 1 : 0
+  email_service_domain_id = azurerm_email_communication_service_domain.managed[0].id
   name                    = local.email_sender_username
   display_name            = local.email_sender_display_name
 }
 
 
-# Using azapi_resource_action to link email domain to ACS
+# Using azapi_update_resource to link email domain to ACS
 # The azurerm_communication_service_email_domain_association has compatibility issues with azapi-managed ACS
 resource "azapi_update_resource" "acs_email_domain_link" {
+  count       = var.enable_acs_email ? 1 : 0
   type        = "Microsoft.Communication/communicationServices@2025-05-01-preview"
   resource_id = azapi_resource.acs.id
 
   body = {
     properties = {
-      linkedDomains = [azurerm_email_communication_service_domain.managed.id]
+      linkedDomains = [azurerm_email_communication_service_domain.managed[0].id]
     }
   }
 

@@ -85,6 +85,12 @@ variable "acs_data_location" {
   }
 }
 
+variable "enable_acs_email" {
+  description = "Enable Azure Communication Services Email integration (optional, not required for voice)"
+  type        = bool
+  default     = true  # Backwards compatible - existing deployments have email resources
+}
+
 variable "disable_local_auth" {
   description = "Disable local authentication and use Azure AD/managed identity only"
   type        = bool
