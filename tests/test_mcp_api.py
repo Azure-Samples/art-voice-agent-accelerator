@@ -19,12 +19,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from apps.artagent.backend.api.v1.endpoints.mcp import (
-    MCPServerRequest,
-    MCPTestResponse,
-    MCPToolInfo,
-    OAuthCallbackRequest,
-    OAuthStartRequest,
-    OAuthConfig,
     _RUNTIME_MCP_SERVERS,
     _OAUTH_PENDING_STATES,
     _generate_pkce_challenge,
@@ -274,6 +268,20 @@ class TestListServers:
             assert data["servers"][0]["status"] == "unhealthy"
             assert data["servers"][0]["error"] is not None
 
+    def test_list_servers_includes_startup_status(
+        self, client, mock_get_enabled_mcp_servers, mock_httpx_client, mock_list_mcp_tools
+    ):
+        """Test that startup_status from app state is included."""
+        client.app.state.mcp_servers_status = {
+            "env_server": {"status": "healthy", "url": "http://env-server:8080"}
+        }
+        response = client.get("/api/v1/mcp/servers")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert "startup_status" in data
+        assert data["startup_status"]["env_server"]["status"] == "healthy"
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ADD SERVER ENDPOINT TESTS
@@ -309,6 +317,8 @@ class TestAddServer:
         assert data["server"]["tools_count"] == 1  # From mock
         assert "newserver_test_tool" in data["server"]["tool_names"]
         assert "newserver" in _RUNTIME_MCP_SERVERS
+        # App state should be synced for readiness endpoint
+        assert "newserver" in client.app.state.mcp_servers_status
 
     def test_add_server_with_auth_token(
         self,
@@ -501,6 +511,37 @@ class TestTestConnection:
         mock_register_mcp_tool.assert_not_called()
         # Server should not be added to runtime registry
         assert "noregister" not in _RUNTIME_MCP_SERVERS
+
+    def test_test_connection_no_tools_status_connected(self, client):
+        """Test connection health OK but tool discovery empty -> status is connected."""
+        with patch("apps.artagent.backend.api.v1.endpoints.mcp.httpx.AsyncClient") as mock_httpx:
+            mock_client = AsyncMock()
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {"status": "healthy", "tools_count": 0}
+            mock_client.get.return_value = mock_response
+            mock_client.__aenter__.return_value = mock_client
+            mock_client.__aexit__.return_value = None
+            mock_httpx.return_value = mock_client
+
+            with patch(
+                "apps.artagent.backend.api.v1.endpoints.mcp.MCPClientSession"
+            ) as mock_session_cls:
+                mock_session = AsyncMock()
+                mock_session.connect.return_value = True
+                mock_session.list_tools.return_value = []
+                mock_session.disconnect.return_value = None
+                mock_session_cls.return_value = mock_session
+
+                response = client.post(
+                    "/api/v1/mcp/servers/test",
+                    json={"name": "empties", "url": "http://empties:8080"},
+                )
+                assert response.status_code == 200
+
+                data = response.json()
+                assert data["status"] == "connected"
+                assert data["tools_count"] == 0
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

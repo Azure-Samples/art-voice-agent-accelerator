@@ -115,6 +115,8 @@
 | **[Speech](speech/README.md)** | Modes, Recognition, Synthesis | Audio streaming, STT/TTS integration, handler selection |
 | **[Data](data/README.md)** | Session, Flows | MemoManager, Redis patterns, state persistence |
 | **[ACS](acs/README.md)** | Call Flows, Integrations | ACS media handling, telephony integration, IVR bridging |
+| **[Registries](registries/index.md)** | Agents, Tools, MCP | Agent store, tool registry, MCP integration |
+| **[Lifecycle](lifecycle.md)** | Startup, Shutdown, Deferred | LifecycleManager, health probes, deferred startup |
 | **[Telemetry](telemetry.md)** | Observability | OpenTelemetry, App Insights, SLOs and alerting |
 
 ## :material-rocket: Quick Start Paths

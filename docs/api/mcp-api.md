@@ -5,6 +5,9 @@ Runtime API for managing MCP (Model Context Protocol) servers. These endpoints e
 !!! abstract "Context-Driven Agents"
     MCP is fundamentally about providing agents with the context they need to succeed. Each MCP server you connect exposes tools and resources that enrich agent knowledge, enabling more accurate and helpful responses. See the [MCP Integration Guide](../architecture/registries/mcp-integration.md) for architecture details and context management best practices.
 
+!!! info "Startup Behavior"
+    MCP servers configured via environment variables are validated and registered during **deferred startup**—the application starts accepting requests immediately while MCP connections are established in the background. Use `/api/v1/ready` to check MCP tool availability.
+
 ---
 
 ## Base URL
@@ -12,6 +15,19 @@ Runtime API for managing MCP (Model Context Protocol) servers. These endpoints e
 ```
 /api/v1/mcp
 ```
+
+---
+
+## Transport Types
+
+The MCP client supports the following transport protocols (per MCP spec 2025-11-25):
+
+| Transport | Value | Description |
+|:----------|:------|:------------|
+| **Streamable HTTP** | `streamable-http` | Recommended for deployed servers (default) |
+| **SSE** | `sse` | Server-Sent Events (legacy, still supported) |
+| **HTTP** | `http` | Alias for streamable-http |
+| **STDIO** | `stdio` | Standard I/O for local CLI tools |
 
 ---
 
@@ -35,7 +51,7 @@ Runtime API for managing MCP (Model Context Protocol) servers. These endpoints e
         {
           "name": "cardapi",
           "url": "http://cardapi-mcp:8080",
-          "transport": "sse",
+          "transport": "streamable-http",
           "timeout": 30.0,
           "status": "healthy",
           "tools_count": 4,

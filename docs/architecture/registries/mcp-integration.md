@@ -441,6 +441,57 @@ flowchart TB
 
 ---
 
+## Startup Behavior: Deferred MCP Initialization
+
+!!! info "Non-Blocking MCP Startup"
+    MCP server validation and tool registration runs as a **deferred startup task**. This means the application starts accepting HTTP requests immediately while MCP connections are established in the background.
+
+### Why Deferred?
+
+Real-time voice applications prioritize fast startup. MCP server validation involves network calls that could delay the `/health` endpoint from responding, which would cause load balancers to mark the instance as unhealthy.
+
+```mermaid
+sequenceDiagram
+    participant LB as Load Balancer
+    participant App as Voice Backend
+    participant MCP as MCP Servers
+    
+    App->>App: Core startup (Redis, Speech, AOAI)
+    App->>LB: /health returns 200
+    Note over LB: Instance marked healthy
+    
+    App-->>MCP: (Background) Validate & discover tools
+    MCP-->>App: Tools registered
+    App->>App: mcp_ready = true
+```
+
+### Readiness Endpoints
+
+| Endpoint | Purpose | When to Use |
+|:---------|:--------|:------------|
+| `/api/v1/health` | Liveness check | Load balancer probes |
+| `/api/v1/ready` | Full readiness including MCP | Traffic routing decisions |
+| `/api/v1/readiness` | Comprehensive dependency check | Debugging, detailed status |
+
+The `/ready` endpoint returns `ready: true` only when:
+- `deferred_startup_complete` - All deferred tasks finished
+- `warmup_completed` - OpenAI/Speech warmup done
+- `mcp_ready` - MCP servers validated and tools registered
+
+### Required vs Optional MCP Servers
+
+Configure `MCP_REQUIRED_SERVERS` to list servers that **must** be healthy:
+
+```bash
+MCP_ENABLED_SERVERS=cardapi,knowledge,analytics
+MCP_REQUIRED_SERVERS=cardapi  # Only cardapi is critical
+```
+
+- **Required servers** - Failures are logged as errors (but don't block startup)
+- **Optional servers** - Failures are logged as warnings
+
+---
+
 ## Configuration
 
 ### Environment Variables
@@ -471,9 +522,12 @@ MCP_SERVER_KNOWLEDGE_TRANSPORT=http
 | Variable | Default | Description |
 |:---------|:-------:|:------------|
 | `MCP_ENABLED_SERVERS` | `""` | Comma-separated list of servers to auto-load |
+| `MCP_REQUIRED_SERVERS` | `""` | Comma-separated list of servers that must be healthy (errors logged but non-blocking) |
 | `MCP_SERVER_{NAME}_URL` | — | Base URL for the MCP server |
-| `MCP_SERVER_{NAME}_TRANSPORT` | `sse` | Transport type: `sse`, `http`, or `stdio` |
+| `MCP_SERVER_{NAME}_TRANSPORT` | `streamable-http` | Transport type: `streamable-http`, `sse`, `http`, or `stdio` |
 | `MCP_SERVER_{NAME}_TIMEOUT` | `30` | Connection timeout in seconds |
+| `MCP_SERVER_{NAME}_AUTH_ENABLED` | `false` | Whether EasyAuth authentication is enabled |
+| `MCP_SERVER_{NAME}_APP_ID` | `""` | Azure AD App ID for EasyAuth token acquisition |
 | `MCP_SERVER_TIMEOUT` | `30` | Global default timeout |
 
 ### Agent YAML Configuration
@@ -669,19 +723,41 @@ For servers requiring user-delegated authorization (On-Behalf-Of flows).
 
 ## Transport Protocols
 
-MCP supports three transport mechanisms, each suited to different use cases.
+MCP supports multiple transport mechanisms, each suited to different use cases.
 
 ### Comparison
 
 | Transport | Best For | Connection | Latency |
 |:----------|:---------|:-----------|:--------|
-| :material-broadcast: **SSE** | Streaming, long-lived connections | Persistent | Lower |
-| :material-swap-horizontal: **HTTP** | Simple requests, serverless | Per-request | Higher |
+| :material-broadcast: **STREAMABLE_HTTP** | Production deployments (recommended) | Per-request with streaming | Medium |
+| :material-broadcast: **SSE** | Streaming, long-lived connections (legacy) | Persistent | Lower |
+| :material-swap-horizontal: **HTTP** | Simple requests, alias for streamable-http | Per-request | Medium |
 | :material-console: **STDIO** | Local CLI tools, development | Process | Lowest |
 
-### SSE (Server-Sent Events)
+!!! info "Per MCP Spec 2025-11-25"
+    The `streamable-http` transport is now the recommended protocol for deployed MCP servers. SSE is still supported but considered legacy. The `http` type is an alias for `streamable-http`.
 
-Best for production deployments with streaming responses.
+### Streamable HTTP (Recommended)
+
+Best for production deployments. Per MCP spec 2025-11-25, this is now the recommended transport.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#34a853'}}}%%
+sequenceDiagram
+    participant C as Client
+    participant S as MCP Server
+    
+    C->>S: GET /health (connection check)
+    S->>C: 200 OK
+    C->>S: GET /tools/list (discovery)
+    S->>C: Tool schemas
+    C->>S: GET /tools/{name}?args (execution)
+    S->>C: Tool result JSON
+```
+
+### SSE (Server-Sent Events) - Legacy
+
+Still supported for streaming responses and long-lived connections.
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#4285f4'}}}%%
@@ -698,9 +774,9 @@ sequenceDiagram
     deactivate S
 ```
 
-### HTTP (Request/Response)
+### HTTP Alias
 
-Best for simple integrations and serverless functions.
+The `http` transport type is an alias for `streamable-http` for backward compatibility.
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#34a853'}}}%%
