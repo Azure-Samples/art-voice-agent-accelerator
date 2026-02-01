@@ -258,6 +258,11 @@ def get_mcp_server_config(server_name: str) -> dict:
     """
     name_upper = server_name.upper()
     url = os.getenv(f"MCP_SERVER_{name_upper}_URL", "")
+    
+    # Fallback to legacy env var for cardapi
+    if not url and name_upper == "CARDAPI":
+        url = os.getenv("CARDAPI_MCP_URL", "")
+    
     if not url:
         return {}
 
