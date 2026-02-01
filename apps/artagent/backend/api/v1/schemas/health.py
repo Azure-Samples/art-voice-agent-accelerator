@@ -18,8 +18,10 @@ class MCPServerStatus(BaseModel):
         description="Server health status",
         json_schema_extra={"example": "healthy", "enum": ["healthy", "unhealthy", "unreachable", "error"]},
     )
-    url: str = Field(..., description="Server URL", example="http://cardapi-mcp:80")
+    url: str = Field(..., description="Server URL", example="http://cardapi-mcp:80/mcp")
+    transport: str = Field(default="streamable-http", description="MCP transport protocol", example="streamable-http")
     tools_count: int = Field(default=0, description="Number of tools discovered", example=4)
+    tool_names: list[str] = Field(default_factory=list, description="Names of discovered tools", example=["lookup_decline_code", "search_decline_codes"])
     error: str | None = Field(None, description="Error message if unhealthy", example=None)
 
     model_config = ConfigDict(
@@ -27,8 +29,10 @@ class MCPServerStatus(BaseModel):
             "example": {
                 "name": "cardapi",
                 "status": "healthy",
-                "url": "http://cardapi-mcp:80",
+                "url": "http://cardapi-mcp:80/mcp",
+                "transport": "streamable-http",
                 "tools_count": 4,
+                "tool_names": ["lookup_decline_code", "search_decline_codes", "get_all_decline_codes", "get_decline_codes_metadata"],
                 "error": None,
             }
         }
@@ -236,8 +240,10 @@ class ReadinessResponse(BaseModel):
                 "cardapi": {
                     "name": "cardapi",
                     "status": "healthy",
-                    "url": "http://cardapi-mcp:80",
+                    "url": "http://cardapi-mcp:80/mcp",
+                    "transport": "streamable-http",
                     "tools_count": 4,
+                    "tool_names": ["lookup_decline_code", "search_decline_codes", "get_all_decline_codes", "get_decline_codes_metadata"],
                     "error": None,
                 }
             }
@@ -274,8 +280,10 @@ class ReadinessResponse(BaseModel):
                     "cardapi": {
                         "name": "cardapi",
                         "status": "healthy",
-                        "url": "http://cardapi-mcp:80",
+                        "url": "http://cardapi-mcp:80/mcp",
+                        "transport": "streamable-http",
                         "tools_count": 4,
+                        "tool_names": ["lookup_decline_code", "search_decline_codes"],
                         "error": None,
                     }
                 },

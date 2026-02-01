@@ -429,6 +429,113 @@ async def health_check(request: Request) -> HealthResponse:
     )
 
 
+class ReadyResponse(BaseModel):
+    """Response for the /ready endpoint."""
+
+    ready: bool
+    timestamp: float
+    deferred_startup_complete: bool
+    warmup_completed: bool
+    mcp_ready: bool
+    details: dict[str, Any] | None = None
+
+
+@router.get(
+    "/ready",
+    response_model=ReadyResponse,
+    summary="Application Ready Check",
+    description="""
+    Quick check if the application is fully ready to handle requests.
+    
+    Unlike /health (which returns 200 as soon as the server is running), /ready
+    checks if background warmup tasks have completed:
+    - OpenAI connection warmup
+    - Speech token pre-fetch
+    - MCP server validation and tool discovery
+    
+    Use this endpoint when you want to wait for optimal performance before
+    routing traffic. The app will still function if /ready returns false,
+    but the first few requests may have higher latency.
+    
+    For Kubernetes:
+    - Use /health for liveness probes
+    - Use /ready for readiness probes (optional - see notes below)
+    
+    Note: Since deferred tasks are non-critical optimizations, you may choose
+    to use /health for both probes and accept slightly higher latency on early requests.
+    """,
+    tags=["Health"],
+    responses={
+        200: {
+            "description": "Application ready status",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "fully_ready": {
+                            "summary": "All warmup complete",
+                            "value": {
+                                "ready": True,
+                                "timestamp": 1691668800.0,
+                                "deferred_startup_complete": True,
+                                "warmup_completed": True,
+                                "mcp_ready": True,
+                                "details": {
+                                    "warmup_results": {"openai": True, "tts_pool": 3, "stt_pool": 2},
+                                    "mcp_servers": {},
+                                },
+                            },
+                        },
+                        "warming_up": {
+                            "summary": "Background warmup in progress",
+                            "value": {
+                                "ready": False,
+                                "timestamp": 1691668800.0,
+                                "deferred_startup_complete": False,
+                                "warmup_completed": False,
+                                "mcp_ready": False,
+                                "details": None,
+                            },
+                        },
+                    }
+                }
+            },
+        },
+    },
+)
+async def ready_check(request: Request) -> ReadyResponse:
+    """
+    Check if application is fully warmed up and ready for optimal performance.
+    
+    This is a fast, non-blocking check of deferred startup completion status.
+    """
+    deferred_complete = getattr(request.app.state, "deferred_startup_complete", False)
+    warmup_completed = getattr(request.app.state, "warmup_completed", False)
+    mcp_ready = getattr(request.app.state, "mcp_ready", False)
+
+    # Application is "ready" when all deferred tasks have completed
+    is_ready = deferred_complete and warmup_completed and mcp_ready
+
+    details = None
+    if is_ready:
+        warmup_results = getattr(request.app.state, "warmup_results", {})
+        mcp_status = getattr(request.app.state, "mcp_servers_status", {})
+        deferred_results = getattr(request.app.state, "deferred_startup_results", {})
+        details = {
+            "warmup_results": warmup_results,
+            "mcp_servers": mcp_status,
+            "deferred_results": deferred_results,
+        }
+
+    return ReadyResponse(
+        ready=is_ready,
+        timestamp=time.time(),
+        deferred_startup_complete=deferred_complete,
+        warmup_completed=warmup_completed,
+        mcp_ready=mcp_ready,
+        details=details,
+    )
+
+
 @router.get(
     "/readiness",
     response_model=ReadinessResponse,
@@ -604,7 +711,9 @@ async def readiness_check(
                 name=name,
                 status=info.get("status", "unknown"),
                 url=info.get("url", ""),
+                transport=info.get("transport", "streamable-http"),
                 tools_count=info.get("tools_count", 0),
+                tool_names=info.get("tool_names", []),
                 error=info.get("error"),
             )
             for name, info in mcp_servers_raw.items()
