@@ -246,7 +246,7 @@ if [[ -z "$cardapi_url" ]]; then
         cardapi_fqdn=$(az containerapp list \
             --resource-group "$resource_group" \
             --query "[?contains(name, 'cardapi')].properties.configuration.ingress.fqdn" \
-            --output tsv 2>/dev/null | head -1 || echo "")
+            --output tsv 2>/dev/null | head -1 | tr -d '\n\r' || echo "")
         if [[ -n "$cardapi_fqdn" ]]; then
             cardapi_url="https://${cardapi_fqdn}"
             info "Discovered CardAPI MCP URL from Azure: $cardapi_url"

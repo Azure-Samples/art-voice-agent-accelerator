@@ -318,8 +318,10 @@ def sync_appconfig_to_env(config_dict: dict[str, Any] | None = None) -> dict[str
             if _env_override_allowed_when_appconfig_loaded(env_var_name):
                 skipped_local += 1
                 continue
-            os.environ[env_var_name] = str(value)
-            synced[env_var_name] = str(value)
+            # Strip whitespace/newlines that may have been introduced during storage
+            clean_value = str(value).strip()
+            os.environ[env_var_name] = clean_value
+            synced[env_var_name] = clean_value
 
     # Single summary line
     endpoint_name = APPCONFIG_ENDPOINT.split("//")[-1].split(".")[0] if APPCONFIG_ENDPOINT else "unknown"
@@ -383,7 +385,7 @@ def get_config_value(
     with _config_lock:
         config_loaded = _config is not None
         if _config and appconfig_key in _config:
-            return str(_config[appconfig_key])
+            return str(_config[appconfig_key]).strip()
 
     # Fall back to environment variable
     if env_var_name:
@@ -395,7 +397,7 @@ def get_config_value(
             return default
         value = os.getenv(env_var_name)
         if value is not None:
-            return value
+            return value.strip()
 
     return default
 
