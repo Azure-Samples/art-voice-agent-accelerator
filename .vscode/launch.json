@@ -11,6 +11,7 @@
             "url": "http://localhost:5173", // Ensure this matches your Vite dev server port
             "webRoot": "${workspaceFolder}/apps/artagent/frontend",
             "sourceMaps": true,
+            "preLaunchTask": "Start Frontend Dev Server",
             "sourceMapPathOverrides": {
             "webpack:///src/*": "${webRoot}/src/*",
             "webpack:///*": "${webRoot}/*"

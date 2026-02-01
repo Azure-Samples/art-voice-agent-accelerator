@@ -137,6 +137,9 @@ async def _bootstrap_mcp_servers() -> dict[str, dict]:
             MCPServerConfig,
             MCPTransport,
         )
+        from apps.artagent.backend.registries.toolstore.mcp.auth import (
+            get_mcp_auth_headers,
+        )
         from apps.artagent.backend.registries.toolstore.registry import (
             register_mcp_tool,
         )
@@ -164,9 +167,15 @@ async def _bootstrap_mcp_servers() -> dict[str, dict]:
     for server in servers:
         name = server["name"]
         url = server["url"]
-        transport = server.get("transport", "sse")
+        transport = server.get("transport", "streamable-http")
         timeout = server.get("timeout", 30.0)
-        
+        auth_enabled = server.get("auth_enabled", False)
+        app_id = server.get("app_id", "")
+        auth_headers: dict[str, str] = {}
+
+        if auth_enabled and app_id:
+            auth_headers = await get_mcp_auth_headers(app_id)
+
         # First check health endpoint
         health_url = f"{url.rstrip('/')}/health"
         is_healthy = False
@@ -176,7 +185,7 @@ async def _bootstrap_mcp_servers() -> dict[str, dict]:
         
         try:
             async with httpx.AsyncClient(timeout=MCP_SERVER_TIMEOUT) as client:
-                response = await client.get(health_url)
+                response = await client.get(health_url, headers=auth_headers)
                 is_healthy = response.status_code == 200
                 
                 if is_healthy:
@@ -221,22 +230,58 @@ async def _bootstrap_mcp_servers() -> dict[str, dict]:
                         server_timeout = timeout
                         
                         # Create executor that calls the MCP server's HTTP tool endpoint
-                        def make_executor(tool_original_name: str, tool_prefixed_name: str, mcp_url: str, mcp_timeout: float):
+                        def make_executor(
+                            tool_original_name: str,
+                            mcp_url: str,
+                            mcp_timeout: float,
+                            mcp_auth_enabled: bool,
+                            mcp_app_id: str,
+                        ):
                             async def executor(args: dict) -> dict:
                                 """Execute MCP tool via HTTP endpoint."""
                                 import httpx
+                                from apps.artagent.backend.registries.toolstore.mcp.auth import (
+                                    get_mcp_auth_headers,
+                                )
                                 
-                                tool_endpoint = f"{mcp_url.rstrip('/')}/tools/{tool_original_name}"
+                                exec_headers: dict[str, str] = {}
+                                if mcp_auth_enabled and mcp_app_id:
+                                    exec_headers = await get_mcp_auth_headers(mcp_app_id)
+                                    if not exec_headers:
+                                        return {
+                                            "success": False,
+                                            "error": "Failed to acquire auth token for MCP server",
+                                        }
+
+                                # Strip /mcp suffix - REST endpoints are at /tools/*, MCP protocol at /mcp
+                                base_url = mcp_url.rstrip("/")
+                                if base_url.endswith("/mcp"):
+                                    base_url = base_url[:-4]
+                                tool_endpoint = f"{base_url}/tools/{tool_original_name}"
                                 
                                 try:
                                     async with httpx.AsyncClient(timeout=mcp_timeout) as client:
-                                        response = await client.get(tool_endpoint, params=args)
+                                        response = await client.get(
+                                            tool_endpoint,
+                                            params=args,
+                                            headers=exec_headers,
+                                        )
                                         
                                         if response.status_code == 200:
                                             data = response.json()
                                             if "result" in data:
                                                 return {"success": True, "result": data["result"]}
                                             return {"success": True, "result": data}
+                                        if response.status_code == 401:
+                                            return {
+                                                "success": False,
+                                                "error": "Authentication failed (401). Token may have expired.",
+                                            }
+                                        if response.status_code == 403:
+                                            return {
+                                                "success": False,
+                                                "error": "Access denied (403). Insufficient permissions.",
+                                            }
                                         else:
                                             return {
                                                 "success": False,
@@ -254,7 +299,13 @@ async def _bootstrap_mcp_servers() -> dict[str, dict]:
                                     }
                             return executor
                         
-                        executor = make_executor(original_name, prefixed_name, server_url, server_timeout)
+                        executor = make_executor(
+                            original_name,
+                            server_url,
+                            server_timeout,
+                            auth_enabled,
+                            app_id,
+                        )
                         
                         schema = {
                             "name": prefixed_name,
@@ -266,6 +317,7 @@ async def _bootstrap_mcp_servers() -> dict[str, dict]:
                             name=prefixed_name,
                             schema=schema,
                             mcp_server=name,
+                            mcp_transport=transport,
                             executor=executor,
                             override=True,
                         )
@@ -285,6 +337,7 @@ async def _bootstrap_mcp_servers() -> dict[str, dict]:
         mcp_status[name] = {
             "status": "healthy" if is_healthy and not error_msg else "unhealthy",
             "url": url,
+            "transport": transport,
             "tools_count": tools_count,
             "tool_names": tool_names,
             "error": error_msg,
