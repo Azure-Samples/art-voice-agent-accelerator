@@ -117,9 +117,6 @@ AZURE_TENANT_ID=${tenant_id}
 # Disable cloud telemetry for local dev (optional)
 # DISABLE_CLOUD_TELEMETRY=true
 
-# Use localhost for Card API when running locally (prevents App Config override)
-CARDAPI_URL=http://localhost:8000
-
 EOF
 
     chmod 644 "$output_file"

@@ -18,8 +18,6 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
-import httpx
-
 from config import (
     get_provider_status,
     refresh_appconfig_cache,
@@ -53,7 +51,6 @@ def _get_config_dynamic():
         "ENABLE_AUTH_VALIDATION": os.getenv("ENABLE_AUTH_VALIDATION", "false").lower()
         in ("true", "1", "yes"),
         "DEFAULT_TTS_VOICE": os.getenv("DEFAULT_TTS_VOICE", ""),
-        "CARDAPI_MCP_URL": os.getenv("CARDAPI_MCP_URL", ""),
     }
 
 
@@ -589,13 +586,6 @@ async def readiness_check(
         component="auth_configuration",
     )
     health_checks.append(auth_config_status)
-
-    # Check Card API (optional dependency)
-    cardapi_status = await fast_ping(
-        _check_cardapi_fast,
-        component="cardapi",
-    )
-    health_checks.append(cardapi_status)
 
     # Determine overall status
     failed_checks = [check for check in health_checks if check.status != "healthy"]
@@ -1145,60 +1135,6 @@ async def _check_auth_configuration_fast() -> ServiceCheck:
             component="auth_configuration",
             status="unhealthy",
             error=f"Auth configuration check failed: {str(e)}",
-            check_time_ms=round((time.time() - start) * 1000, 2),
-        )
-
-
-async def _check_cardapi_fast() -> ServiceCheck:
-    """Fast Card API health check via HTTP ping.
-
-    Checks if the Card API MCP server is reachable and healthy.
-    This is an optional dependency - if not configured, returns healthy with a note.
-    """
-    start = time.time()
-
-    cfg = _get_config_dynamic()
-    cardapi_url = cfg.get("CARDAPI_MCP_URL", "")
-
-    if not cardapi_url:
-        return ServiceCheck(
-            component="cardapi",
-            status="healthy",
-            check_time_ms=round((time.time() - start) * 1000, 2),
-            details="Not configured (CARDAPI_MCP_URL not set)",
-        )
-
-    try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            response = await client.get(f"{cardapi_url.rstrip('/')}/health")
-            response.raise_for_status()
-
-            return ServiceCheck(
-                component="cardapi",
-                status="healthy",
-                check_time_ms=round((time.time() - start) * 1000, 2),
-                details=f"Connected to {cardapi_url}",
-            )
-
-    except httpx.ConnectError:
-        return ServiceCheck(
-            component="cardapi",
-            status="unhealthy",
-            error=f"Cannot connect to Card API at {cardapi_url}",
-            check_time_ms=round((time.time() - start) * 1000, 2),
-        )
-    except httpx.HTTPStatusError as e:
-        return ServiceCheck(
-            component="cardapi",
-            status="unhealthy",
-            error=f"Card API returned status {e.response.status_code}",
-            check_time_ms=round((time.time() - start) * 1000, 2),
-        )
-    except Exception as e:
-        return ServiceCheck(
-            component="cardapi",
-            status="unhealthy",
-            error=f"Card API check failed: {str(e)}",
             check_time_ms=round((time.time() - start) * 1000, 2),
         )
 

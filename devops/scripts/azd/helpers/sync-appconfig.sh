@@ -109,13 +109,30 @@ set_kv() {
     if error_output=$(az appconfig kv set "${cmd_args[@]}" 2>&1); then
         return 0
     else
-        warn "Failed to set: $key"
-        # Show the error message (first line only, cleaned up)
+        fail "Failed to set key: $key"
+        log "  └─ Value attempted: ${value:0:100}..."
+        # Show the full error message for debugging
         local error_msg
-        error_msg=$(echo "$error_output" | head -1 | sed 's/^ERROR: //')
-        [[ -n "$error_msg" ]] && log "  └─ $error_msg"
+        error_msg=$(echo "$error_output" | head -3)
+        [[ -n "$error_msg" ]] && log "  └─ Error: $error_msg"
         return 1
     fi
+}
+
+# Helper to get existing App Config value (for preserving values not in azd env)
+get_appconfig_value() {
+    local key="$1"
+    local label_arg=""
+    [[ -n "$LABEL" ]] && label_arg="--label $LABEL"
+    
+    # shellcheck disable=SC2086
+    az appconfig kv show \
+        --endpoint "$ENDPOINT" \
+        --key "$key" \
+        $label_arg \
+        --auth-mode login \
+        --query value \
+        --output tsv 2>/dev/null || echo ""
 }
 
 # Helper to add Key Vault reference
@@ -206,12 +223,35 @@ if [[ -n "$ai_foundry_project_id" ]]; then
 fi
 
 # CardAPI MCP server endpoint (self-contained, direct Cosmos DB access)
-cardapi_url=$(get_azd_value CARDAPI_CONTAINER_APP_URL)
+# Priority: 1. Environment variable override, 2. azd env value, 3. Existing App Config value
+cardapi_url=""
+
+# Check for environment variable override (from GitHub Actions or local)
+if [[ -n "${MCP_SERVER_CARDAPI_URL:-}" ]]; then
+    cardapi_url="$MCP_SERVER_CARDAPI_URL"
+    info "Using MCP_SERVER_CARDAPI_URL from environment: $cardapi_url"
+else
+    # Try azd env value (from Terraform outputs)
+    cardapi_url=$(get_azd_value CARDAPI_CONTAINER_APP_URL)
+    if [[ -n "$cardapi_url" ]]; then
+        info "Using CARDAPI_CONTAINER_APP_URL from azd env: $cardapi_url"
+    fi
+fi
+
+# If still empty, preserve existing App Config value
+if [[ -z "$cardapi_url" ]]; then
+    existing_url=$(get_appconfig_value "app/mcp/servers/cardapi/url")
+    if [[ -n "$existing_url" ]]; then
+        cardapi_url="$existing_url"
+        info "Preserving existing app/mcp/servers/cardapi/url: $cardapi_url"
+    fi
+fi
+
 if [[ -n "$cardapi_url" ]]; then
     # Backend expects this key to load MCP_SERVER_CARDAPI_URL
     set_kv "app/mcp/servers/cardapi/url" "$cardapi_url" && ((count++)) || ((errors++))
-    # Legacy key for backward compatibility
-    set_kv "app/cardapi/mcp-url" "$cardapi_url"
+else
+    warn "CardAPI MCP URL not configured (set MCP_SERVER_CARDAPI_URL or deploy cardapi service)"
 fi
 
 # CardAPI MCP auth settings (for EasyAuth-protected deployments)

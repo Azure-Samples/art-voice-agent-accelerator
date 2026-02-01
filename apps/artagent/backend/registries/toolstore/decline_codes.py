@@ -80,10 +80,9 @@ def get_mcp_server_url() -> str:
 
     Priority:
     1. MCP_SERVER_CARDAPI_URL environment variable (set by app config loading)
-    2. CARDAPI_MCP_URL environment variable (alternative)
-    3. Localhost default (for local development - matches launch.json MCP Server config)
+    2. Localhost default (for local development - matches launch.json MCP Server config)
     """
-    url = os.getenv("MCP_SERVER_CARDAPI_URL") or os.getenv("CARDAPI_MCP_URL")
+    url = os.getenv("MCP_SERVER_CARDAPI_URL")
     if url:
         return url.rstrip("/")
     return "http://localhost:8080"

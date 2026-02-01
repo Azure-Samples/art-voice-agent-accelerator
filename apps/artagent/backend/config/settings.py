@@ -225,7 +225,7 @@ AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: str = os.getenv("AZURE_AI_FOUNDRY_PROJECT_END
 # ==============================================================================
 
 # Card Decline API MCP Server
-MCP_SERVER_CARDAPI_URL: str = os.getenv("MCP_SERVER_CARDAPI_URL", os.getenv("CARDAPI_MCP_URL", ""))
+MCP_SERVER_CARDAPI_URL: str = os.getenv("MCP_SERVER_CARDAPI_URL", "")
 MCP_SERVER_CARDAPI_TIMEOUT: float = _env_float("MCP_SERVER_CARDAPI_TIMEOUT", 30.0)
 MCP_SERVER_CARDAPI_TRANSPORT: str = os.getenv("MCP_SERVER_CARDAPI_TRANSPORT", "sse")
 MCP_SERVER_CARDAPI_AUTH_ENABLED: bool = _env_bool("MCP_SERVER_CARDAPI_AUTH_ENABLED", False)
@@ -258,10 +258,6 @@ def get_mcp_server_config(server_name: str) -> dict:
     """
     name_upper = server_name.upper()
     url = os.getenv(f"MCP_SERVER_{name_upper}_URL", "")
-    
-    # Fallback to legacy env var for cardapi
-    if not url and name_upper == "CARDAPI":
-        url = os.getenv("CARDAPI_MCP_URL", "")
     
     if not url:
         return {}
