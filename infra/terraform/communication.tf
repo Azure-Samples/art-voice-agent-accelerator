@@ -23,9 +23,22 @@ resource "azurerm_email_communication_service_domain_sender_username" "default" 
 }
 
 
-resource "azurerm_communication_service_email_domain_association" "example" {
-  communication_service_id = azapi_resource.acs.id
-  email_service_domain_id  = azurerm_email_communication_service_domain.managed.id
+# Using azapi_resource_action to link email domain to ACS
+# The azurerm_communication_service_email_domain_association has compatibility issues with azapi-managed ACS
+resource "azapi_update_resource" "acs_email_domain_link" {
+  type        = "Microsoft.Communication/communicationServices@2025-05-01-preview"
+  resource_id = azapi_resource.acs.id
+
+  body = {
+    properties = {
+      linkedDomains = [azurerm_email_communication_service_domain.managed.id]
+    }
+  }
+
+  depends_on = [
+    azapi_resource.acs,
+    azurerm_email_communication_service_domain.managed
+  ]
 }
 
 # ============================================================================
