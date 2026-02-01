@@ -631,6 +631,25 @@ Use the lookup_decline_code tool to get escalation information."""
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+@mcp.custom_route("/tools/list", methods=["GET"])
+async def tools_list(request: Request) -> Response:
+    """List all available tools with their schemas.
+    
+    Returns JSON with tools array containing name, description, and input_schema.
+    Used by the backend for dynamic tool discovery.
+    """
+    tools_data = []
+    for name, tool in mcp._tool_manager._tools.items():
+        # Extract tool info from FastMCP's internal representation
+        tools_data.append({
+            "name": name,
+            "description": tool.description or f"Tool: {name}",
+            "input_schema": tool.parameters if hasattr(tool, 'parameters') else {"type": "object", "properties": {}},
+        })
+    
+    return JSONResponse({"tools": tools_data})
+
+
 @mcp.custom_route("/tools/lookup_decline_code", methods=["GET"])
 async def tools_lookup_decline_code(request: Request) -> Response:
     """REST endpoint for lookup_decline_code tool.
