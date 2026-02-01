@@ -19,10 +19,11 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from aiohttp import web
 from fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 
 # Add workspace root to path for imports
 workspace_root = Path(__file__).resolve().parent.parent.parent.parent
@@ -32,8 +33,12 @@ from utils.ml_logging import get_logger
 
 logger = get_logger(__name__)
 
-# HTTP port for health checks and tool endpoints (80 for Container Apps, 8080 for local)
-HEALTH_PORT = int(os.getenv("MCP_SERVER_PORT", "8080"))
+# HTTP port for MCP server (80 for Container Apps, 8080 for local)
+MCP_PORT = int(os.getenv("MCP_SERVER_PORT", "8080"))
+
+# Transport mode: "stdio" for local CLI, "streamable-http" for deployed HTTP access
+# Per MCP spec 2025-11-25: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports
+MCP_TRANSPORT: Literal["stdio", "streamable-http"] = os.getenv("MCP_TRANSPORT", "streamable-http")  # type: ignore
 
 # Path to local JSON file (for development fallback)
 LOCAL_DATA_FILE = Path(__file__).parent.parent / "database" / "decline_codes_policy_pack.json"
@@ -621,217 +626,132 @@ Use the lookup_decline_code tool to get escalation information."""
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# HTTP HEALTH & TOOL ENDPOINTS (for Container Apps and direct access)
+# HTTP REST TOOL ENDPOINTS (for artagent backend tool executor)
+# These provide REST API access to tools for backwards compatibility
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-async def health_check(request: web.Request) -> web.Response:
+@mcp.custom_route("/tools/lookup_decline_code", methods=["GET"])
+async def tools_lookup_decline_code(request: Request) -> Response:
+    """REST endpoint for lookup_decline_code tool.
+    
+    Query params:
+        code: The decline code to look up (required)
+    """
+    code = request.query_params.get("code")
+    if not code:
+        return JSONResponse({"error": "Missing required parameter: code"}, status_code=400)
+    
+    result = await _lookup_decline_code_impl(code)
+    return JSONResponse({"result": result})
+
+
+@mcp.custom_route("/tools/search_decline_codes", methods=["GET"])
+async def tools_search_decline_codes(request: Request) -> Response:
+    """REST endpoint for search_decline_codes tool.
+    
+    Query params:
+        query: Search query (required)
+        code_type: Optional filter by 'numeric' or 'alphanumeric'
+    """
+    query = request.query_params.get("query")
+    if not query:
+        return JSONResponse({"error": "Missing required parameter: query"}, status_code=400)
+    
+    code_type = request.query_params.get("code_type")
+    result = await _search_decline_codes_impl(query, code_type)
+    return JSONResponse({"result": result})
+
+
+@mcp.custom_route("/tools/get_all_decline_codes", methods=["GET"])
+async def tools_get_all_decline_codes(request: Request) -> Response:
+    """REST endpoint for get_all_decline_codes tool.
+    
+    Query params:
+        code_type: Optional filter by 'numeric' or 'alphanumeric'
+    """
+    code_type = request.query_params.get("code_type")
+    result = await _get_all_decline_codes_impl(code_type)
+    return JSONResponse({"result": result})
+
+
+@mcp.custom_route("/tools/get_decline_codes_metadata", methods=["GET"])
+async def tools_get_decline_codes_metadata(request: Request) -> Response:
+    """REST endpoint for get_decline_codes_metadata tool."""
+    result = await _get_decline_codes_metadata_impl()
+    return JSONResponse({"result": result})
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# HTTP HEALTH ENDPOINTS (for Container Apps probes)
+# Using FastMCP custom_route decorator per MCP spec 2025-11-25
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health_check(request: Request) -> Response:
     """Health check endpoint for Container Apps probes.
     
     Returns status, tools_count, and tool_names for MCP startup validation.
     """
-    # Get registered tools from FastMCP tool manager
     tools = mcp._tool_manager._tools
     tool_names = list(tools.keys())
     
-    response = {
+    return JSONResponse({
         "status": "healthy",
         "tools_count": len(tools),
         "tool_names": tool_names,
-    }
-    return web.json_response(response)
+    })
 
 
-async def tools_list(request: web.Request) -> web.Response:
-    """List all available tools with their full schemas.
-    
-    Returns tool definitions in a format compatible with MCP client discovery.
-    """
-    try:
-        tools = mcp._tool_manager._tools
-        tool_list = []
-        
-        for name, tool in tools.items():
-            # Extract input schema safely
-            input_schema = {"type": "object", "properties": {}}
-            try:
-                if hasattr(tool, 'parameters') and tool.parameters is not None:
-                    input_schema = tool.parameters.model_json_schema()
-                elif hasattr(tool, 'fn'):
-                    # Try to inspect function signature
-                    import inspect
-                    sig = inspect.signature(tool.fn)
-                    props = {}
-                    required = []
-                    for param_name, param in sig.parameters.items():
-                        if param_name == 'self':
-                            continue
-                        param_type = "string"
-                        if param.annotation != inspect.Parameter.empty:
-                            if param.annotation == str or param.annotation == "str":
-                                param_type = "string"
-                            elif param.annotation == int:
-                                param_type = "integer"
-                            elif param.annotation == bool:
-                                param_type = "boolean"
-                        props[param_name] = {"type": param_type}
-                        if param.default == inspect.Parameter.empty:
-                            required.append(param_name)
-                    input_schema = {"type": "object", "properties": props, "required": required}
-            except Exception as e:
-                logger.debug(f"Failed to get schema for tool {name}: {e}")
-            
-            tool_info = {
-                "name": name,
-                "description": getattr(tool, 'description', None) or f"Tool: {name}",
-                "input_schema": input_schema,
-            }
-            tool_list.append(tool_info)
-        
-        return web.json_response({"tools": tool_list})
-    except Exception as e:
-        logger.error(f"tools_list failed: {e}", exc_info=True)
-        return web.json_response({"success": False, "error": str(e)}, status=500)
-
-
-async def tool_lookup_decline_code_http(request: web.Request) -> web.Response:
-    """HTTP wrapper for lookup_decline_code tool."""
-    code = (request.query.get("code") or "").strip()
-    if not code:
-        return web.json_response({"success": False, "message": "code is required"}, status=400)
-
-    try:
-        result = await _lookup_decline_code_impl(code)
-        return web.json_response({"success": True, "result": result})
-    except Exception as e:
-        logger.error(f"lookup_decline_code failed: {e}", exc_info=True)
-        return web.json_response({"success": False, "error": str(e)}, status=500)
-
-
-async def tool_search_decline_codes_http(request: web.Request) -> web.Response:
-    """HTTP wrapper for search_decline_codes tool."""
-    query = (request.query.get("query") or "").strip()
-    code_type = (request.query.get("code_type") or "").strip() or None
-    if not query:
-        return web.json_response({"success": False, "message": "query is required"}, status=400)
-
-    try:
-        result = await _search_decline_codes_impl(query=query, code_type=code_type)
-        return web.json_response({"success": True, "result": result})
-    except Exception as e:
-        logger.error(f"search_decline_codes failed: {e}", exc_info=True)
-        return web.json_response({"success": False, "error": str(e)}, status=500)
-
-
-async def tool_get_all_decline_codes_http(request: web.Request) -> web.Response:
-    """HTTP wrapper for get_all_decline_codes tool."""
-    code_type = (request.query.get("code_type") or "").strip() or None
-    
-    try:
-        result = await _get_all_decline_codes_impl(code_type=code_type)
-        return web.json_response({"success": True, "result": result})
-    except Exception as e:
-        logger.error(f"get_all_decline_codes failed: {e}", exc_info=True)
-        return web.json_response({"success": False, "error": str(e)}, status=500)
-
-
-async def tool_get_decline_codes_metadata_http(request: web.Request) -> web.Response:
-    """HTTP wrapper for get_decline_codes_metadata tool."""
-    try:
-        result = await _get_decline_codes_metadata_impl()
-        return web.json_response({"success": True, "result": result})
-    except Exception as e:
-        logger.error(f"get_decline_codes_metadata failed: {e}", exc_info=True)
-        return web.json_response({"success": False, "error": str(e)}, status=500)
-
-
-async def run_health_server() -> None:
-    """Run the health check and HTTP tool server."""
-    try:
-        http_app = web.Application()
-
-        # Add error handling middleware
-        @web.middleware
-        async def error_middleware(request, handler):
-            try:
-                return await handler(request)
-            except web.HTTPException:
-                raise  # Let aiohttp handle HTTP exceptions
-            except Exception as e:
-                logger.error(f"Unhandled error in {request.path}: {e}", exc_info=True)
-                return web.json_response(
-                    {"success": False, "error": str(e), "path": request.path},
-                    status=500
-                )
-        
-        http_app.middlewares.append(error_middleware)
-
-        # Health endpoints
-        http_app.router.add_get("/health", health_check)
-        http_app.router.add_get("/ready", health_check)
-        http_app.router.add_get("/", health_check)
-
-        # Tool discovery endpoint (for MCP client)
-        http_app.router.add_get("/tools/list", tools_list)
-
-        # Tool endpoints (for direct HTTP access)
-        http_app.router.add_get("/tools/lookup_decline_code", tool_lookup_decline_code_http)
-        http_app.router.add_get("/tools/search_decline_codes", tool_search_decline_codes_http)
-        http_app.router.add_get("/tools/get_all_decline_codes", tool_get_all_decline_codes_http)
-        http_app.router.add_get("/tools/get_decline_codes_metadata", tool_get_decline_codes_metadata_http)
-
-        runner = web.AppRunner(http_app, access_log=None)
-        await runner.setup()
-        site = web.TCPSite(runner, "0.0.0.0", HEALTH_PORT)
-        await site.start()
-        logger.info(f"HTTP server started on port {HEALTH_PORT}")
-
-        # Keep the server running
-        await asyncio.Event().wait()
-    except asyncio.CancelledError:
-        # Graceful shutdown
-        return
-    except Exception as e:
-        logger.error(f"Health server failed: {e}", exc_info=True)
-        await asyncio.sleep(1)
+@mcp.custom_route("/ready", methods=["GET"])
+async def ready_check(request: Request) -> Response:
+    """Readiness check endpoint for Container Apps probes."""
+    tools = mcp._tool_manager._tools
+    return JSONResponse({
+        "status": "ready",
+        "tools_count": len(tools),
+    })
 
 
 async def main() -> None:
-    """Main entry point for the MCP server."""
-    logger.info("Initializing Card Decline Code MCP Server (self-contained)")
+    """Main entry point for the MCP server.
+    
+    Supports two transports per MCP spec 2025-11-25:
+    - stdio: For local CLI usage (set MCP_TRANSPORT=stdio)
+    - streamable-http: For deployed HTTP access (default)
+    
+    See: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports
+    """
+    logger.info(f"Initializing Card Decline Code MCP Server (transport={MCP_TRANSPORT})")
 
     # Load decline codes data at startup
     await load_decline_codes()
 
-    # Start HTTP server (health + tools) in background task
-    health_task = asyncio.create_task(run_health_server())
-
-    def _health_done(task: asyncio.Task) -> None:
+    if MCP_TRANSPORT == "stdio":
+        # stdio transport: for local CLI usage
+        logger.info("Starting MCP server with stdio transport...")
         try:
-            exc = task.exception()
-        except asyncio.CancelledError:
-            return
-        if exc and not isinstance(exc, asyncio.CancelledError):
-            logger.error(f"Health server task ended: {exc}", exc_info=True)
-
-    health_task.add_done_callback(_health_done)
-
-    # Give health server time to start
-    await asyncio.sleep(1)
-
-    # Run FastMCP server on stdio
-    try:
-        logger.info("Starting FastMCP stdio server...")
-        await mcp.run_async(transport="stdio")
-    except EOFError:
-        # stdin/stdout closed; normal when running in container without direct agent connection
-        logger.info("MCP server connection closed, waiting for health checks")
-    except Exception as e:
-        logger.error(f"MCP server error: {str(e)}", exc_info=True)
-
-    # Keep the container running by waiting on the health server
-    logger.info("MCP container keeping health server alive")
-    await asyncio.Event().wait()
+            await mcp.run_async(transport="stdio", show_banner=False)
+        except EOFError:
+            logger.info("MCP stdio connection closed")
+        except Exception as e:
+            logger.error(f"MCP stdio server error: {e}", exc_info=True)
+            raise
+    else:
+        # Streamable HTTP transport: for deployed HTTP access
+        # This serves the MCP protocol AND health endpoints on the same port
+        logger.info(f"Starting MCP server with streamable-http transport on port {MCP_PORT}...")
+        try:
+            await mcp.run_http_async(
+                transport="streamable-http",
+                host="0.0.0.0",
+                port=MCP_PORT,
+                show_banner=False,
+            )
+        except Exception as e:
+            logger.error(f"MCP HTTP server error: {e}", exc_info=True)
+            raise
 
 
 if __name__ == "__main__":
@@ -840,5 +760,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("MCP server shut down by user")
     except Exception as e:
-        logger.error(f"MCP server crashed: {str(e)}", exc_info=True)
+        logger.error(f"MCP server crashed: {e}", exc_info=True)
         exit(1)
