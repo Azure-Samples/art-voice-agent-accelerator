@@ -460,6 +460,12 @@ MCP_SERVER_KNOWLEDGE_URL=http://kb-mcp:8080
 MCP_SERVER_KNOWLEDGE_TRANSPORT=http
 ```
 
+!!! note "Legacy CardAPI variables removed"
+    Use **only** `MCP_SERVER_*` variables for CardAPI tooling.
+
+    - ✅ Set: `MCP_SERVER_CARDAPI_URL` (and optional `MCP_SERVER_CARDAPI_TRANSPORT`)
+    - ❌ Do not use: `CARDAPI_URL`, `CARDAPI_MCP_URL` (ignored by the backend)
+
 ### Settings Reference
 
 | Variable | Default | Description |
