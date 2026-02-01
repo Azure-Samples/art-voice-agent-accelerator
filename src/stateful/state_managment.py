@@ -1396,10 +1396,17 @@ class MemoManager:
                 "parameters": tool_info.input_schema,
             }
 
+            mcp_transport = None
+            session = self._mcp_manager._sessions.get(tool_info.server_name)
+            if session:
+                transport = session.config.transport
+                mcp_transport = transport.value if hasattr(transport, "value") else str(transport)
+
             register_mcp_tool(
                 name=tool_name,
                 schema=schema,
                 mcp_server=tool_info.server_name,
+                mcp_transport=mcp_transport,
                 executor=executor,
                 override=True,
             )

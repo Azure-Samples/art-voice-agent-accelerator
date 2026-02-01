@@ -237,7 +237,15 @@ def register_aoai_step(manager: LifecycleManager, app: FastAPI) -> None:
 
 
 def register_warmup_step(manager: LifecycleManager, app: FastAPI) -> None:
-    """Register the connection warmup step (non-blocking)."""
+    """Register the connection warmup step (deferred - runs in background).
+    
+    This step warms OpenAI and speech connections to reduce first-request latency.
+    Since it's deferred, the app starts accepting requests immediately while
+    warmup continues in the background.
+    """
+    # Initialize state so /ready endpoint can check before deferred task runs
+    app.state.warmup_completed = False
+    app.state.warmup_results = {}
 
     async def start() -> None:
         warmup_tasks = []
@@ -291,7 +299,7 @@ def register_warmup_step(manager: LifecycleManager, app: FastAPI) -> None:
         app.state.warmup_completed = True
         app.state.warmup_results = warmup_results
 
-    manager.add_step("warmup", start)
+    manager.add_step("warmup", start, deferred=True)
 
 
 # ============================================================================
@@ -432,16 +440,17 @@ def register_agents_step(manager: LifecycleManager, app: FastAPI) -> None:
 
 
 def register_mcp_servers_step(manager: LifecycleManager, app: FastAPI) -> None:
-    """Register the MCP server validation and tool discovery step.
+    """Register the MCP server validation and tool discovery step (deferred).
     
-    Validates that configured MCP servers are reachable at startup,
+    Validates that configured MCP servers are reachable,
     discovers their tools, and registers them in the central tool registry
     so agents can reference them by name.
     
     For EasyAuth-protected servers, acquires tokens using Managed Identity.
     
-    Required servers (MCP_REQUIRED_SERVERS) must be healthy or startup fails.
-    Optional servers log warnings but continue.
+    Since this is a deferred step, MCP tool availability is not guaranteed
+    immediately at startup. Required servers are still validated but failures
+    are logged as errors rather than blocking startup.
     """
     import httpx
     from apps.artagent.backend.config.settings import (
@@ -463,16 +472,22 @@ def register_mcp_servers_step(manager: LifecycleManager, app: FastAPI) -> None:
         unregister_mcp_tools,
     )
 
+    # Initialize state so /ready endpoint can check before deferred task runs
+    app.state.mcp_servers_status = {}
+    app.state.mcp_ready = False
+
     async def start() -> None:
         if not MCP_ENABLED_SERVERS:
             logger.info("No MCP servers configured, skipping MCP validation")
             app.state.mcp_servers_status = {}
+            app.state.mcp_ready = True
             return
 
         servers = get_enabled_mcp_servers()
         if not servers:
             logger.info("No MCP servers with valid URLs configured")
             app.state.mcp_servers_status = {}
+            app.state.mcp_ready = True
             return
 
         logger.info(f"Validating {len(servers)} MCP server(s): {[s['name'] for s in servers]}")
@@ -483,7 +498,7 @@ def register_mcp_servers_step(manager: LifecycleManager, app: FastAPI) -> None:
         for server in servers:
             name = server["name"]
             url = server["url"]
-            transport = server.get("transport", "sse")
+            transport = server.get("transport", "streamable-http")
             timeout = server.get("timeout", 30.0)
             auth_enabled = server.get("auth_enabled", False)
             app_id = server.get("app_id", "")
@@ -580,7 +595,11 @@ def register_mcp_servers_step(manager: LifecycleManager, app: FastAPI) -> None:
                                             }
                                     
                                     # Try the /tools/{tool_name} endpoint with GET params
-                                    tool_endpoint = f"{mcp_url.rstrip('/')}/tools/{tool_original_name}"
+                                    # Strip /mcp suffix - REST endpoints are at /tools/*, MCP protocol at /mcp
+                                    base_url = mcp_url.rstrip("/")
+                                    if base_url.endswith("/mcp"):
+                                        base_url = base_url[:-4]
+                                    tool_endpoint = f"{base_url}/tools/{tool_original_name}"
                                     
                                     try:
                                         async with httpx.AsyncClient(timeout=mcp_timeout) as client:
@@ -629,6 +648,7 @@ def register_mcp_servers_step(manager: LifecycleManager, app: FastAPI) -> None:
                                 name=prefixed_name,
                                 schema=schema,
                                 mcp_server=name,
+                                mcp_transport=transport,
                                 executor=executor,
                                 override=True,
                             )
@@ -648,6 +668,7 @@ def register_mcp_servers_step(manager: LifecycleManager, app: FastAPI) -> None:
             mcp_status[name] = {
                 "status": "healthy" if is_healthy and not error_msg else "unhealthy",
                 "url": url,
+                "transport": transport,
                 "tools_count": tools_count,
                 "tool_names": tool_names,
                 "error": error_msg,
@@ -659,17 +680,23 @@ def register_mcp_servers_step(manager: LifecycleManager, app: FastAPI) -> None:
         if total_tools_registered > 0:
             logger.info(f"Registered {total_tools_registered} MCP tool(s) in central registry")
 
-        # Check required servers
+        # Check required servers (log errors but don't block since this is deferred)
         required_set = set(s.lower() for s in MCP_REQUIRED_SERVERS)
+        mcp_all_required_healthy = True
         if required_set:
             for name, status in mcp_status.items():
                 if name.lower() in required_set and status["status"] != "healthy":
-                    raise RuntimeError(
-                        f"Required MCP server '{name}' is not healthy: {status.get('error', 'unknown error')}"
+                    mcp_all_required_healthy = False
+                    logger.error(
+                        f"Required MCP server '{name}' is not healthy: {status.get('error', 'unknown error')}. "
+                        f"MCP tools from this server will be unavailable."
                     )
-            logger.info(f"All required MCP servers healthy: {list(required_set)}")
+            if mcp_all_required_healthy:
+                logger.info(f"All required MCP servers healthy: {list(required_set)}")
 
-    manager.add_step("mcp", start)
+        app.state.mcp_ready = True
+
+    manager.add_step("mcp", start, deferred=True)
 
 
 # ============================================================================
