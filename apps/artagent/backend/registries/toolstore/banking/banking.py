@@ -712,7 +712,8 @@ async def _delete_esign_code(session_id: str, client_id: str) -> None:
 
 async def get_user_profile(args: dict[str, Any]) -> dict[str, Any]:
     """Get customer profile from Cosmos DB."""
-    client_id = (args.get("client_id") or "").strip()
+    # Prefer session-injected _client_id over LLM-provided client_id
+    client_id = (args.get("_client_id") or args.get("client_id") or "").strip()
 
     if not client_id:
         return {"success": False, "message": "client_id is required."}
@@ -727,7 +728,8 @@ async def get_user_profile(args: dict[str, Any]) -> dict[str, Any]:
 
 async def get_account_summary(args: dict[str, Any]) -> dict[str, Any]:
     """Get account summary with balances and routing info."""
-    client_id = (args.get("client_id") or "").strip()
+    # Prefer session-injected _client_id over LLM-provided client_id
+    client_id = (args.get("_client_id") or args.get("client_id") or "").strip()
 
     if not client_id:
         return {"success": False, "message": "client_id is required."}
@@ -799,7 +801,9 @@ async def get_account_summary(args: dict[str, Any]) -> dict[str, Any]:
 
 async def get_recent_transactions(args: dict[str, Any]) -> dict[str, Any]:
     """Get recent transactions from user profile or fallback to mock data."""
-    client_id = (args.get("client_id") or "").strip()
+    # Prefer session-injected _client_id over LLM-provided client_id
+    # LLM may hallucinate or provide placeholder values
+    client_id = (args.get("_client_id") or args.get("client_id") or "").strip()
     limit = args.get("limit", 10)
 
     if not client_id:
@@ -937,7 +941,8 @@ async def get_card_details(args: dict[str, Any]) -> dict[str, Any]:
 
 async def refund_fee(args: dict[str, Any]) -> dict[str, Any]:
     """Process fee refund."""
-    client_id = (args.get("client_id") or "").strip()
+    # Prefer session-injected _client_id over LLM-provided client_id
+    client_id = (args.get("_client_id") or args.get("client_id") or "").strip()
     amount = args.get("amount", 0)
     reason = (args.get("reason") or "courtesy refund").strip()
 
@@ -956,7 +961,8 @@ async def refund_fee(args: dict[str, Any]) -> dict[str, Any]:
 
 async def send_card_agreement(args: dict[str, Any]) -> dict[str, Any]:
     """Send card agreement email with verification code and store in session-scoped Redis for MFA."""
-    client_id = (args.get("client_id") or "").strip()
+    # Prefer session-injected _client_id over LLM-provided client_id
+    client_id = (args.get("_client_id") or args.get("client_id") or "").strip()
     product_id = (args.get("card_product_id") or "").strip()
     session_id = args.get("session_id", "default")
 
@@ -1097,7 +1103,8 @@ Contoso Bank
 
 async def verify_esignature(args: dict[str, Any]) -> dict[str, Any]:
     """Verify e-signature code from session-scoped Redis storage."""
-    client_id = (args.get("client_id") or "").strip()
+    # Prefer session-injected _client_id over LLM-provided client_id
+    client_id = (args.get("_client_id") or args.get("client_id") or "").strip()
     code = (args.get("verification_code") or "").strip()
     session_id = args.get("session_id", "default")
 
@@ -1142,7 +1149,8 @@ async def verify_esignature(args: dict[str, Any]) -> dict[str, Any]:
 
 async def finalize_card_application(args: dict[str, Any]) -> dict[str, Any]:
     """Finalize card application using stored context from session-scoped Redis."""
-    client_id = (args.get("client_id") or "").strip()
+    # Prefer session-injected _client_id over LLM-provided client_id
+    client_id = (args.get("_client_id") or args.get("client_id") or "").strip()
     product_id = (args.get("card_product_id") or "").strip()
     session_id = args.get("session_id", "default")
 
@@ -1445,7 +1453,8 @@ async def evaluate_card_eligibility(args: dict[str, Any]) -> dict[str, Any]:
     Returns:
         Dict with eligibility_status, credit_limit, and next_steps
     """
-    client_id = (args.get("client_id") or "").strip()
+    # Prefer session-injected _client_id over LLM-provided client_id
+    client_id = (args.get("_client_id") or args.get("client_id") or "").strip()
     card_product_id = (args.get("card_product_id") or "").strip()
     session_id = args.get("session_id", "default")
     

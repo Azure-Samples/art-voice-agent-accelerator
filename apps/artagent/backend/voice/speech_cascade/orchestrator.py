@@ -1929,6 +1929,11 @@ class CascadeOrchestratorAdapter:
                                         session_profile = cm.get_value_from_corememory("session_profile")
                                         if session_profile:
                                             args["_session_profile"] = session_profile
+                                        # Always inject _client_id so tools can use the verified value
+                                        # Tools should prefer _client_id over client_id when present
+                                        client_id = cm.get_value_from_corememory("client_id")
+                                        if client_id:
+                                            args["_client_id"] = client_id
                                     result = await agent.execute_tool(tool_name, args)
                                     logger.info(
                                         "Tool executed | name=%s result_keys=%s",

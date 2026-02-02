@@ -21,6 +21,15 @@ Create evaluation scenarios in `tests/evaluation/scenarios/`.
 scenario_name: banking_multi_agent
 description: "Session-based multi-agent evaluation"
 
+# Optional: Create demo user for realistic tool responses
+demo_user:
+  full_name: "Sarah Johnson"
+  email: "sarah.johnson@example.com"
+  phone_number: "+18885551234"
+  scenario: banking  # or "insurance"
+  seed: 42           # Fixed seed for reproducible data
+  persist: false     # Don't persist to database
+
 session_config:
   agents: [BankingConcierge, CardRecommendation]
   start_agent: BankingConcierge
@@ -33,6 +42,38 @@ turns:
       tools_called:
         - verify_client_identity
 ```
+
+## Demo User Configuration
+
+The `demo_user` section creates a realistic user profile before running the scenario.
+This ensures tools like `get_user_profile`, `verify_client_identity`, and `lookup_decline_code`
+have actual data to return.
+
+```yaml
+demo_user:
+  full_name: "Sarah Johnson"     # Required: User's name
+  email: "sarah@example.com"     # Required: User's email
+  phone_number: "+18885551234"   # Optional: E.164 format
+  scenario: banking              # "banking" or "insurance"
+  seed: 42                       # Optional: For reproducible data
+  persist: false                 # Whether to save to database
+  
+  # Insurance-only options:
+  insurance_role: policyholder   # "policyholder" or "cc_rep"
+  insurance_company_name: "..."  # If cc_rep
+  test_scenario: golden_path     # Predefined test scenarios
+```
+
+**Banking demo user includes:**
+- Client ID and SSN last 4 for verification
+- Multiple cards with different names/statuses
+- Recent transactions with decline codes
+- Customer intelligence profile
+
+**Insurance demo user includes:**
+- Policies (auto, home, umbrella)
+- Claims with various statuses
+- Subrogation demands
 
 ## A/B Comparison Template
 

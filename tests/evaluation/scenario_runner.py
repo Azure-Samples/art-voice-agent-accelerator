@@ -74,6 +74,10 @@ import yaml
 
 from tests.evaluation.mocks import MockMemoManager
 from tests.evaluation.recorder import EventRecorder
+from tests.evaluation.demo_user import (
+    create_demo_user,
+    extract_user_context,
+)
 from tests.evaluation.schemas import (
     FoundryExportConfig,
     ModelProfile,
@@ -970,6 +974,61 @@ class ScenarioRunner:
         memo_manager = MockMemoManager(session_id, context_vars)
         if scenario_template:
             memo_manager.set_value_in_corememory("scenario_name", scenario_template)
+
+        # ═══════════════════════════════════════════════════════════════════════
+        # Create demo user if configured
+        # This provides realistic data for tools like get_user_profile,
+        # verify_client_identity, lookup_decline_code, etc.
+        # ═══════════════════════════════════════════════════════════════════════
+        demo_user_config = self.scenario.get("demo_user")
+        demo_user_data = None
+        
+        if demo_user_config:
+            logger.info(f"Creating demo user: {demo_user_config.get('full_name', 'unknown')}")
+            demo_user_data = await create_demo_user(
+                full_name=demo_user_config.get("full_name", "Sarah Johnson"),
+                email=demo_user_config.get("email", "sarah.johnson@example.com"),
+                phone_number=demo_user_config.get("phone_number"),
+                scenario=demo_user_config.get("scenario", "banking"),
+                session_id=session_id,
+                seed=demo_user_config.get("seed"),
+                persist=demo_user_config.get("persist", False),
+                insurance_role=demo_user_config.get("insurance_role"),
+                insurance_company_name=demo_user_config.get("insurance_company_name"),
+                test_scenario=demo_user_config.get("test_scenario"),
+            )
+            
+            if demo_user_data:
+                # Extract context for tools and inject into memo_manager
+                demo_context = extract_user_context(demo_user_data)
+                for key, value in demo_context.items():
+                    memo_manager.set_value_in_corememory(key, value)
+                    context_vars[key] = value
+                
+                # Store the full demo user response for reference
+                memo_manager.set_value_in_corememory("demo_user_response", demo_user_data)
+                
+                # CRITICAL: Store session_profile and client_id for orchestrator injection
+                # The orchestrator injects _session_profile and _client_id into tool args
+                profile = demo_user_data.get("profile", {})
+                if profile:
+                    memo_manager.set_value_in_corememory("session_profile", profile)
+                    memo_manager.set_value_in_corememory("client_id", profile.get("client_id"))
+                    memo_manager.set_value_in_corememory("caller_name", profile.get("full_name"))
+                    # Also store customer_intelligence for profile-aware tools
+                    if profile.get("customer_intelligence"):
+                        memo_manager.set_value_in_corememory(
+                            "customer_intelligence", profile["customer_intelligence"]
+                        )
+                
+                # Log key identifiers for debugging
+                logger.info(
+                    f"Demo user created | client_id={profile.get('client_id')} "
+                    f"ssn_last4={profile.get('company_code_last4')} "
+                    f"cards={len(demo_context.get('demo_cards', []))}"
+                )
+            else:
+                logger.warning("Failed to create demo user - tools may not have realistic data")
 
         # Get agent overrides from scenario
         agent_overrides = self.scenario.get("agent_overrides", [])

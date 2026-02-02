@@ -116,6 +116,52 @@ print('✅ All schemas valid')"
 
 .PHONY: test_evaluation test_evaluation_cov test_evaluation_hooks test_evaluation_metrics test_evaluation_generators test_evaluation_scenarios test_evaluation_schemas
 
+############################################################
+# Evaluation Scenario Runner (Quiet Mode)
+# Purpose: Run evaluation scenarios with minimal log noise
+############################################################
+
+# Run a single evaluation scenario quietly
+# Usage: make eval-run SCENARIO=tests/evaluation/scenarios/session_based/banking_declined_card_verbosity.yaml
+eval-run:
+	@if [ -z "$(SCENARIO)" ]; then \
+		echo "❌ Usage: make eval-run SCENARIO=<path-to-scenario.yaml>"; \
+		exit 1; \
+	fi
+	@echo "🔇 Running evaluation (quiet mode): $(SCENARIO)"
+	@./tests/evaluation/run-eval-quiet.sh run --input $(SCENARIO)
+
+# Run all declined card evaluation scenarios
+eval-declined-card:
+	@echo "🔇 Running all declined card scenarios (quiet mode)"
+	@echo "═══════════════════════════════════════════════════"
+	@for scenario in tests/evaluation/scenarios/session_based/banking_declined_card_*.yaml; do \
+		echo ""; \
+		echo "📋 Running: $$scenario"; \
+		./tests/evaluation/run-eval-quiet.sh run --input "$$scenario" || true; \
+	done
+	@echo ""
+	@echo "✅ All declined card evaluations complete"
+
+# Run a single evaluation with streaming per-turn output
+# Usage: make eval-stream SCENARIO=tests/evaluation/scenarios/session_based/banking_declined_card_verbosity.yaml
+eval-stream:
+	@if [ -z "$(SCENARIO)" ]; then \
+		echo "❌ Usage: make eval-stream SCENARIO=<path-to-scenario.yaml>"; \
+		exit 1; \
+	fi
+	@python tests/evaluation/run-eval-stream.py run --input $(SCENARIO)
+
+# Run all declined card scenarios with streaming output (one at a time)
+eval-stream-declined-card:
+	@echo "📺 Running declined card scenarios with streaming output"
+	@echo "═══════════════════════════════════════════════════════"
+	@for scenario in tests/evaluation/scenarios/session_based/banking_declined_card_*.yaml; do \
+		echo ""; \
+		python tests/evaluation/run-eval-stream.py run --input "$$scenario" || true; \
+	done
+
+.PHONY: eval-run eval-declined-card eval-stream eval-stream-declined-card
 
 # Convenience targets for full code/test quality cycle
 check_and_fix_code_quality: fix_code_quality check_code_quality

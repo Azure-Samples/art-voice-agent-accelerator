@@ -1,33 +1,34 @@
 # yaml-language-server: $schema=../scenario.schema.json
 # ═══════════════════════════════════════════════════════════════════════════════
-# Banking Declined Card Handoff Evaluation
+# Banking Declined Card - Compound Response Evaluation
 # ═══════════════════════════════════════════════════════════════════════════════
-# Tests the flow when a customer reports a declined card and has multiple cards
-# on their account. Specifically validates:
-# 1. Concierge performs account lookup when user reports decline
-# 2. Concierge asks which card when multiple cards are found
-# 3. Handoff to DeclineSpecialist occurs with correct context
-# 4. DeclineSpecialist responds appropriately after handoff
+# Targets: Agent making multiple tool calls without user interaction
+#
+# Problem Being Captured:
+# - Agent calls get_user_profile → lookup_decline_code → handoff in one turn
+# - Agent doesn't ask clarifying questions, just assumes and acts
+# - Agent chains multiple tool results into one massive response
+#
+# Success Criteria:
+# - Agent calls ONE tool type per turn (lookup OR handoff, not both)
+# - Agent asks clarifying questions before taking action
+# - Agent gives user opportunity to guide the conversation
 # ═══════════════════════════════════════════════════════════════════════════════
 
-scenario_name: banking_declined_card_handoff
+scenario_name: banking_declined_card_compound_response
 description: |
-  Test multi-card declined transaction flow: Concierge identifies multiple cards,
-  asks user which one, then hands off to DeclineSpecialist. Validates that the
-  DeclineSpecialist responds after receiving the handoff.
+  Test that agents don't compound multiple tool calls into single turns.
+  Validates turn-taking discipline: agent should ask, wait, then act.
+  NOT: agent asks + acts + hands off in one breath.
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Demo User Configuration
-# Creates a realistic user profile with cards, transactions, etc.
-# Tools like get_user_profile and verify_client_identity use this data.
-# ═══════════════════════════════════════════════════════════════════════════════
+# Demo user with banking profile for realistic tool responses
 demo_user:
   full_name: "Sarah Johnson"
   email: "sarah.johnson@example.com"
   phone_number: "+18885551234"
   scenario: banking
-  seed: 42  # Fixed seed for reproducible test data
-  persist: false  # Don't persist to database for eval runs
+  seed: 42
+  persist: false
 
 session_config:
   agents:
@@ -35,7 +36,6 @@ session_config:
     - DeclineSpecialist
 
   start_agent: BankingConcierge
-
   handoff_type: announced
 
   handoffs:
@@ -48,7 +48,6 @@ session_config:
         Transfer to DeclineSpecialist when the customer:
         - Reports a declined card transaction
         - Asks why their card was declined
-        - Needs help resolving a declined purchase
 
     - from: DeclineSpecialist
       to: BankingConcierge
@@ -68,7 +67,6 @@ session_config:
     institution_name: "Contoso Bank"
     industry: "banking"
 
-# Model overrides for consistent evaluation
 agent_overrides:
   - agent: BankingConcierge
     model_override:
@@ -83,116 +81,112 @@ agent_overrides:
       max_tokens: 500
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Test Turns
+# Compound Response Test Turns
 # ═══════════════════════════════════════════════════════════════════════════════
-# Flow under test:
-# 1. User reports declined card → Concierge looks up account, finds multiple cards
-# 2. User specifies which card → Concierge hands off to DeclineSpecialist
-# 3. DeclineSpecialist should respond with decline information
-#
-# BEHAVIOR CHECKS (UX issues to capture):
-# - Verbosity: Responses should be voice-appropriate (<100 tokens typical)
-# - Turn discipline: Agent should NOT compound tool calls + handoff + response
-# - Handoff boundary: Specialist should NOT immediately explain without user ask
+# Tests that agent doesn't chain tool calls inappropriately.
+# Uses tools_forbidden to prevent premature actions.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 turns:
-  # Turn 1: User reports declined card (identity already verified in prior context)
-  - turn_id: turn_1
-    user_input: "Hi, my card was just declined. Can you tell me why?"
+  # Turn 1: Vague complaint - agent should NOT immediately look up decline codes
+  - turn_id: turn_1_vague_complaint
+    user_input: "I have a problem with my card."
     expectations:
-      # Concierge should look up user profile to see their cards
-      tools_called:
-        - get_user_profile
+      tools_called: []
       tools_optional:
+        - get_user_profile
         - verify_client_identity
-      # Should NOT hand off yet - needs to determine which card
-      # Should NOT already look up decline codes (premature)
+      # Should NOT already be looking up decline codes or handing off
       tools_forbidden:
         - lookup_decline_code
         - handoff_decline_specialist
         - handoff_to_agent
+        - get_recent_transactions
       no_handoff: true
       response_constraints:
-        # Should ask which card since user has multiple
+        # Should ask what kind of problem
+        must_ask_for:
+          - "help"
+        max_tokens: 60
+
+  # Turn 2: User says declined, but doesn't specify which card
+  - turn_id: turn_2_declined_no_card_specified
+    user_input: "It got declined at the store."
+    expectations:
+      tools_called:
+        - get_user_profile
+      # Should NOT immediately hand off - need to know which card first
+      tools_forbidden:
+        - handoff_decline_specialist
+        - handoff_to_agent
+      no_handoff: true
+      response_constraints:
         must_ask_for:
           - "which card"
-        # Voice-appropriate response length
         max_tokens: 80
-        # Should NOT pre-explain decline reasons
-        must_not_include:
-          - "common reasons"
-          - "usually means"
 
-  # Turn 2: User specifies the Marketplace card
-  - turn_id: turn_2
-    user_input: "The Marketplace one."
+  # Turn 3: User identifies card - THIS is when handoff should happen
+  # Agent should NOT also call lookup_decline_code
+  - turn_id: turn_3_card_identified_handoff_only
+    user_input: "My Rewards card, the gold one."
     expectations:
-      # Now should trigger handoff to DeclineSpecialist
-      # Model may use generic handoff_to_agent or specific handoff_decline_specialist
       tools_called: []
       tools_optional:
         - handoff_decline_specialist
         - handoff_to_agent
-      # Should NOT look up decline info - that's specialist's job
+      # Should NOT look up decline info - that's DeclineSpecialist's job
       tools_forbidden:
         - lookup_decline_code
         - get_recent_transactions
       handoff:
         to_agent: DeclineSpecialist
       response_constraints:
-        # Brief handoff announcement
         max_tokens: 60
-        # Should NOT include specialist's response
-        must_not_include:
-          - "I can see"
-          - "decline code"
-          - "transaction"
 
-  # Turn 3: Verify DeclineSpecialist responds appropriately
-  - turn_id: turn_3
-    user_input: "What does that decline code 55 mean?"
+  # Turn 4: Now with DeclineSpecialist - user asks why
+  # Should look up code, NOT also recommend solutions in same turn
+  - turn_id: turn_4_why_declined
+    user_input: "Can you tell me why?"
     expectations:
-      # DeclineSpecialist should look up decline information
-      tools_called: []
       tools_optional:
         - lookup_decline_code
-        - search_decline_codes
         - get_recent_transactions
-      # Should stay with DeclineSpecialist, no handoff back
+      # Should NOT already be searching for solutions
+      tools_forbidden:
+        - search_knowledge_base
+        - unblock_card
+        - request_limit_increase
       no_handoff: true
       response_constraints:
-        # Direct answer, not a comprehensive explanation
-        max_tokens: 120
-        # Should NOT offer unsolicited advice
+        max_tokens: 100
+        # Should explain the reason, then WAIT for user to ask what to do
         must_not_include:
-          - "I recommend"
+          - "recommend"
+          - "I suggest"
           - "you should"
+          - "next steps"
 
-  # Turn 4: Ask for resolution options
-  - turn_id: turn_4
-    user_input: "What can I do to fix this?"
+  # Turn 5: User asks what to do - NOW recommendations are appropriate
+  - turn_id: turn_5_what_to_do
+    user_input: "What can I do about it?"
     expectations:
       tools_called: []
       tools_optional:
         - search_knowledge_base
-        - get_account_summary
+        - get_card_status
       no_handoff: true
       response_constraints:
-        # One clear recommendation, not a list
         max_tokens: 100
 
-# Evaluation thresholds
 thresholds:
-  min_tool_precision: 0.60
-  min_tool_recall: 0.50
-  min_grounded_ratio: 0.5
+  min_tool_precision: 0.50
+  min_tool_recall: 0.40
+  min_grounded_ratio: 0.4
   max_latency_p95_ms: 10000
 
-# Azure AI Foundry export for detailed analysis
 foundry_export:
   enabled: true
-  output_filename: declined_card_handoff_eval.jsonl
+  output_filename: declined_card_compound_eval.jsonl
   context_source: evidence
   evaluators:
     - id: builtin.relevance
