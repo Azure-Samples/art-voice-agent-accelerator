@@ -516,7 +516,11 @@ def register_mcp_servers_step(manager: LifecycleManager, app: FastAPI) -> None:
                         logger.warning(f"Failed to acquire auth token for MCP server '{name}'")
             
             # First check health endpoint
-            health_url = f"{url.rstrip('/')}/health"
+            # Strip /mcp suffix - health endpoints are at root /health, not /mcp/health
+            base_url = url.rstrip("/")
+            if base_url.endswith("/mcp"):
+                base_url = base_url[:-4]
+            health_url = f"{base_url}/health"
             is_healthy = False
             tools_count = 0
             tool_names: list[str] = []

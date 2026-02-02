@@ -1019,7 +1019,17 @@ class ScenarioRunner:
                 # The orchestrator injects _session_profile and _client_id into tool args
                 profile = demo_user_data.get("profile", {})
                 if profile:
-                    memo_manager.set_value_in_corememory("session_profile", profile)
+                    # Build session_profile with demo_metadata to match what tools expect
+                    # Tools look for _session_profile.demo_metadata.transactions etc.
+                    session_profile = {
+                        **profile,
+                        "demo_metadata": {
+                            "transactions": demo_user_data.get("transactions", []),
+                            "policies": demo_user_data.get("policies"),
+                            "claims": demo_user_data.get("claims"),
+                        },
+                    }
+                    memo_manager.set_value_in_corememory("session_profile", session_profile)
                     memo_manager.set_value_in_corememory("client_id", profile.get("client_id"))
                     memo_manager.set_value_in_corememory("caller_name", profile.get("full_name"))
                     # Also store customer_intelligence for profile-aware tools
@@ -1029,10 +1039,12 @@ class ScenarioRunner:
                         )
                 
                 # Log key identifiers for debugging
+                txn_count = len(demo_user_data.get("transactions", []))
                 logger.info(
                     f"Demo user created | client_id={profile.get('client_id')} "
                     f"ssn_last4={profile.get('company_code_last4')} "
-                    f"cards={len(demo_context.get('demo_cards', []))}"
+                    f"cards={len(demo_context.get('demo_cards', []))} "
+                    f"transactions={txn_count}"
                 )
             else:
                 logger.warning("Failed to create demo user - tools may not have realistic data")

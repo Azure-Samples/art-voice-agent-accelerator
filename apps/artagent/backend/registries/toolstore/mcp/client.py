@@ -154,8 +154,13 @@ class MCPClientSession:
                 return True
 
             try:
+                # Strip /mcp suffix - health endpoints are at root /health, not /mcp/health
+                base_url = self.config.url.rstrip("/")
+                if base_url.endswith("/mcp"):
+                    base_url = base_url[:-4]
+
                 self._client = httpx.AsyncClient(
-                    base_url=self.config.url,
+                    base_url=base_url,
                     timeout=self.config.timeout,
                     headers=self.config.headers,
                 )

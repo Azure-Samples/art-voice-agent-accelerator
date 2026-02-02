@@ -25,13 +25,20 @@ The evaluation framework measures agent performance across multiple dimensions w
 ### Run a Scenario
 
 ```bash
-# Single scenario
-python -m tests.evaluation.cli run \
-  --input tests/evaluation/scenarios/smoke/basic_identity_verification.yaml
+# Interactive CLI (recommended for exploration)
+make eval
 
-# A/B model comparison (auto-detected)
-python -m tests.evaluation.cli run \
-  --input tests/evaluation/scenarios/ab_tests/fraud_detection_comparison.yaml
+# Single scenario with streaming output
+make eval-run SCENARIO=tests/evaluation/scenarios/smoke/basic_identity_verification.yaml
+
+# A/B model comparison
+make eval-run SCENARIO=tests/evaluation/scenarios/ab_tests/fraud_detection_comparison.yaml
+
+# Run all session-based scenarios
+make eval-session
+
+# Run smoke tests
+make eval-smoke
 ```
 
 ### Run via pytest

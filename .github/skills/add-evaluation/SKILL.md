@@ -117,11 +117,14 @@ comparison_metrics:
 2. Create YAML file in appropriate directory
 3. Define turns with user inputs
 4. Add expectations (tools, handoffs, constraints)
-5. Run evaluation (auto-detects scenario vs comparison):
+5. Run evaluation:
 
 ```bash
-python -m tests.evaluation.cli run \
-    --input tests/evaluation/scenarios/session_based/my_scenario.yaml
+# Via Makefile (recommended)
+make eval-run SCENARIO=tests/evaluation/scenarios/session_based/my_scenario.yaml
+
+# Or interactive CLI
+make eval
 ```
 
 ```bash

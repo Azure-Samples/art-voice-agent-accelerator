@@ -164,6 +164,7 @@ class MemoManager:
         self._redis_manager: AzureRedisManager | None = redis_mgr
         self._pending_persist_task: asyncio.Task | None = None
         self._mcp_manager: MCPSessionManager | None = None
+        self._turn_sequence: int = 0  # Track turn segments for tool call boundaries
         now = time.time()
         self.corememory.set("created_at", now)
         self.corememory.set("last_activity", now)
@@ -834,6 +835,48 @@ class MemoManager:
             memory and persist across conversation turns for context.
         """
         return self.corememory.get("tool_outputs", {}).get(tool_name, default)
+
+    # --- TURN SEQUENCE TRACKING ---------------------------------------
+    def advance_turn_sequence(self) -> int:
+        """
+        Increment and return the turn sequence counter.
+
+        Used to generate unique turn segment identifiers after tool calls,
+        ensuring post-tool responses appear as new messages rather than
+        overwriting pre-tool assistant content.
+
+        Returns:
+            int: The new turn sequence number after incrementing.
+
+        Example:
+            ```python
+            # After tool execution completes
+            seq = manager.advance_turn_sequence()
+            new_turn_id = f"{base_turn_id}_s{seq}"
+            ```
+        """
+        self._turn_sequence += 1
+        logger.debug(f"Advanced turn sequence to {self._turn_sequence}")
+        return self._turn_sequence
+
+    def get_turn_sequence(self) -> int:
+        """
+        Get the current turn sequence counter without incrementing.
+
+        Returns:
+            int: The current turn sequence number.
+        """
+        return self._turn_sequence
+
+    def reset_turn_sequence(self) -> None:
+        """
+        Reset the turn sequence counter to zero.
+
+        Typically called when starting a new conversation turn
+        (e.g., after user speaks).
+        """
+        self._turn_sequence = 0
+        logger.debug("Reset turn sequence to 0")
 
     # --- LATENCY ------------------------------------------------------
     def note_latency(self, stage: str, start_t: float, end_t: float) -> None:

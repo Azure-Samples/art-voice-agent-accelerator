@@ -135,11 +135,34 @@ class CascadeSessionScope:
     memo_manager: MemoManager | None = None
     active_agent: str = ""
     turn_id: str = ""
+    _turn_sequence: int = field(default=0, repr=False)  # Track tool call boundaries
+    _base_turn_id: str = field(default="", repr=False)  # Original turn_id before tools
 
     @classmethod
     def get_current(cls) -> CascadeSessionScope | None:
         """Get the current session scope from context variable."""
         return _cascade_session_ctx.get()
+
+    def advance_turn_for_tool(self) -> str:
+        """
+        Advance the turn_id after a tool call to create a new message segment.
+
+        Returns:
+            The new turn_id to use for post-tool responses.
+        """
+        if not self._base_turn_id:
+            self._base_turn_id = self.turn_id or ""
+        self._turn_sequence += 1
+        self.turn_id = f"{self._base_turn_id}_s{self._turn_sequence}"
+        logger.debug(
+            "[TurnAdvance] Cascade turn_id advanced: base=%s, seq=%d, new=%s",
+            self._base_turn_id, self._turn_sequence, self.turn_id
+        )
+        return self.turn_id
+
+    def get_effective_turn_id(self) -> str:
+        """Get the current effective turn_id (which may have been advanced)."""
+        return self.turn_id
 
     @classmethod
     @contextmanager
@@ -1999,6 +2022,12 @@ class CascadeOrchestratorAdapter:
                                 )
                         except Exception:
                             logger.debug("Failed to persist tool results to history", exc_info=True)
+
+                    # Advance turn_id to create a new message segment for post-tool response
+                    # This prevents the UI from overwriting pre-tool assistant content
+                    session_scope = CascadeSessionScope.get_current()
+                    if session_scope:
+                        session_scope.advance_turn_for_tool()
 
                     # Recurse to get LLM follow-up response
                     span.add_event(

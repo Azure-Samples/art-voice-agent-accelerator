@@ -47,6 +47,7 @@ from apps.artagent.backend.voice.shared.config_resolver import resolve_orchestra
 from src.stateful.state_managment import MemoManager
 from apps.artagent.backend.voice import (
     CascadeOrchestratorAdapter,
+    CascadeSessionScope,
     OrchestratorContext,
     get_cascade_orchestrator,
     make_assistant_streaming_envelope,
@@ -589,8 +590,13 @@ async def route_turn(
                 )
                 payload = envelope.setdefault("payload", {})
                 payload.setdefault("message", text)
-                payload["turn_id"] = run_id
-                payload["response_id"] = run_id
+                
+                # Use effective turn_id from CascadeSessionScope if available
+                # This ensures post-tool responses use advanced turn_id
+                session_scope = CascadeSessionScope.get_current()
+                effective_turn_id = session_scope.get_effective_turn_id() if session_scope else run_id
+                payload["turn_id"] = effective_turn_id
+                payload["response_id"] = effective_turn_id
                 payload["status"] = "streaming"
                 payload["sender"] = agent_name
                 payload["active_agent"] = agent_name

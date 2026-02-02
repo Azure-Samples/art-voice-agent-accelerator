@@ -261,6 +261,8 @@ class LiveOrchestrator:
         self._greeting_tasks: set[asyncio.Task] = set()
         self._active_response_id: str | None = None
         self._system_vars: dict[str, Any] = {}
+        # Flag to prevent SESSION_UPDATED from cancelling handoff-triggered responses
+        self._handoff_response_pending: bool = False
 
         # MemoManager for session state continuity (consistent with CascadeOrchestratorAdapter)
         self._memo_manager: MemoManager | None = memo_manager
@@ -1096,6 +1098,15 @@ class LiveOrchestrator:
             except Exception:
                 logger.debug("Failed to emit session update envelope", exc_info=True)
 
+        # If a handoff response was just triggered, DON'T cancel it
+        # The handoff code already called response.create() with the appropriate instructions
+        if self._handoff_response_pending:
+            logger.debug("[Session Updated] Skipping response.cancel() - handoff response pending")
+            self._handoff_response_pending = False
+            if self.audio:
+                await self.audio.start_capture()
+            return
+
         if self.audio:
             await self.audio.stop_playback()
         try:
@@ -1831,11 +1842,52 @@ class LiveOrchestrator:
                             f"Respond immediately without any greeting or introduction."
                         )
 
+                        # CRITICAL FIX: For discrete handoffs, inject the user's question as
+                        # an explicit conversation item. This gives the model a concrete user
+                        # message to respond to, not just additional_instructions context.
+                        # Without this, the model may not generate a response because there's
+                        # no actual user turn in the conversation to respond to.
+                        if user_question and user_question != "general inquiry":
+                            try:
+                                text_part = InputTextContentPart(text=user_question)
+                                user_item = UserMessageItem(content=[text_part])
+                                await self.conn.conversation.item.create(item=user_item)
+                                logger.debug(
+                                    "[Handoff] Injected user question as conversation item: %s",
+                                    user_question[:50] if user_question else "none"
+                                )
+                            except Exception:
+                                logger.debug(
+                                    "[Handoff] Failed to inject user question item", exc_info=True
+                                )
+
                     # Trigger response synchronously - no fire-and-forget background task
                     # This ensures the handoff response is reliably triggered
                     #
                     # Use conn.response.create() with additional_instructions parameter
                     # This APPENDS to the session's system prompt rather than overriding it
+                    #
+                    # Advance turn_id to create a new message segment for the new agent
+                    # This ensures the handoff response appears as a fresh message
+                    if self.messenger:
+                        self.messenger.advance_turn_for_tool()
+
+                    # CRITICAL: Clear pending greeting state BEFORE calling response.create()
+                    # The _switch_to() method sets _pending_greeting, and when session_ready
+                    # event arrives (from session.update()), _handle_session_ready() would try
+                    # to trigger another response via trigger_voicelive_response(). This causes
+                    # "Conversation already has an active response" error.
+                    # We handle the handoff response here with additional_instructions, so we
+                    # must prevent the competing greeting mechanism from also triggering.
+                    self._cancel_pending_greeting_tasks()
+                    self._pending_greeting = None
+                    self._pending_greeting_agent = None
+
+                    # CRITICAL: Set flag to prevent _handle_session_updated from cancelling
+                    # this response. The SESSION_UPDATED event from session.update() arrives
+                    # async and would cancel our handoff response without this guard.
+                    self._handoff_response_pending = True
+
                     with tracer.start_as_current_span(
                         "voicelive.handoff.response_create",
                         kind=trace.SpanKind.SERVER,
@@ -1857,6 +1909,7 @@ class LiveOrchestrator:
                     )
                 except Exception as e:
                     logger.warning("[Handoff] Failed to trigger response: %s", e)
+                    self._handoff_response_pending = False  # Reset flag on failure
 
                 tool_span.set_status(trace.StatusCode.OK)
                 return True
@@ -1886,6 +1939,11 @@ class LiveOrchestrator:
                 # Update session instructions with new context BEFORE triggering response
                 # This ensures the model sees collected slots/tool outputs when formulating its reply
                 await self._update_session_context()
+
+                # Advance turn_id to create a new message segment for post-tool response
+                # This prevents the UI from overwriting pre-tool assistant content
+                if self.messenger:
+                    self.messenger.advance_turn_for_tool()
 
                 with tracer.start_as_current_span(
                     "voicelive.response.create",
