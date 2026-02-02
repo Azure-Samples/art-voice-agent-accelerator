@@ -86,10 +86,13 @@ tools:
   - ship_replacement_card
   - verify_client_identity
   
+  # Email summary (send before fraud escalation or on request)
+  - send_decline_summary_email
+  
   # Handoffs (for escalation or routing)
   - handoff_concierge        # Return to concierge (banking scenario)
   - escalate_human           # Escalate to human agent
-  - handoff_fraud_agent      # For suspected fraud cases
+  - handoff_fraud_agent      # For suspected fraud cases (AFTER asking user consent)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Prompt Configuration

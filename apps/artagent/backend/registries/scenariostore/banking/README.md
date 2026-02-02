@@ -17,26 +17,31 @@ This scenario demonstrates a **private banking voice concierge** that handles hi
 ## Agent Architecture
 
 ```
-                    ┌─────────────────────────────────────┐
-                    │                                     │
-                    ▼                                     │
-              ┌───────────────┐                           │
-              │   Banking     │  ← Entry Point            │
-              │   Concierge   │                           │
-              └───────┬───────┘                           │
-                      │                                   │
-            ┌─────────┴─────────┐                         │
-            │                   │                         │
-            ▼                   ▼                         │
-     ┌──────────────┐   ┌────────────────┐                │
-     │    Card      │   │   Investment   │                │
-     │Recommendation│◄─►│    Advisor     │                │
-     └──────┬───────┘   └───────┬────────┘                │
-            │                   │                         │
-            └─────────┬─────────┘                         │
-                      │                                   │
-                      └───────────────────────────────────┘
-                        (All return to BankingConcierge)
+                         ┌──────────────────────────────────────────────┐
+                         │                                              │
+                         ▼                                              │
+                  ┌───────────────┐                                     │
+                  │   Banking     │  ← Entry Point                      │
+                  │   Concierge   │                                     │
+                  └───────┬───────┘                                     │
+                          │                                             │
+         ┌────────────────┼────────────────┬───────────────┐            │
+         │                │                │               │            │
+         ▼                ▼                ▼               ▼            │
+  ┌──────────────┐ ┌────────────────┐ ┌──────────────┐ ┌──────────┐    │
+  │    Card      │ │   Investment   │ │   Decline    │ │  Fraud   │    │
+  │Recommendation│ │    Advisor     │ │  Specialist  │ │  Agent   │    │
+  └──────┬───────┘ └───────┬────────┘ └──────┬───────┘ └──────────┘    │
+         │                 │                 │                          │
+         │◄───────────────►│                 │                          │
+         │  (bidirectional)                  ▼                          │
+         │                 │          ┌──────────┐                      │
+         │                 │          │  Fraud   │                      │
+         │                 │          │  Agent   │  (fraud escalation)  │
+         │                 │          └──────────┘                      │
+         │                 │                                            │
+         └─────────────────┴────────────────────────────────────────────┘
+                    (CardRec & InvestAdv return to BankingConcierge)
 ```
 
 ### Agent Roles
@@ -46,6 +51,8 @@ This scenario demonstrates a **private banking voice concierge** that handles hi
 | **BankingConcierge** | Entry point, triage, general inquiries | Account summaries, transactions, fee resolution |
 | **CardRecommendation** | Credit card specialist | Product matching, applications, e-sign |
 | **InvestmentAdvisor** | Retirement planning | 401(k) rollovers, tax impact, IRA guidance |
+| **DeclineSpecialist** | Decline resolution | Decline code lookup, customer scripts, resolution |
+| **FraudAgent** | Fraud prevention | Suspicious activity, disputes, card blocks |
 
 ## 🎯 Test Scenarios
 
@@ -104,7 +111,72 @@ This scenario demonstrates a **private banking voice concierge** that handles hi
 - ✅ E-signature workflow with email delivery
 - ✅ Application finalization with instant decision
 
-### Scenario C: 401(k) Rollover Consultation
+---
+
+### Scenario C: Declined Transaction Resolution (Happy Path) 🎯
+
+> **Persona**: Marcus, a customer whose debit card was declined at a store. Full flow demonstrating decline lookup, account check, and resolution.
+
+#### Setup
+1. Create demo profile: `scenario=banking`
+2. Note the SSN4 (e.g., `9999`) for verification
+
+#### Complete Script (BankingConcierge → DeclineSpecialist → Multiple Declines → FraudAgent → Back)
+
+| Turn | Agent | Caller Says | Agent Does | Tool Triggered |
+|------|-------|-------------|------------|----------------|
+| 1 | **BankingConcierge** | "Hi, my debit card got declined" | Investigates first | `get_recent_transactions` ✓ |
+| 2 | **BankingConcierge** | — | Found 2 declines, lists them | — |
+| 3 | **BankingConcierge** | — | Asks: "Which one are you asking about?" | — |
+| 4 | **BankingConcierge** | "The latest one" | **HANDOFF** to DeclineSpecialist | `handoff_decline_specialist(code=87)` |
+| 5 | **DeclineSpecialist** | — | Greets + immediately looks up code | `cardapi_lookup_decline_code(87)` ✓ |
+| 6 | **DeclineSpecialist** | — | Explains: "Magnetic stripe damaged. I can order replacement." | — |
+| 7 | **DeclineSpecialist** | "Yes please" | Orders replacement card | `ship_replacement_card` ✓ |
+| 8 | **DeclineSpecialist** | — | "Done! Anything else about your card?" | — |
+| 9 | **DeclineSpecialist** | "What about my Contoso Electronics decline?" | **Stays in DeclineSpecialist** - looks up second code | `cardapi_lookup_decline_code(0W-0Z)` ✓ |
+| 10 | **DeclineSpecialist** | — | Explains: "This was fraud protection. Do you recognize that transaction?" | — |
+| 11 | **DeclineSpecialist** | "No, I didn't try to buy that" | Offers fraud help + asks consent | — |
+| 12 | **DeclineSpecialist** | — | "I can connect you with our fraud team. Would you like that?" | — |
+| 13 | **DeclineSpecialist** | "Yes" | **HANDOFF** to FraudAgent (with consent) | `handoff_fraud_agent(reason, context)` |
+| 14 | **FraudAgent** | — | Greets: "You're with the Fraud Prevention desk..." | — |
+| 15 | **FraudAgent** | — | Reviews transactions | `analyze_recent_transactions` ✓ |
+| 16 | **FraudAgent** | "Block my card please" | Blocks card immediately | `block_card_emergency` ✓ |
+| 17 | **FraudAgent** | — | Creates fraud case | `create_fraud_case` ✓ |
+| 18 | **FraudAgent** | — | Ships replacement | `ship_replacement_card` ✓ |
+| 19 | **FraudAgent** | — | Sends confirmation email | `send_fraud_case_email` ✓ |
+| 20 | **FraudAgent** | "That's all" | Returns to concierge | `handoff_concierge` |
+| 21 | **BankingConcierge** | — | "Welcome back. Anything else?" | — |
+
+#### Key Flow Improvements:
+1. **BankingConcierge investigates first** - calls `get_recent_transactions` before handoff
+2. **DeclineSpecialist handles ALL decline inquiries** - does NOT hand off to itself for second decline
+3. **Fraud escalation requires consent** - explains, asks, THEN transfers
+4. **Full resolution loop** - returns to BankingConcierge when done
+
+#### Decline Codes Reference (from CardAPI MCP Server)
+
+| Code | Name | Customer Script | Orchestrator Action |
+|------|------|-----------------|---------------------|
+| **51** | Insufficient Funds | "Your available balance was lower than the transaction amount..." | Check account, offer overdraft |
+| **14** | Invalid Card Number | "The card number entered doesn't match our records..." | Verify card, reissue if needed |
+| **54** | Expired Card | "Your card has passed its expiration date..." | Offer instant digital card |
+| **61** | Exceeds Withdrawal Limit | "This purchase would exceed your daily spending limit..." | Offer temporary limit increase |
+| **43** | Stolen Card | "For your security, we need to verify this transaction..." | **Transfer to FraudAgent** |
+| **59** | Suspected Fraud | "Our fraud protection system flagged this..." | **Transfer to FraudAgent** |
+
+#### Business Rules Tested
+- ✅ Identity verification before accessing decline info
+- ✅ Decline code lookup via MCP server (cardapi)
+- ✅ Customer service scripts from policy pack
+- ✅ Account balance/transaction cross-check
+- ✅ Fraud escalation when suspicious activity detected
+- ✅ Seamless handoff DeclineSpecialist → FraudAgent
+- ✅ Emergency card block + replacement shipping
+- ✅ Return to BankingConcierge when resolved
+
+---
+
+### Scenario D: 401(k) Rollover Consultation
 
 > **Persona**: David, just left his job and needs help with his old 401(k).
 
@@ -214,17 +286,113 @@ This scenario demonstrates a **private banking voice concierge** that handles hi
 | `calculate_tax_impact` | Tax estimates by scenario |
 | `search_rollover_guidance` | IRS rules, limits |
 
+### Decline Specialist Tools (MCP: cardapi)
+
+| Tool | Purpose | Returns |
+|------|---------|---------|
+| `cardapi_lookup_decline_code` | Look up a specific decline code | Code details, customer script, orchestrator action |
+| `cardapi_search_decline_codes` | Search codes by keyword | Matching decline codes |
+| `cardapi_get_all_decline_codes` | Get all available codes | Complete decline code list |
+| `cardapi_get_decline_codes_metadata` | Get metadata about the dataset | Code categories, count, version |
+| `get_account_summary` | Check customer balances | Account balances for verification |
+| `get_recent_transactions` | View recent activity | Transactions to identify issues |
+| `ship_replacement_card` | Send new card | Shipping confirmation |
+| `verify_client_identity` | Confirm customer | Identity verified |
+
+### Fraud Agent Tools (fraud.py)
+
+| Tool | Purpose | Returns |
+|------|---------|---------|
+| `analyze_recent_transactions` | Review recent activity | Flagged suspicious transactions |
+| `check_suspicious_activity` | Analyze patterns | Risk score, fraud indicators |
+| `block_card_emergency` | Immediately block card | Block confirmation |
+| `create_fraud_case` | Open investigation case | Case number, status |
+| `create_transaction_dispute` | Dispute a transaction | Dispute ID, timeline |
+| `ship_replacement_card` | Send new card | Shipping details |
+| `send_fraud_case_email` | Email case summary | Delivery confirmation |
+| `provide_fraud_education` | Security tips | Prevention guidance |
+
+### Handoff Tools (All Agents)
+
+| Tool | From | To | Type |
+|------|------|-----|------|
+| `handoff_card_recommendation` | BankingConcierge | CardRecommendation | discrete |
+| `handoff_investment_advisor` | BankingConcierge | InvestmentAdvisor | discrete |
+| `handoff_to_agent(DeclineSpecialist)` | BankingConcierge | DeclineSpecialist | announced |
+| `handoff_to_agent(FraudAgent)` | BankingConcierge, DeclineSpecialist | FraudAgent | announced |
+| `handoff_concierge` | CardRec, InvestAdv, FraudAgent | BankingConcierge | discrete |
+| `handoff_fraud_agent` | DeclineSpecialist | FraudAgent | announced |
+
 
 ## 📊 System Capabilities Summary
 
 | Capability | How It's Demonstrated |
 |------------|----------------------|
-| **Multi-Agent Orchestration** | Concierge → CardRec/InvestmentAdvisor → Return |
+| **Multi-Agent Orchestration** | Concierge → CardRec/InvestAdv/DeclineSpec/Fraud → Return |
 | **B2C Authentication** | Name + SSN4 + optional MFA |
 | **Real-Time Data Access** | Live Cosmos DB queries for profiles/accounts |
+| **MCP Server Integration** | CardAPI MCP for decline code lookup |
 | **Personalized Recommendations** | Card matching based on spending profile |
 | **E-Signature Workflow** | Email agreement → MFA verification → Finalize |
 | **Tax Calculations** | Rollover scenarios with withholding/penalties |
 | **Knowledge Base Search** | IRS rules, card FAQs |
 | **Fee Resolution** | Automatic refunds based on tier |
 | **Cross-Agent Context** | Seamless specialist transitions |
+| **Fraud Prevention** | Emergency card block, dispute creation |
+| **Decline Resolution** | Code lookup, customer scripts, escalation |
+
+## 🗺️ Complete Handoff Map
+
+```
+                           BANKING SCENARIO - HANDOFF FLOWS
+═══════════════════════════════════════════════════════════════════════════════
+
+                              ┌─────────────────┐
+                              │ BankingConcierge│  (Entry Point)
+                              │                 │
+                              │ Tools:          │
+                              │ • verify_client │
+                              │ • get_profile   │
+                              │ • get_accounts  │
+                              │ • refund_fee    │
+                              └────────┬────────┘
+                                       │
+        ┌──────────────────────────────┼──────────────────────────────┐
+        │                              │                              │
+        │ handoff_card_recommendation  │ handoff_to_agent            │ handoff_to_agent
+        │ (discrete)                   │ (announced)                 │ (announced)
+        ▼                              ▼                              ▼
+┌───────────────────┐       ┌───────────────────┐          ┌─────────────────┐
+│ CardRecommendation│◄─────►│ InvestmentAdvisor │          │DeclineSpecialist│
+│                   │       │                   │          │                 │
+│ Tools:            │       │ Tools:            │          │ Tools (MCP):    │
+│ • search_cards    │       │ • get_401k        │          │ • lookup_code   │
+│ • get_card_detail │       │ • get_retirement  │          │ • search_codes  │
+│ • evaluate_elig   │       │ • calc_tax_impact │          │ • get_accounts  │
+│ • send_agreement  │       │ • rollover_opts   │          │ • get_txns      │
+│ • verify_esign    │       │ • search_guidance │          │ • ship_card     │
+│ • finalize_app    │       │                   │          │                 │
+└─────────┬─────────┘       └─────────┬─────────┘          └────────┬────────┘
+          │                           │                             │
+          │                           │                             │ handoff_to_agent
+          │                           │                             │ (announced)
+          │ handoff_concierge         │ handoff_concierge           ▼
+          │ (discrete)                │ (discrete)          ┌─────────────────┐
+          │                           │                     │   FraudAgent    │
+          └───────────────────────────┴─────────────────────│                 │
+                              │                             │ Tools:          │
+                              ▼                             │ • analyze_txns  │
+                       ┌─────────────────┐                  │ • check_suspect │
+                       │ BankingConcierge│                  │ • block_card    │
+                       │   (Return)      │◄─────────────────│ • create_case   │
+                       └─────────────────┘  handoff_        │ • create_dispute│
+                                            concierge       │ • ship_card     │
+                                            (discrete)      └─────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+LEGEND:
+  ────► = One-way handoff       ◄────► = Bidirectional handoff
+  (discrete) = Seamless transition, same conversation
+  (announced) = Agent introduces themselves, context shared
+═══════════════════════════════════════════════════════════════════════════════
+```

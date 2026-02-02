@@ -178,10 +178,39 @@ task_cardapi_provision() {
     # Also get admin credentials as fallback
     cosmos_admin_password=$(az keyvault secret show --vault-name "$keyvault" --name "cosmos-admin-password" --query value -o tsv 2>/dev/null || echo "")
     
-    # Extract hostname from OIDC connection string (e.g., mongodb+srv://clustername.mongocluster.cosmos.azure.com/...)
+    # Extract hostname from OIDC connection string
+    # Must handle multiple formats:
+    #   - mongodb+srv://clustername.mongocluster.cosmos.azure.com/...           (no credentials)
+    #   - mongodb+srv://<user>:<password>@clustername.mongocluster.cosmos.azure.com/...  (placeholder)
+    #   - mongodb+srv://user:p%40ss@clustername.mongocluster.cosmos.azure.com/...        (encoded credentials)
+    #   - mongodb+srv://user:pass@clustername.mongocluster.cosmos.azure.com/...          (plain credentials)
     if [[ -n "$cosmos_oidc_conn_str" ]]; then
-        # Extract the full hostname including domain
-        cosmos_hostname=$(echo "$cosmos_oidc_conn_str" | sed -n 's|mongodb+srv://\([^/?]*\).*|\1|p')
+        # Strategy: Find the last @ before the first / or ? (that's where the host starts)
+        # If no @, the host starts right after mongodb+srv://
+        local stripped_prefix="${cosmos_oidc_conn_str#mongodb+srv://}"  # Remove scheme
+        stripped_prefix="${stripped_prefix%%\?*}"                        # Remove query string
+        stripped_prefix="${stripped_prefix%%/*}"                         # Remove path
+        
+        # Now stripped_prefix is either:
+        #   "clustername.mongocluster.cosmos.azure.com" (no @)
+        #   "<user>:<password>@clustername.mongocluster.cosmos.azure.com" (has @)
+        #   "user:p%40ss@clustername.mongocluster.cosmos.azure.com" (has @ in creds AND as separator)
+        
+        if [[ "$stripped_prefix" == *"@"* ]]; then
+            # Has credentials - extract everything AFTER the last @
+            cosmos_hostname="${stripped_prefix##*@}"
+        else
+            # No credentials - use as-is
+            cosmos_hostname="$stripped_prefix"
+        fi
+        
+        # Validate: hostname should end with .cosmos.azure.com
+        if [[ ! "$cosmos_hostname" =~ \.cosmos\.azure\.com$ ]]; then
+            warn "Extracted hostname doesn't look like Cosmos DB: $cosmos_hostname"
+            cosmos_hostname=""
+        else
+            log "[DEBUG] Extracted Cosmos hostname: $cosmos_hostname"
+        fi
     fi
     
     if [[ -z "$cosmos_oidc_conn_str" ]] && [[ -z "$cosmos_admin_password" ]]; then
