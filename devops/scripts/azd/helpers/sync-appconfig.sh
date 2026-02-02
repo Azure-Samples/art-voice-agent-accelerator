@@ -153,40 +153,41 @@ count=0
 errors=0
 
 # Azure OpenAI
-set_kv "azure/openai/endpoint" "$(get_azd_value AZURE_OPENAI_ENDPOINT)" && ((count++)) || ((errors++))
-set_kv "azure/openai/deployment-id" "$(get_azd_value AZURE_OPENAI_CHAT_DEPLOYMENT_ID)" && ((count++)) || ((errors++))
-set_kv "azure/openai/api-version" "$(get_azd_value AZURE_OPENAI_API_VERSION)" && ((count++)) || ((errors++))
+set_kv "azure/openai/endpoint" "$(get_azd_value AZURE_OPENAI_ENDPOINT)" && ((++count)) || ((++errors))
+set_kv "azure/openai/deployment-id" "$(get_azd_value AZURE_OPENAI_CHAT_DEPLOYMENT_ID)" && ((++count)) || ((++errors))
+set_kv "azure/openai/api-version" "$(get_azd_value AZURE_OPENAI_API_VERSION)" && ((++count)) || ((++errors))
 
 # Azure Speech
-set_kv "azure/speech/endpoint" "$(get_azd_value AZURE_SPEECH_ENDPOINT)" && ((count++)) || ((errors++))
-set_kv "azure/speech/region" "$(get_azd_value AZURE_SPEECH_REGION)" && ((count++)) || ((errors++))
-set_kv "azure/speech/resource-id" "$(get_azd_value AZURE_SPEECH_RESOURCE_ID)" && ((count++)) || ((errors++))
+set_kv "azure/speech/endpoint" "$(get_azd_value AZURE_SPEECH_ENDPOINT)" && ((++count)) || ((++errors))
+set_kv "azure/speech/region" "$(get_azd_value AZURE_SPEECH_REGION)" && ((++count)) || ((++errors))
+set_kv "azure/speech/resource-id" "$(get_azd_value AZURE_SPEECH_RESOURCE_ID)" && ((++count)) || ((++errors))
 
 # Azure Communication Services
-set_kv "azure/acs/endpoint" "$(get_azd_value ACS_ENDPOINT)" && ((count++)) || ((errors++))
-set_kv "azure/acs/immutable-id" "$(get_azd_value ACS_IMMUTABLE_ID)" && ((count++)) || ((errors++))
-set_kv_ref "azure/acs/connection-string" "acs-connection-string" && ((count++)) || ((errors++))
-set_kv "azure/acs/email-sender-address" "$(get_azd_value AZURE_EMAIL_SENDER_ADDRESS)" && ((count++)) || ((errors++))
+set_kv "azure/acs/endpoint" "$(get_azd_value ACS_ENDPOINT)" && ((++count)) || ((++errors))
+set_kv "azure/acs/immutable-id" "$(get_azd_value ACS_IMMUTABLE_ID)" && ((++count)) || ((++errors))
+set_kv_ref "azure/acs/connection-string" "acs-connection-string" && ((++count)) || ((++errors))
+set_kv "azure/acs/email-sender-address" "$(get_azd_value AZURE_EMAIL_SENDER_ADDRESS)" && ((++count)) || ((++errors))
 
 # Redis
-set_kv "azure/redis/hostname" "$(get_azd_value REDIS_HOSTNAME)" && ((count++)) || ((errors++))
-set_kv "azure/redis/port" "$(get_azd_value REDIS_PORT)" && ((count++)) || ((errors++))
+set_kv "azure/redis/hostname" "$(get_azd_value REDIS_HOSTNAME)" && ((++count)) || ((++errors))
+set_kv "azure/redis/port" "$(get_azd_value REDIS_PORT)" && ((++count)) || ((++errors))
 
 # Cosmos DB
-set_kv "azure/cosmos/database-name" "$(get_azd_value AZURE_COSMOS_DATABASE_NAME)" && ((count++)) || ((errors++))
-set_kv "azure/cosmos/collection-name" "$(get_azd_value AZURE_COSMOS_COLLECTION_NAME)" && ((count++)) || ((errors++))
+set_kv "azure/cosmos/database-name" "$(get_azd_value AZURE_COSMOS_DATABASE_NAME)" && ((++count)) || ((++errors))
+set_kv "azure/cosmos/collection-name" "$(get_azd_value AZURE_COSMOS_COLLECTION_NAME)" && ((++count)) || ((++errors))
+set_kv_ref "azure/cosmos/connection-string" "cosmos-entra-connection-string" && ((++count)) || ((++errors))
 
 # Storage
-set_kv "azure/storage/account-name" "$(get_azd_value AZURE_STORAGE_ACCOUNT_NAME)" && ((count++)) || ((errors++))
-set_kv "azure/storage/container-url" "$(get_azd_value AZURE_STORAGE_CONTAINER_URL)" && ((count++)) || ((errors++))
+set_kv "azure/storage/account-name" "$(get_azd_value AZURE_STORAGE_ACCOUNT_NAME)" && ((++count)) || ((++errors))
+set_kv "azure/storage/container-url" "$(get_azd_value AZURE_STORAGE_CONTAINER_URL)" && ((++count)) || ((++errors))
 
 # App Insights
-set_kv "azure/appinsights/connection-string" "$(get_azd_value APPLICATIONINSIGHTS_CONNECTION_STRING)" && ((count++)) || ((errors++))
+set_kv "azure/appinsights/connection-string" "$(get_azd_value APPLICATIONINSIGHTS_CONNECTION_STRING)" && ((++count)) || ((++errors))
 
 # Voice Live (optional)
-set_kv "azure/voicelive/endpoint" "$(get_azd_value AZURE_VOICELIVE_ENDPOINT)" && ((count++)) || ((errors++))
-set_kv "azure/voicelive/model" "$(get_azd_value AZURE_VOICELIVE_MODEL)" && ((count++)) || ((errors++))
-set_kv "azure/voicelive/resource-id" "$(get_azd_value AZURE_VOICELIVE_RESOURCE_ID)" && ((count++)) || ((errors++))
+set_kv "azure/voicelive/endpoint" "$(get_azd_value AZURE_VOICELIVE_ENDPOINT)" && ((++count)) || ((++errors))
+set_kv "azure/voicelive/model" "$(get_azd_value AZURE_VOICELIVE_MODEL)" && ((++count)) || ((++errors))
+set_kv "azure/voicelive/resource-id" "$(get_azd_value AZURE_VOICELIVE_RESOURCE_ID)" && ((++count)) || ((++errors))
 
 # AI Foundry (for Evaluations SDK)
 # Derive project endpoint from project_id since azapi doesn't expose it directly
@@ -199,28 +200,28 @@ if [[ -n "$ai_foundry_project_id" ]]; then
     project_name=$(echo "$ai_foundry_project_id" | sed -n 's|.*/projects/\([^/]*\)$|\1|p')
     if [[ -n "$account_name" && -n "$project_name" ]]; then
         ai_foundry_project_endpoint="https://${account_name}.services.ai.azure.com/api/projects/${project_name}"
-        set_kv "azure/ai-foundry/project-endpoint" "$ai_foundry_project_endpoint" && ((count++)) || ((errors++))
+        set_kv "azure/ai-foundry/project-endpoint" "$ai_foundry_project_endpoint" && ((++count)) || ((++errors))
     fi
 fi
 
 # Application Services
 cardapi_url=$(get_azd_value CARDAPI_BACKEND_URL)
 if [[ -n "$cardapi_url" ]]; then
-    set_kv "app/cardapi/url" "$cardapi_url" && ((count++)) || ((errors++))
+    set_kv "app/cardapi/url" "$cardapi_url" && ((++count)) || ((++errors))
 fi
 
 # Application Services
 # CardAPI MCP server endpoint
 cardapi_url=$(get_azd_value CARDAPI_CONTAINER_APP_URL)
 if [[ -n "$cardapi_url" ]]; then
-    set_kv "app/cardapi/mcp-url" "$cardapi_url"
+    set_kv "app/cardapi/mcp-url" "$cardapi_url" && ((++count)) || ((++errors))
 fi
 
 # Environment metadata
-set_kv "app/environment" "$(get_azd_value AZURE_ENV_NAME)" && ((count++)) || ((errors++))
+set_kv "app/environment" "$(get_azd_value AZURE_ENV_NAME)" && ((++count)) || ((++errors))
 
 # Sentinel for refresh trigger
-set_kv "app/sentinel" "v$(date +%s)" && ((count++)) || ((errors++))
+set_kv "app/sentinel" "v$(date +%s)" && ((++count)) || ((++errors))
 
 echo "├─────────────────────────────────────────────────────────────"
 if [[ $errors -gt 0 ]]; then

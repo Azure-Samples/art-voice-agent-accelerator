@@ -9,7 +9,7 @@ resource "azurerm_key_vault" "main" {
   tenant_id                  = data.azuread_client_config.current.tenant_id
   sku_name                   = "standard"
   soft_delete_retention_days = 7
-  purge_protection_enabled   = false
+  purge_protection_enabled   = true
 
   rbac_authorization_enabled    = true
   public_network_access_enabled = true

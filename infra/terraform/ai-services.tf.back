@@ -76,6 +76,7 @@ resource "azurerm_key_vault_secret" "openai_key" {
   name         = "openai-key"
   value        = azurerm_cognitive_account.openai.primary_access_key
   key_vault_id = azurerm_key_vault.main.id
+  expiration_date = timeadd(timestamp(), "720h") # 1 year from now
 
   depends_on = [azurerm_role_assignment.keyvault_admin]
 }
@@ -138,6 +139,7 @@ resource "azurerm_key_vault_secret" "speech_key" {
   name         = "speech-key"
   value        = azurerm_cognitive_account.speech.primary_access_key
   key_vault_id = azurerm_key_vault.main.id
+  expiration_date = timeadd(timestamp(), "720h") # 1 year from now
 
   depends_on = [azurerm_role_assignment.keyvault_admin]
 }
