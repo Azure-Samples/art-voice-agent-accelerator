@@ -13,7 +13,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY utils/ /app/utils/
 COPY src/ /app/src/
 
-# Copy backend code and database
+# Copy CardAPI config and backend code
+COPY apps/cardapi/config/ /app/config/
 COPY apps/cardapi/backend/ /app/backend/
 COPY apps/cardapi/database/ /app/database/
 

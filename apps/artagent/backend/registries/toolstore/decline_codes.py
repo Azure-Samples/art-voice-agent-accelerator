@@ -77,16 +77,16 @@ def get_cardapi_url() -> str:
     """Get the cardapi backend URL from app config or environment.
     
     Priority:
-    1. CARDAPI_URL environment variable (set by app config loading)
+    1. CARDAPI_BACKEND_URL environment variable (set by app config loading)
     2. Localhost default (for local development)
     """
-    url = os.getenv("CARDAPI_URL")
+    url = os.getenv("CARDAPI_BACKEND_URL")
     if url:
         return url.rstrip("/")
     return "http://localhost:8000"
 
 
-CARDAPI_URL = get_cardapi_url()
+CARDAPI_BACKEND_URL = get_cardapi_url()
 CARDAPI_REQUEST_TIMEOUT = 10.0  # seconds
 
 
@@ -111,7 +111,7 @@ async def lookup_decline_code(args: dict[str, Any]) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=CARDAPI_REQUEST_TIMEOUT) as client:
             # Call CardAPI backend directly
             response = await client.get(
-                f"{CARDAPI_URL}/api/v1/codes/{code}",
+                f"{CARDAPI_BACKEND_URL}/api/v1/codes/{code}",
             )
             response.raise_for_status()
             
@@ -133,7 +133,7 @@ async def lookup_decline_code(args: dict[str, Any]) -> dict[str, Any]:
             "error": str(e),
         }
     except httpx.ConnectError:
-        error_msg = f"Could not connect to CardAPI at {CARDAPI_URL}"
+        error_msg = f"Could not connect to CardAPI MCP at {CARDAPI_MCP_URL}"
         logger.error(error_msg)
         return {
             "success": False,
@@ -169,7 +169,7 @@ async def search_decline_codes(args: dict[str, Any]) -> dict[str, Any]:
         
         async with httpx.AsyncClient(timeout=CARDAPI_REQUEST_TIMEOUT) as client:
             response = await client.get(
-                f"{CARDAPI_URL}/api/v1/search",
+                f"{CARDAPI_BACKEND_URL}/api/v1/search",
                 params=params,
             )
             response.raise_for_status()
@@ -194,7 +194,7 @@ async def search_decline_codes(args: dict[str, Any]) -> dict[str, Any]:
             "error": str(e),
         }
     except httpx.ConnectError:
-        error_msg = f"Could not connect to CardAPI at {CARDAPI_URL}"
+        error_msg = f"Could not connect to CardAPI at {CARDAPI_BACKEND_URL}"
         logger.error(error_msg)
         return {
             "success": False,

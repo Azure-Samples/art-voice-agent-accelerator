@@ -17,7 +17,6 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import (
     Resource,
-    ResourceTemplate,
     Tool,
     Prompt,
     PromptArgument,
@@ -65,18 +64,6 @@ class CardDeclineCodeMCPServer:
                     uri="decline-codes://database/metadata",
                     name="Database Metadata",
                     description="Metadata about the decline codes database",
-                    mimeType="application/json"
-                )
-            ]
-        
-        @self.server.list_resource_templates()
-        async def list_resource_templates() -> List[ResourceTemplate]:
-            """List resource URI templates."""
-            return [
-                ResourceTemplate(
-                    uriTemplate="decline-code://{code}",
-                    name="Decline Code Details",
-                    description="Get detailed information about a specific decline code",
                     mimeType="application/json"
                 )
             ]

@@ -13,5 +13,8 @@
             "tests/evaluation/scenarios/**/*.yaml",
             "tests/evaluation/scenarios/**/*.yml"
         ]
-    }
+    },
+    "python.analysis.extraPaths": [
+        "./apps/cardapi/backend"
+    ]
 }

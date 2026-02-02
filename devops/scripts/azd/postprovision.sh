@@ -157,58 +157,44 @@ trigger_config_refresh() {
 
 task_cardapi_provision() {
     header "💾 Task 1: CardAPI Data Provisioning"
-    
-    local rg keyvault
-    rg=$(azd_get "AZURE_RESOURCE_GROUP")
-    keyvault=$(az keyvault list --resource-group "$rg" --query "[0].name" -o tsv 2>/dev/null || echo "")
-    
-    if [[ -z "$keyvault" ]]; then
-        warn "Could not find Key Vault"
+
+    # Get connection string from azd env (set by Terraform outputs)
+    local conn_str
+    conn_str=$(azd_get "AZURE_COSMOS_CONNECTION_STRING")
+
+    if [[ -z "$conn_str" ]]; then
+        warn "AZURE_COSMOS_CONNECTION_STRING not set"
         footer
         return 1
     fi
-    
-    # Get OIDC connection string from Key Vault (uses Azure Managed Identity)
-    local oidc_conn_str
-    oidc_conn_str=$(az keyvault secret show --vault-name "$keyvault" --name "cosmos-entra-connection-string" --query value -o tsv 2>/dev/null || echo "")
-    
-    if [[ -z "$oidc_conn_str" ]]; then
-        warn "OIDC connection string not available in Key Vault"
+
+    # Export for cosmos_init.py (handles OIDC connection internally)
+    export AZURE_COSMOS_CONNECTION_STRING="$conn_str"
+
+    # Install cosmos init helper dependencies if present
+    if [[ -f "$HELPERS_DIR/requirements-cosmos.txt" ]]; then
+        log "Installing cosmos init dependencies..."
+        pip3 install -q -r "$HELPERS_DIR/requirements-cosmos.txt" 2>/dev/null || warn "Failed to install cosmos init dependencies"
+    fi
+
+    local helper_script="$HELPERS_DIR/cosmos_init.py"
+    if [[ ! -f "$helper_script" ]]; then
+        warn "Cosmos init helper not found: $helper_script"
         footer
         return 1
     fi
-    
-    log "Connecting to Cosmos DB via Azure Identity (OIDC)..."
-    
-    # Export environment variables for provisioning script - OIDC auth path
-    export AZURE_COSMOS_CONNECTION_STRING="$oidc_conn_str"
-    export AZURE_COSMOS_DATABASE_NAME="cardapi"
-    export AZURE_COSMOS_COLLECTION_NAME="declinecodes"
-    
-    local provision_script="$(pwd)/apps/cardapi/scripts/provision_data.py"
-    if [[ ! -f "$provision_script" ]]; then
-        warn "Provisioning script not found: $provision_script"
-        footer
-        return 1
-    fi
-    
-    # Install provisioning script dependencies
-    local provision_reqs="$(pwd)/apps/cardapi/scripts/requirements.txt"
-    if [[ -f "$provision_reqs" ]]; then
-        log "Installing provisioning dependencies..."
-        pip3 install -q -r "$provision_reqs" 2>/dev/null || warn "Failed to install provisioning dependencies"
-    fi
-    
-    # Run provisioning script (prefix output with box border)
-    if python3 "$provision_script" 2>&1 | sed 's/^/│ /'; then
-        success "CardAPI data provisioned"
+
+    # Run the helper to upsert documents for the 'cardapi' dataset
+    log "Running cosmos_init for cardapi dataset..."
+    if python3 "$helper_script" --dataset cardapi 2>&1 | sed 's/^/│ /'; then
+        success "CardAPI data provisioned via cosmos_init"
     else
-        warn "CardAPI data provisioning may have failed (non-critical)"
+        warn "CardAPI provisioning via cosmos_init may have failed (non-critical)"
     fi
-    
+
     # Clean up environment variables
     unset AZURE_COSMOS_CONNECTION_STRING
-    
+
     footer
 }
 

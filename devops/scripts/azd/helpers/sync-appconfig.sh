@@ -203,18 +203,9 @@ if [[ -n "$ai_foundry_project_id" ]]; then
     fi
 fi
 
-# Application Services
-cardapi_url=$(get_azd_value CARDAPI_BACKEND_URL)
-if [[ -n "$cardapi_url" ]]; then
-    set_kv "app/cardapi/url" "$cardapi_url" && ((count++)) || ((errors++))
-fi
-
-# Application Services
-# CardAPI MCP server endpoint
-cardapi_url=$(get_azd_value CARDAPI_CONTAINER_APP_URL)
-if [[ -n "$cardapi_url" ]]; then
-    set_kv "app/cardapi/mcp-url" "$cardapi_url"
-fi
+# CardAPI Service
+set_kv "app/cardapi/url" "$(get_azd_value CARDAPI_BACKEND_URL)" && ((count++)) || ((errors++))
+set_kv "app/cardapi/mcp-url" "$(get_azd_value CARDAPI_MCP_URL)" && ((count++)) || ((errors++))
 
 # Environment metadata
 set_kv "app/environment" "$(get_azd_value AZURE_ENV_NAME)" && ((count++)) || ((errors++))

@@ -139,10 +139,8 @@ class CosmosDBMongoCoreManager:
                 auth_callback = AzureIdentityTokenCallback(credential)
                 auth_properties = {
                     "OIDC_CALLBACK": auth_callback,
+                    "ALLOWED_HOSTS": ["*.mongocluster.cosmos.azure.com", "*.global.mongocluster.cosmos.azure.com"],
                 }
-                
-                # Allow Cosmos DB MongoDB cluster hosts for OIDC
-                os.environ.setdefault("MONGODB_OIDC_ALLOWED_HOSTS", "*.mongocluster.cosmos.azure.com")
 
 
                 # Build connection string for OIDC with required parameters

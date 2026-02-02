@@ -8,94 +8,26 @@ Configuration:
     - AZURE_COSMOS_DATABASE_NAME: Database name (default: cardapi)
     - AZURE_COSMOS_COLLECTION_NAME: Collection name (default: declinecodes)
 """
-import asyncio
 import os
 import sys
-from pathlib import Path
+
+# ============================================================================
+# BOOTSTRAP (must run before any other imports)
+# ============================================================================
+# Bootstrap handles: .env loading, path setup, telemetry, App Configuration
+# NOTE: Also sets MONGODB_OIDC_ALLOWED_HOSTS at module import time
+from lifecycle.bootstrap import bootstrap_all
+
+_bootstrap_status = bootstrap_all()
+
+# ============================================================================
+# Now safe to import application modules
+# ============================================================================
+import asyncio
 from typing import List, Optional
-
-# Add workspace root to path (/app is the root in container, main.py is at /app/backend/main.py)
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-print("[Bootstrap] Starting App Configuration load...", flush=True)
-
-# Bootstrap Azure App Configuration to load secrets from Key Vault
-def _bootstrap_appconfig():
-    """Load configuration from Azure App Configuration at startup."""
-    print("[Bootstrap] _bootstrap_appconfig() called", flush=True)
-    try:
-        from azure.appconfiguration import AzureAppConfigurationClient, SecretReferenceConfigurationSetting
-        from azure.identity import DefaultAzureCredential
-        from azure.keyvault.secrets import SecretClient
-        
-        endpoint = os.getenv("AZURE_APPCONFIG_ENDPOINT")
-        label = os.getenv("AZURE_APPCONFIG_LABEL", "")
-        
-        print(f"[Bootstrap] AZURE_APPCONFIG_ENDPOINT={endpoint}", flush=True)
-        print(f"[Bootstrap] AZURE_APPCONFIG_LABEL={label}", flush=True)
-        
-        if not endpoint:
-            print("[Bootstrap] AZURE_APPCONFIG_ENDPOINT not set; skipping App Configuration load", flush=True)
-            return  # App Config not configured, use direct env vars
-        
-        print("[Bootstrap] Creating AzureAppConfigurationClient...", flush=True)
-        credential = DefaultAzureCredential()
-        client = AzureAppConfigurationClient(endpoint, credential)
-        print("[Bootstrap] Client created successfully", flush=True)
-        
-        # Load Cosmos connection string from App Config
-        # Key format: azure/cosmos/connection-string
-        try:
-            print("[Bootstrap] Fetching 'azure/cosmos/connection-string' from App Config...", flush=True)
-            kv = client.get_configuration_setting(key="azure/cosmos/connection-string", label=label)
-            if kv:
-                print(f"[Bootstrap] Setting type: {type(kv).__name__}", flush=True)
-                
-                # Check if it's a Key Vault reference
-                if isinstance(kv, SecretReferenceConfigurationSetting):
-                    print(f"[Bootstrap] Detected Key Vault reference: {kv.secret_id}", flush=True)
-                    # Parse the Key Vault URL to get vault URI
-                    secret_id = kv.secret_id
-                    # Format: https://{vault-name}.vault.azure.net/secrets/{secret-name}/{version}
-                    vault_url = secret_id.split('/secrets/')[0]
-                    secret_name = secret_id.split('/secrets/')[1].split('/')[0]
-                    
-                    print(f"[Bootstrap] Fetching secret from Key Vault: {vault_url}", flush=True)
-                    kv_client = SecretClient(vault_url=vault_url, credential=credential)
-                    secret = kv_client.get_secret(secret_name)
-                    connection_string = secret.value
-                    print(f"[Bootstrap] ✓ Resolved Key Vault reference (length: {len(connection_string)})", flush=True)
-                else:
-                    # Direct value
-                    connection_string = kv.value
-                    print(f"[Bootstrap] ✓ Loaded direct value (length: {len(connection_string)})", flush=True)
-                
-                os.environ["AZURE_COSMOS_CONNECTION_STRING"] = connection_string
-                print(f"[Bootstrap] AZURE_COSMOS_CONNECTION_STRING set, starts with: {connection_string[:20]}...", flush=True)
-            else:
-                print("[Bootstrap] Key returned None from App Configuration", flush=True)
-        except Exception as e:
-            print(f"[Bootstrap] WARNING: Could not load 'azure/cosmos/connection-string': {type(e).__name__}: {e}", flush=True)
-            import traceback
-            traceback.print_exc()
-            pass  # Key not found, use env var if set
-        
-        print("[Bootstrap] App Configuration bootstrap complete", flush=True)
-            
-    except Exception as e:
-        # Graceful degradation if app config loading fails
-        print(f"[Bootstrap] ERROR: Could not load App Configuration: {type(e).__name__}: {e}", flush=True)
-        import traceback
-        traceback.print_exc()
-
-_bootstrap_appconfig()
-print("[Bootstrap] Finished calling _bootstrap_appconfig()", flush=True)
-
-
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-
 from utils.ml_logging import get_logger
 
 logger = get_logger(__name__)
@@ -181,73 +113,25 @@ async def load_decline_codes() -> None:
     """Load decline codes from Azure Cosmos DB (Mongo API) using OIDC authentication."""
     global decline_codes_data
 
-    connection_string = os.getenv("AZURE_COSMOS_CONNECTION_STRING")
-    database_name = os.getenv("AZURE_COSMOS_DATABASE_NAME") or "cardapi"
-    collection_name = os.getenv("AZURE_COSMOS_COLLECTION_NAME") or "declinecodes"
-
-    # If no connection string, provide default data or skip loading
-    if not connection_string:
-        logger.info("No AZURE_COSMOS_CONNECTION_STRING set; Cosmos DB disabled")
-        decline_codes_data = {
-            "metadata": {"source": "disabled"},
-            "numeric_codes": [],
-            "alphanumeric_codes": [],
-        }
-        return
+    logger.info("Loading decline codes from Azure Cosmos DB...")
 
     def _load_from_cosmos() -> dict:
-        """Load decline codes using OIDC authentication (same pattern as cosmos_init.py)."""
-        import re
-        from azure.identity import DefaultAzureCredential
-        from pymongo import MongoClient
-        from pymongo.auth_oidc import OIDCCallback, OIDCCallbackContext, OIDCCallbackResult
+        from src.cosmosdb.manager import CosmosDBMongoCoreManager
         
-        # Azure Identity callback for OIDC
-        class AzureIdentityTokenCallback(OIDCCallback):
-            def __init__(self, credential):
-                self.credential = credential
-
-            def fetch(self, context: OIDCCallbackContext) -> OIDCCallbackResult:
-                token = self.credential.get_token(
-                    "https://ossrdbms-aad.database.windows.net/.default"
-                ).token
-                return OIDCCallbackResult(access_token=token)
+        try:
+            logger.info("Initializing CosmosDBMongoCoreManager for loading decline codes")
+            cosmos = CosmosDBMongoCoreManager(
+                database_name="cardapi",
+                collection_name="declinecodes"
+            )
+        except Exception as exc:
+            logger.error("Failed to initialize Cosmos manager: %s", exc, exc_info=True)
+            return None
             
-        # Extract cluster name from connection string, stripping any <user>:<password>@ prefix
-        match = re.search(r"mongodb\+srv://(?:<[^>]+>:<[^>]+>@)?([^./?]+)", connection_string)
-        if match:
-            cluster_name = match.group(1)
-        else:
-            raise ValueError(f"Could not determine cluster name from connection string: {connection_string[:50]}...")
-        
-        # Setup Azure Identity credential for OIDC
-        credential = DefaultAzureCredential()
-        auth_callback = AzureIdentityTokenCallback(credential)
-        auth_properties = {
-            "OIDC_CALLBACK": auth_callback,
-        }
-        
-        # Allow Cosmos DB MongoDB cluster hosts for OIDC
-        os.environ.setdefault("MONGODB_OIDC_ALLOWED_HOSTS", "*.mongocluster.cosmos.azure.com")
-        
-        # Build OIDC connection string
-        oidc_connection_string = f"mongodb+srv://{cluster_name}.mongocluster.cosmos.azure.com/"
-        
-        logger.info(f"Connecting to Cosmos DB cluster: {cluster_name}")
-        
-        client = MongoClient(
-            oidc_connection_string,
-            connectTimeoutMS=120000,
-            tls=True,
-            retryWrites=False,
-            authMechanism="MONGODB-OIDC",
-            authMechanismProperties=auth_properties,
-        )
-        
         # Query all documents
-        db = client[database_name]
-        collection = db[collection_name]
-        documents = list(collection.find({}, projection={"_id": 0}))
+        logger.info("Querying all documents from Cosmos DB collection %s.%s", cosmos.database.name, cosmos.collection.name)
+
+        documents = list(cosmos.collection.find({}, projection={"_id": 0}))
         
         numeric: list = []
         alpha: list = []

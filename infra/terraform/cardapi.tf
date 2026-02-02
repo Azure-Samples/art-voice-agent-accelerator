@@ -373,7 +373,7 @@ output "CARDAPI_MCP_FQDN" {
   value       = azurerm_container_app.cardapi_mcp.ingress[0].fqdn
 }
 
-output "CARDAPI_CONTAINER_APP_URL" {
+output "CARDAPI_MCP_URL" {
   description = "Card API MCP Container App public URL (for agent integration)"
   value       = "https://${azurerm_container_app.cardapi_mcp.ingress[0].fqdn}"
 }
