@@ -17,8 +17,8 @@ description: |
 
 # Demo user with specific email for verification
 demo_user:
-  full_name: "Jin Le"
-  email: "jinle@microsoft.com"
+  full_name: "Email User"
+  email: "replace-me@email-to-test-with.com"
   phone_number: "+14255551234"
   scenario: banking
   seed: 100
