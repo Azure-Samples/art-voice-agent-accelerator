@@ -52,7 +52,9 @@ class ToolDefinition:
     tags: set[str] = field(default_factory=set)
     source: ToolSource = ToolSource.LOCAL
     mcp_server: str | None = None  # Server name if source is MCP
-    mcp_transport: str | None = None  # Transport/protocol if source is MCP (streamable-http/sse/stdio)
+    mcp_transport: str | None = (
+        None  # Transport/protocol if source is MCP (streamable-http/sse/stdio)
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -368,7 +370,7 @@ def initialize_tools() -> int:
                 "apps.artagent.backend.registries.toolstore.customer_intelligence", fromlist=[""]
             ),
         ),
-        # decline_codes removed - now uses MCP client discovery via agent.mcp_servers
+        # decline_codes.py removed - tools now discovered dynamically via MCP client (/tools/list)
         (
             "escalation",
             lambda: __import__(

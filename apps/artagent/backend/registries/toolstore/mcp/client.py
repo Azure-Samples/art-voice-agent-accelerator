@@ -21,7 +21,7 @@ logger = get_logger("mcp.client")
 
 class MCPTransport(str, Enum):
     """Supported MCP transport types.
-    
+
     Per MCP spec 2025-11-25:
     - STREAMABLE_HTTP: New HTTP-based transport (recommended for deployed servers)
     - SSE: Server-Sent Events (legacy, still supported)
@@ -33,7 +33,7 @@ class MCPTransport(str, Enum):
     SSE = "sse"
     STDIO = "stdio"
     HTTP = "http"
-    
+
     @classmethod
     def _missing_(cls, value: object) -> "MCPTransport | None":
         """Handle transport type aliases and normalize values."""
@@ -68,7 +68,9 @@ class MCPServerConfig:
             try:
                 self.transport = MCPTransport(self.transport.lower())
             except ValueError:
-                logger.warning(f"Unknown transport '{self.transport}', defaulting to streamable-http")
+                logger.warning(
+                    f"Unknown transport '{self.transport}', defaulting to streamable-http"
+                )
                 self.transport = MCPTransport.STREAMABLE_HTTP
 
 
@@ -212,95 +214,9 @@ class MCPClientSession:
         """
         Discover available tools from the MCP server.
 
-        Tries to fetch tool schemas from the /tools/list endpoint first,
-        falls back to hardcoded schemas for known CardAPI tools.
+        Fetches tool schemas from the /tools/list endpoint. All MCP servers
+        (including CardAPI) should expose this endpoint for dynamic discovery.
         """
-        def _load_cardapi_fallback() -> None:
-            # CardAPI MCP server does not expose /tools/list; use the known static tool set.
-            self._tools = [
-                MCPToolInfo(
-                    name="lookup_decline_code",
-                    description=(
-                        "Look up a specific card decline code to get its description, "
-                        "detailed information, recommended actions, customer service scripts, "
-                        "orchestrator actions, contextual rules, and escalation requirements."
-                    ),
-                    input_schema={
-                        "type": "object",
-                        "properties": {
-                            "code": {
-                                "type": "string",
-                                "description": "The decline code to look up (e.g., '02', '51', 'C1', 'RT')",
-                            }
-                        },
-                        "required": ["code"],
-                    },
-                    server_name=self.config.name,
-                ),
-                MCPToolInfo(
-                    name="search_decline_codes",
-                    description=(
-                        "Search for decline codes by description, information, or action keywords. "
-                        "Returns complete policy pack data including scripts, orchestrator actions, "
-                        "and escalation info."
-                    ),
-                    input_schema={
-                        "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "Search query (e.g., 'insufficient funds', 'expired', 'PIN')",
-                            },
-                            "code_type": {
-                                "type": "string",
-                                "description": "Optional: Filter by 'numeric' (Base24) or 'alphanumeric' (FAST)",
-                                "enum": ["numeric", "alphanumeric"],
-                            },
-                        },
-                        "required": ["query"],
-                    },
-                    server_name=self.config.name,
-                ),
-                MCPToolInfo(
-                    name="get_all_decline_codes",
-                    description=(
-                        "Get all available decline codes with complete policy pack data "
-                        "(scripts, orchestrator actions, escalation), optionally filtered by type."
-                    ),
-                    input_schema={
-                        "type": "object",
-                        "properties": {
-                            "code_type": {
-                                "type": "string",
-                                "description": "Optional: Filter by 'numeric' (Base24) or 'alphanumeric' (FAST)",
-                                "enum": ["numeric", "alphanumeric"],
-                            }
-                        },
-                    },
-                    server_name=self.config.name,
-                ),
-                MCPToolInfo(
-                    name="get_decline_codes_metadata",
-                    description=(
-                        "Get metadata about the decline codes database, including total counts and system information."
-                    ),
-                    input_schema={
-                        "type": "object",
-                        "properties": {},
-                    },
-                    server_name=self.config.name,
-                ),
-            ]
-            logger.info(
-                "Discovered %d tools from MCP server %s (CardAPI fallback)",
-                len(self._tools),
-                self.config.name,
-            )
-
-        if self.config.name.lower() == "cardapi":
-            _load_cardapi_fallback()
-            return
-
         try:
             # Try to get tools via /tools/list endpoint (dynamic discovery)
             response = await self._client.get("/tools/list")

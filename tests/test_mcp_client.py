@@ -72,8 +72,23 @@ async def test_list_tools_dynamic_discovery():
 
 
 @pytest.mark.asyncio
-async def test_list_tools_cardapi_fallback():
-    mock_client = _mock_httpx_client()
+async def test_list_tools_cardapi_dynamic():
+    """Verify CardAPI uses standard /tools/list discovery (no longer uses hardcoded fallback)."""
+    tool_payload = {
+        "tools": [
+            {
+                "name": "lookup_decline_code",
+                "description": "Look up a decline code",
+                "input_schema": {"type": "object", "properties": {"code": {"type": "string"}}},
+            },
+            {
+                "name": "search_decline_codes",
+                "description": "Search decline codes",
+                "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+            },
+        ]
+    }
+    mock_client = _mock_httpx_client(tool_list_payload=tool_payload)
     with patch(
         "apps.artagent.backend.registries.toolstore.mcp.client.httpx.AsyncClient",
         return_value=mock_client,
@@ -81,10 +96,10 @@ async def test_list_tools_cardapi_fallback():
         session = MCPClientSession(MCPServerConfig(name="cardapi", url="http://mcp"))
         assert await session.connect() is True
         tools = await session.list_tools()
-        assert len(tools) >= 4
+        assert len(tools) == 2
         assert any(tool.name == "lookup_decline_code" for tool in tools)
-        # CardAPI fallback should not call /tools/list
-        assert all(call.args[0] != "/tools/list" for call in mock_client.get.call_args_list)
+        # CardAPI should now call /tools/list like any other MCP server
+        assert any(call.args[0] == "/tools/list" for call in mock_client.get.call_args_list)
 
 
 @pytest.mark.asyncio
@@ -167,7 +182,9 @@ async def test_get_mcp_auth_token_caches():
     cred = _Cred()
     mcp_auth.clear_token_cache()
 
-    with patch("apps.artagent.backend.registries.toolstore.mcp.auth._get_credential", return_value=cred):
+    with patch(
+        "apps.artagent.backend.registries.toolstore.mcp.auth._get_credential", return_value=cred
+    ):
         token1 = await mcp_auth.get_mcp_auth_token("api://app")
         token2 = await mcp_auth.get_mcp_auth_token("api://app")
 
