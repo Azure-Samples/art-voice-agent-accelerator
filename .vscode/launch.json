@@ -60,15 +60,6 @@
     ],
     "compounds": [
         {
-            "name": "[All] ART Agent + Card API",
-            "configurations": [
-                "[ART Agent] React App: Browser Debug",
-                "[ART Agent] Python Debugger: FastAPI",
-                "[Card API] Python Debugger: FastAPI",
-            ],
-            "stopAll": true
-        },
-        {
             "name": "[All] ART Agent + MCP",
             "configurations": [
                 "[ART Agent] React App: Browser Debug",
