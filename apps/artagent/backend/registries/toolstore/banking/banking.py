@@ -1556,6 +1556,127 @@ async def evaluate_card_eligibility(args: dict[str, Any]) -> dict[str, Any]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# DECLINE SUMMARY EMAIL
+# ═══════════════════════════════════════════════════════════════════════════════
+
+send_decline_summary_email_schema: dict[str, Any] = {
+    "name": "send_decline_summary_email",
+    "description": (
+        "Send a summary email to the customer with details about their declined transactions, "
+        "including decline codes, reasons, and resolution steps taken. "
+        "Use this before escalating to fraud or when customer requests a summary."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "client_id": {
+                "type": "string",
+                "description": "Customer client ID"
+            },
+            "decline_codes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "Decline code (e.g., '87', '0W-0Z')"},
+                        "merchant": {"type": "string", "description": "Merchant name"},
+                        "amount": {"type": "number", "description": "Transaction amount"},
+                        "reason": {"type": "string", "description": "Human-readable decline reason"},
+                        "resolution": {"type": "string", "description": "Action taken or recommended"},
+                    },
+                    "required": ["code", "reason"]
+                },
+                "description": "List of decline codes and their details to include in the summary"
+            },
+            "include_fraud_notice": {
+                "type": "boolean",
+                "description": "Whether to include fraud escalation notice (if any codes were fraud-related)",
+                "default": False
+            },
+            "replacement_card_ordered": {
+                "type": "boolean",
+                "description": "Whether a replacement card was ordered",
+                "default": False
+            },
+            "additional_notes": {
+                "type": "string",
+                "description": "Any additional notes to include in the email"
+            }
+        },
+        "required": ["client_id", "decline_codes"]
+    }
+}
+
+
+async def send_decline_summary_email(args: dict[str, Any]) -> dict[str, Any]:
+    """Send decline summary email to customer."""
+    client_id = (args.get("client_id") or "").strip()
+    decline_codes = args.get("decline_codes", [])
+    include_fraud_notice = args.get("include_fraud_notice", False)
+    replacement_card_ordered = args.get("replacement_card_ordered", False)
+    additional_notes = args.get("additional_notes", "")
+    
+    if not client_id:
+        return {"success": False, "message": "client_id is required"}
+    
+    if not decline_codes:
+        return {"success": False, "message": "At least one decline_code is required"}
+    
+    # Build summary content
+    summary_items = []
+    for decline in decline_codes:
+        item = {
+            "code": decline.get("code", "Unknown"),
+            "merchant": decline.get("merchant", "Unknown merchant"),
+            "amount": decline.get("amount"),
+            "reason": decline.get("reason", "Decline reason unavailable"),
+            "resolution": decline.get("resolution", "No action taken"),
+        }
+        summary_items.append(item)
+    
+    # Determine email content
+    has_fraud_codes = any(
+        "fraud" in (d.get("reason", "").lower() or "")
+        or "theft" in (d.get("reason", "").lower() or "")
+        or d.get("code", "") in ["0W-0Z", "57", "59", "63", "43"]
+        for d in decline_codes
+    )
+    
+    logger.info(
+        "📧 Decline summary email sent | client_id=%s codes=%d fraud_notice=%s replacement=%s",
+        client_id,
+        len(decline_codes),
+        include_fraud_notice or has_fraud_codes,
+        replacement_card_ordered
+    )
+    
+    return {
+        "success": True,
+        "email_sent": True,
+        "recipient": f"{client_id}@email.com",
+        "summary": {
+            "decline_count": len(decline_codes),
+            "codes_included": [d.get("code") for d in decline_codes],
+            "fraud_notice_included": include_fraud_notice or has_fraud_codes,
+            "replacement_card_mentioned": replacement_card_ordered,
+        },
+        "content_included": {
+            "decline_details": True,
+            "reason_explanations": True,
+            "resolutions": True,
+            "next_steps": True,
+            "fraud_prevention_tips": has_fraud_codes,
+            "contact_info": True,
+        },
+        "message": (
+            f"Email sent to {client_id}@email.com with summary of {len(decline_codes)} decline(s). "
+            f"{'Fraud prevention information included. ' if has_fraud_codes else ''}"
+            f"{'Replacement card confirmation included.' if replacement_card_ordered else ''}"
+        )
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # REGISTRATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1613,4 +1734,10 @@ register_tool(
     evaluate_card_eligibility_schema,
     evaluate_card_eligibility,
     tags={"banking", "cards", "eligibility"},
+)
+register_tool(
+    "send_decline_summary_email",
+    send_decline_summary_email_schema,
+    send_decline_summary_email,
+    tags={"banking", "decline", "email"},
 )
