@@ -80,8 +80,8 @@ def format_duration(ms: float) -> str:
         return f"{ms/60000:.1f}m"
 
 
-def print_turn_event(event: dict[str, Any], turn_number: int) -> None:
-    """Pretty-print a single turn event."""
+def print_turn_event(event: dict[str, Any], turn_number: int, expectations: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Pretty-print a single turn event. Returns check results for summary."""
     C = Colors
     
     turn_id = event.get("turn_id", "unknown")
@@ -93,7 +93,11 @@ def print_turn_event(event: dict[str, Any], turn_number: int) -> None:
     e2e_ms = event.get("e2e_ms", 0)
     ttft_ms = event.get("ttft_ms")
     response_tokens = event.get("response_tokens")
+    input_tokens = event.get("input_tokens")
     error = event.get("error")
+    
+    # Track check results
+    checks = {"passed": [], "failed": [], "warnings": []}
     
     # Header
     print()
@@ -108,6 +112,7 @@ def print_turn_event(event: dict[str, Any], turn_number: int) -> None:
     print(f"   {user_text}")
     
     # Tool calls (if any)
+    actual_tools = [tc.get("name", "unknown") for tc in tool_calls]
     if tool_calls:
         print()
         print(f"{C.MAGENTA}🔧 Tools ({len(tool_calls)}):{C.RESET}")
@@ -167,7 +172,7 @@ def print_turn_event(event: dict[str, Any], turn_number: int) -> None:
     
     # Metrics footer - important for verbosity assessment
     metrics = []
-    total_tokens = event.get("total_tokens") or event.get("prompt_tokens", 0) + (response_tokens or 0)
+    total_tokens = event.get("total_tokens") or (input_tokens or 0) + (response_tokens or 0)
     if total_tokens:
         metrics.append(f"total: {total_tokens} tokens")
     if response_tokens:
@@ -189,6 +194,106 @@ def print_turn_event(event: dict[str, Any], turn_number: int) -> None:
     if error:
         print()
         print(f"   {C.RED}⚠ Error: {error}{C.RESET}")
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # EXPECTATIONS CHECK
+    # ═══════════════════════════════════════════════════════════════════════════
+    if expectations:
+        print()
+        print(f"{C.WHITE}📋 Expectations:{C.RESET}")
+        
+        # Check tools_called
+        expected_tools = expectations.get("tools_called", [])
+        optional_tools = expectations.get("tools_optional", [])
+        
+        if expected_tools:
+            for exp_tool in expected_tools:
+                if exp_tool in actual_tools:
+                    print(f"   {C.GREEN}✓{C.RESET} Tool: {exp_tool}")
+                    checks["passed"].append(f"tool:{exp_tool}")
+                else:
+                    print(f"   {C.RED}✗{C.RESET} Tool: {exp_tool} {C.RED}(missing){C.RESET}")
+                    checks["failed"].append(f"tool:{exp_tool}")
+        
+        # Check for unexpected tools (not in expected or optional)
+        all_allowed = set(expected_tools) | set(optional_tools)
+        for actual_tool in actual_tools:
+            if actual_tool not in all_allowed and actual_tool != "handoff_to_agent":
+                if all_allowed:  # Only warn if there were expectations
+                    print(f"   {C.YELLOW}?{C.RESET} Tool: {actual_tool} {C.DIM}(unexpected){C.RESET}")
+                    checks["warnings"].append(f"unexpected_tool:{actual_tool}")
+        
+        # Check no_handoff
+        if expectations.get("no_handoff"):
+            if handoff:
+                print(f"   {C.RED}✗{C.RESET} Handoff: expected none, got → {handoff.get('target_agent')}")
+                checks["failed"].append("no_handoff")
+            else:
+                print(f"   {C.GREEN}✓{C.RESET} Handoff: none (as expected)")
+                checks["passed"].append("no_handoff")
+        elif expectations.get("expect_handoff"):
+            expected_target = expectations.get("handoff_target")
+            if handoff:
+                actual_target = handoff.get("target_agent")
+                if expected_target and actual_target != expected_target:
+                    print(f"   {C.RED}✗{C.RESET} Handoff: expected → {expected_target}, got → {actual_target}")
+                    checks["failed"].append(f"handoff_target:{expected_target}")
+                else:
+                    print(f"   {C.GREEN}✓{C.RESET} Handoff: → {actual_target}")
+                    checks["passed"].append("handoff")
+            else:
+                print(f"   {C.RED}✗{C.RESET} Handoff: expected but none occurred")
+                checks["failed"].append("expect_handoff")
+        
+        # Check response_constraints
+        constraints = expectations.get("response_constraints", {})
+        max_tokens = constraints.get("max_tokens")
+        if max_tokens and response_tokens:
+            if response_tokens <= max_tokens:
+                print(f"   {C.GREEN}✓{C.RESET} Tokens: {response_tokens} ≤ {max_tokens}")
+                checks["passed"].append("max_tokens")
+            else:
+                print(f"   {C.RED}✗{C.RESET} Tokens: {response_tokens} > {max_tokens} {C.RED}(exceeded){C.RESET}")
+                checks["failed"].append(f"max_tokens:{response_tokens}>{max_tokens}")
+        
+        # Check should_mention
+        should_mention = constraints.get("should_mention", [])
+        for phrase in should_mention:
+            if phrase.lower() in response_text.lower():
+                print(f"   {C.GREEN}✓{C.RESET} Mentions: \"{phrase}\"")
+                checks["passed"].append(f"mentions:{phrase}")
+            else:
+                print(f"   {C.RED}✗{C.RESET} Mentions: \"{phrase}\" {C.RED}(not found){C.RESET}")
+                checks["failed"].append(f"mentions:{phrase}")
+        
+        # Check custom_assertions (simplified - just check tool result contains)
+        custom_assertions = expectations.get("custom_assertions", [])
+        for assertion in custom_assertions:
+            if assertion.get("type") == "tool_result_contains":
+                tool_name = assertion.get("tool")
+                field = assertion.get("field")
+                expected_value = assertion.get("expected")
+                
+                # Find the tool call result
+                found = False
+                for tc in tool_calls:
+                    if tc.get("name") == tool_name:
+                        result = tc.get("result_summary", "")
+                        if expected_value and expected_value in result:
+                            print(f"   {C.GREEN}✓{C.RESET} {tool_name}.{field} contains \"{expected_value}\"")
+                            checks["passed"].append(f"assertion:{tool_name}.{field}")
+                            found = True
+                        else:
+                            print(f"   {C.RED}✗{C.RESET} {tool_name}.{field} should contain \"{expected_value}\"")
+                            checks["failed"].append(f"assertion:{tool_name}.{field}")
+                            found = True
+                        break
+                
+                if not found and tool_name in expected_tools:
+                    print(f"   {C.RED}✗{C.RESET} {tool_name}.{field} - tool not called")
+                    checks["failed"].append(f"assertion:{tool_name}.{field}")
+    
+    return checks
 
 
 def print_scenario_header(scenario_name: str, input_path: str, demo_user: dict | None = None) -> None:
@@ -202,7 +307,16 @@ def print_scenario_header(scenario_name: str, input_path: str, demo_user: dict |
     if demo_user:
         print(f"{C.WHITE}{'─' * 70}{C.RESET}")
         print(f"  {C.CYAN}Demo User:{C.RESET} {demo_user.get('full_name', 'unknown')}")
-        print(f"  {C.DIM}Email: {demo_user.get('email', 'N/A')}{C.RESET}")
+        
+        # Check for email override
+        email_override = os.environ.get("EVAL_EMAIL_OVERRIDE")
+        original_email = demo_user.get('email', 'N/A')
+        if email_override:
+            print(f"  {C.GREEN}Email: {email_override} (override){C.RESET}")
+            print(f"  {C.DIM}Original: {original_email}{C.RESET}")
+        else:
+            print(f"  {C.DIM}Email: {original_email}{C.RESET}")
+        
         print(f"  {C.DIM}Scenario: {demo_user.get('scenario', 'banking')}{C.RESET}")
         if demo_user.get('seed'):
             print(f"  {C.DIM}Seed: {demo_user.get('seed')} (reproducible){C.RESET}")
@@ -210,7 +324,7 @@ def print_scenario_header(scenario_name: str, input_path: str, demo_user: dict |
     print(f"{C.BOLD}{C.WHITE}{'═' * 70}{C.RESET}")
 
 
-def print_scenario_summary(events: list[dict], elapsed_s: float, runs_dir: Path | None = None) -> None:
+def print_scenario_summary(events: list[dict], elapsed_s: float, runs_dir: Path | None = None, validation_results: list[dict] | None = None) -> None:
     """Print summary after all turns complete."""
     C = Colors
     
@@ -228,6 +342,12 @@ def print_scenario_summary(events: list[dict], elapsed_s: float, runs_dir: Path 
     )
     avg_response_tokens = total_response_tokens / max(total_turns, 1)
     
+    # Validation metrics
+    validation_results = validation_results or []
+    passed_checks = sum(1 for vr in validation_results if vr.get("passed"))
+    failed_checks = sum(1 for vr in validation_results if not vr.get("passed"))
+    total_checks = len(validation_results)
+    
     print()
     print(f"{C.BOLD}{C.WHITE}{'═' * 70}{C.RESET}")
     print(f"{C.BOLD}{C.WHITE}  SUMMARY{C.RESET}")
@@ -239,6 +359,20 @@ def print_scenario_summary(events: list[dict], elapsed_s: float, runs_dir: Path 
         print(f"  {C.RED}Errors:    {errors}{C.RESET}")
     print(f"  Avg E2E:   {format_duration(avg_e2e)}")
     print(f"  Elapsed:   {elapsed_s:.1f}s")
+    
+    # Expectations validation summary
+    if total_checks > 0:
+        print(f"{C.WHITE}{'─' * 70}{C.RESET}")
+        print(f"  {C.CYAN}Expectations:{C.RESET}")
+        if failed_checks == 0:
+            print(f"    {C.GREEN}✓ All {total_checks} checks passed{C.RESET}")
+        else:
+            print(f"    {C.GREEN}✓ Passed: {passed_checks}{C.RESET}")
+            print(f"    {C.RED}✗ Failed: {failed_checks}{C.RESET}")
+            # Show failed checks
+            for vr in validation_results:
+                if not vr.get("passed"):
+                    print(f"      {C.RED}• [{vr.get('turn_id', '?')}] {vr.get('check')}{C.RESET}")
     
     # Token summary (key for verbosity)
     print(f"{C.WHITE}{'─' * 70}{C.RESET}")
@@ -279,11 +413,13 @@ def print_scenario_summary(events: list[dict], elapsed_s: float, runs_dir: Path 
 class EventsFileTailer:
     """Tails an events JSONL file and yields new events as they arrive."""
     
-    def __init__(self, runs_dir: Path, poll_interval: float = 0.1):
+    def __init__(self, runs_dir: Path, turn_expectations: dict[str, dict] | None = None, poll_interval: float = 0.1):
         self.runs_dir = runs_dir
+        self.turn_expectations = turn_expectations or {}
         self.poll_interval = poll_interval
         self._stop = False
         self._start_time = time.time()
+        self.all_validation_results: list[dict] = []
     
     def stop(self):
         self._stop = True
@@ -339,7 +475,27 @@ class EventsFileTailer:
                             try:
                                 event = json.loads(line)
                                 turn_number += 1
-                                print_turn_event(event, turn_number)
+                                # Get expectations for this turn
+                                turn_id = event.get("turn_id")
+                                exp = self.turn_expectations.get(turn_id) if turn_id else None
+                                checks = print_turn_event(event, turn_number, exp)
+                                
+                                # Convert checks dict to list of validation results
+                                for check_name in checks.get("passed", []):
+                                    self.all_validation_results.append({
+                                        "passed": True,
+                                        "check": check_name,
+                                        "detail": "passed",
+                                        "turn_id": turn_id,
+                                    })
+                                for check_name in checks.get("failed", []):
+                                    self.all_validation_results.append({
+                                        "passed": False,
+                                        "check": check_name,
+                                        "detail": "failed",
+                                        "turn_id": turn_id,
+                                    })
+                                
                                 events.append(event)
                             except json.JSONDecodeError:
                                 pass  # Partial write, will get it next time
@@ -371,14 +527,21 @@ def run_evaluation_with_streaming(input_path: Path, output_dir: Path | None = No
     scenario_name = scenario.get("scenario_name", scenario.get("name", input_path.stem))
     demo_user = scenario.get("demo_user")
     
+    # Build turn expectations mapping from scenario turns
+    turn_expectations = {}
+    for turn in scenario.get("turns", []):
+        turn_id = turn.get("turn_id")
+        if turn_id and turn.get("expectations"):
+            turn_expectations[turn_id] = turn["expectations"]
+    
     print_scenario_header(scenario_name, str(input_path), demo_user)
     
     # Determine runs directory
     runs_dir = output_dir or Path("runs")
     runs_dir.mkdir(parents=True, exist_ok=True)
     
-    # Start file tailer
-    tailer = EventsFileTailer(runs_dir)
+    # Start file tailer with turn expectations
+    tailer = EventsFileTailer(runs_dir, turn_expectations=turn_expectations)
     
     project_root = Path(__file__).parent.parent.parent
     
@@ -441,7 +604,7 @@ def run_evaluation_with_streaming(input_path: Path, output_dir: Path | None = No
     proc_thread.join(timeout=5)
     
     elapsed = time.time() - start_time
-    print_scenario_summary(events, elapsed, runs_dir)
+    print_scenario_summary(events, elapsed, runs_dir, tailer.all_validation_results)
     
     return 0
 

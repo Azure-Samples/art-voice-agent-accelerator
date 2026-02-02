@@ -984,10 +984,17 @@ class ScenarioRunner:
         demo_user_data = None
         
         if demo_user_config:
-            logger.info(f"Creating demo user: {demo_user_config.get('full_name', 'unknown')}")
+            # Check for email override from environment (set by CLI)
+            email_override = os.environ.get("EVAL_EMAIL_OVERRIDE")
+            demo_email = email_override or demo_user_config.get("email", "sarah.johnson@example.com")
+            
+            if email_override:
+                logger.info(f"📧 Email override active: {email_override}")
+            
+            logger.info(f"Creating demo user: {demo_user_config.get('full_name', 'unknown')} (email={demo_email})")
             demo_user_data = await create_demo_user(
                 full_name=demo_user_config.get("full_name", "Sarah Johnson"),
-                email=demo_user_config.get("email", "sarah.johnson@example.com"),
+                email=demo_email,
                 phone_number=demo_user_config.get("phone_number"),
                 scenario=demo_user_config.get("scenario", "banking"),
                 session_id=session_id,
