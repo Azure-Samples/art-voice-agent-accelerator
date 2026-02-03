@@ -230,6 +230,10 @@ def show_scenario_menu(scenarios: list[Scenario], category: str) -> Scenario | N
             suffix = f" {C.GREEN}[demo user]{C.RESET}"
         
         print_menu_item(i, scenario.name, f"{scenario.turns} turns • {agents_str}{suffix}")
+        # Show description if available
+        if scenario.description and scenario.description != "No description":
+            desc = scenario.description[:70] + "..." if len(scenario.description) > 70 else scenario.description
+            print(f"      {C.DIM}{desc}{C.RESET}")
     
     print()
     print_menu_item(0, "Back", highlight=True)
@@ -459,6 +463,11 @@ def main():
                     num = len(all_scenarios)
                     demo = f" {C.GREEN}[demo]{C.RESET}" if s.demo_user else ""
                     print(f"  {C.DIM}[{num}]{C.RESET} {s.name} ({s.turns} turns){demo}")
+                    # Show description if available and not default
+                    if s.description and s.description != "No description":
+                        # Truncate long descriptions
+                        desc = s.description[:70] + "..." if len(s.description) > 70 else s.description
+                        print(f"      {C.DIM}{desc}{C.RESET}")
             
             print(f"\n{C.DIM}Enter a number to run, or press Enter to go back{C.RESET}")
             choice = input(f"\n{C.YELLOW}>{C.RESET} Select scenario (or Enter to go back): ").strip()

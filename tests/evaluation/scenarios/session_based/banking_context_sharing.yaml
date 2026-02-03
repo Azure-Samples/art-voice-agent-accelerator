@@ -1,0 +1,188 @@
+# yaml-language-server: $schema=../scenario.schema.json
+# ═══════════════════════════════════════════════════════════════════════════════
+# Banking - Context Sharing vs No Sharing
+# ═══════════════════════════════════════════════════════════════════════════════
+# Tests that handoff context is visible to the target agent when share_context=true
+# and intentionally absent when share_context=false.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+scenario_name: banking_context_sharing
+description: |
+  Validates handoff context behavior:
+  - share_context=true: DeclineSpecialist should reference a specific decline code
+  - share_context=false: FraudAgent should NOT reference the earlier merchant detail
+
+demo_user:
+  full_name: "Taylor Rivera"
+  email: "taylor.rivera@example.com"
+  phone_number: "+18885553333"
+  scenario: banking
+  seed: 314
+  persist: false
+
+session_config:
+  agents:
+    - BankingConcierge
+    - DeclineSpecialist
+    - FraudAgent
+
+  start_agent: BankingConcierge
+  handoff_type: announced
+
+  handoffs:
+    # Context SHARED (should carry decline_code into specialist prompt)
+    - from: BankingConcierge
+      to: DeclineSpecialist
+      tool: handoff_decline_specialist
+      type: announced
+      share_context: true
+      handoff_condition: |
+        Transfer to DeclineSpecialist when the customer reports a declined card
+        and requests investigation or asks for decline code details.
+
+    # Context NOT SHARED (fraud agent should not see prior merchant detail)
+    - from: BankingConcierge
+      to: FraudAgent
+      tool: handoff_fraud_agent
+      type: announced
+      share_context: false
+      handoff_condition: |
+        Transfer to FraudAgent when the customer reports an unrecognized transaction
+        and asks for fraud investigation.
+
+  generic_handoff:
+    enabled: true
+    allowed_targets:
+      - DeclineSpecialist
+      - FraudAgent
+      - BankingConcierge
+    default_type: announced
+    share_context: true
+
+  agent_defaults:
+    institution_name: "Contoso Bank"
+    industry: "banking"
+
+agent_overrides:
+  - agent: BankingConcierge
+    model_override:
+      deployment_id: gpt-4o
+      temperature: 0.7
+      max_tokens: 500
+
+  - agent: DeclineSpecialist
+    model_override:
+      deployment_id: gpt-4o
+      temperature: 0.6
+      max_tokens: 500
+
+  - agent: FraudAgent
+    model_override:
+      deployment_id: gpt-4o
+      temperature: 0.6
+      max_tokens: 500
+
+turns:
+  # Provide a specific decline code, but do NOT handoff yet
+  - turn_id: turn_1_decline_detail
+    user_input: "My card was declined at Contoso Electronics and the receipt shows code 05."
+    expectations:
+      tools_optional:
+        - get_user_profile
+        - verify_client_identity
+      tools_forbidden:
+        - handoff_decline_specialist
+        - handoff_to_agent
+      no_handoff: true
+      response_constraints:
+        max_tokens: 90
+
+  # Trigger handoff to DeclineSpecialist (share_context=true)
+  - turn_id: turn_2_handoff_decline
+    user_input: "Please connect me with the decline specialist."
+    expectations:
+      tools_optional:
+        - handoff_decline_specialist
+        - handoff_to_agent
+      handoff:
+        to_agent: DeclineSpecialist
+      response_constraints:
+        max_tokens: 60
+
+  # DeclineSpecialist should reference the code from shared context
+  - turn_id: turn_3_decline_shared_context
+    user_input: "Before we continue, what details do you already have?"
+    expectations:
+      tools_called: []
+      tools_optional:
+        - lookup_decline_code
+        - search_decline_codes
+      no_handoff: true
+      response_constraints:
+        max_tokens: 120
+        must_include:
+          - "05"
+
+  # Provide a fraud detail, but do NOT handoff yet
+  - turn_id: turn_4_fraud_detail
+    user_input: "I also see an unrecognized charge at Orion Motors for two hundred forty five dollars."
+    expectations:
+      tools_optional:
+        - get_recent_transactions
+      tools_forbidden:
+        - handoff_fraud_agent
+        - handoff_to_agent
+      no_handoff: true
+      response_constraints:
+        max_tokens: 90
+
+  # Trigger handoff to FraudAgent (share_context=false)
+  - turn_id: turn_5_handoff_fraud
+    user_input: "Please connect me with the fraud team."
+    expectations:
+      tools_optional:
+        - handoff_fraud_agent
+        - handoff_to_agent
+      handoff:
+        to_agent: FraudAgent
+      response_constraints:
+        max_tokens: 60
+
+  # FraudAgent should NOT mention Orion (context not shared)
+  - turn_id: turn_6_fraud_no_context
+    user_input: "What do you already know about the suspicious charge?"
+    expectations:
+      tools_called: []
+      tools_optional:
+        - analyze_recent_transactions
+        - check_suspicious_activity
+      no_handoff: true
+      response_constraints:
+        max_tokens: 120
+        must_not_include:
+          - "Orion"
+
+thresholds:
+  min_tool_precision: 0.50
+  min_tool_recall: 0.40
+  min_grounded_ratio: 0.4
+  max_latency_p95_ms: 10000
+
+foundry_export:
+  enabled: true
+  output_filename: context_sharing_eval.jsonl
+  context_source: evidence
+  evaluators:
+    - id: builtin.relevance
+      init_params:
+        deployment_name: gpt-4o
+      data_mapping:
+        query: "${data.query}"
+        response: "${data.response}"
+        context: "${data.context}"
+    - id: builtin.coherence
+      init_params:
+        deployment_name: gpt-4o
+      data_mapping:
+        query: "${data.query}"
+        response: "${data.response}"
