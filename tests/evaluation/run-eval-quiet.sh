@@ -6,7 +6,7 @@
 #
 # Usage:
 #   ./tests/evaluation/run-eval-quiet.sh <scenario.yaml>
-#   ./tests/evaluation/run-eval-quiet.sh tests/evaluation/scenarios/session_based/banking_declined_card_verbosity.yaml
+#   ./tests/evaluation/run-eval-quiet.sh tests/evaluation/scenarios/session_based/banking_declined_card_handoff.yaml
 #
 # All arguments are passed through to the CLI.
 # ═══════════════════════════════════════════════════════════════════════════════

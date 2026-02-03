@@ -186,10 +186,11 @@ def show_main_menu() -> str:
     print_menu_item(2, "Quick Run", "Run the most recent scenario again")
     print_menu_item(3, "List Scenarios", "Browse all available scenarios")
     print_menu_item(4, "View Results", "Browse recent evaluation results")
+    print_menu_item(5, "Dashboard", "Visualize metrics across all runs")
     print()
     print_menu_item(0, "Exit", highlight=True)
     
-    return get_input("Select option", ["0", "1", "2", "3", "4"])
+    return get_input("Select option", ["0", "1", "2", "3", "4", "5"])
 
 
 def show_category_menu(scenarios_by_category: dict[str, list[Scenario]]) -> str | None:
@@ -476,6 +477,16 @@ def main():
             result = show_results_menu(runs_dir)
             if result:
                 view_result(result)
+        
+        elif action == "5":  # Dashboard
+            try:
+                from tests.evaluation.dashboard import run_dashboard
+                run_dashboard(runs_dir)
+            except ImportError as e:
+                clear_screen()
+                print_header("📊 Dashboard")
+                print(f"  {C.RED}Dashboard unavailable: {e}{C.RESET}")
+                get_input("Press Enter to continue", [])
     
     return 0
 

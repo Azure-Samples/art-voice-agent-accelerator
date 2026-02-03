@@ -7,7 +7,7 @@
 #
 # Usage:
 #   ./tests/evaluation/run-eval-stream.sh run --input <scenario.yaml>
-#   ./tests/evaluation/run-eval-stream.sh run --input tests/evaluation/scenarios/session_based/banking_declined_card_verbosity.yaml
+#   ./tests/evaluation/run-eval-stream.sh run --input tests/evaluation/scenarios/session_based/banking_declined_card_handoff.yaml
 #
 # All arguments are passed through to the Python script.
 # ═══════════════════════════════════════════════════════════════════════════════
