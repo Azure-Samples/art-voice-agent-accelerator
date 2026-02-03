@@ -1583,6 +1583,18 @@ class LiveOrchestrator:
                     if sess_id:
                         args.setdefault("session_id", sess_id)
 
+            # Inject session context into tool args (same pattern as SpeechCascade)
+            # This allows tools to use already-loaded session data
+            if self._memo_manager:
+                session_profile = self._memo_manager.get_value_from_corememory("session_profile")
+                if session_profile:
+                    args["_session_profile"] = session_profile
+                # Always inject _client_id so tools can use the verified value
+                # Tools should prefer _client_id over client_id when present
+                client_id = self._memo_manager.get_value_from_corememory("client_id")
+                if client_id:
+                    args["_client_id"] = client_id
+
             logger.info("Executing tool: %s with args: %s", name, args)
 
             notify_status = "success"

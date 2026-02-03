@@ -18,11 +18,68 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Backend Target Configuration
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class BackendTarget:
+    """Represents a backend target for evaluations."""
+    name: str
+    url: str
+    source: str  # 'local', 'azd', 'custom'
+    
+    def display(self) -> str:
+        """Return display string for the target."""
+        if self.source == 'local':
+            return f"{self.name} ({self.url})"
+        elif self.source == 'azd':
+            # Truncate long Azure URLs
+            short_url = self.url[:50] + "..." if len(self.url) > 50 else self.url
+            return f"{self.name} ({short_url})"
+        else:
+            return f"{self.name}: {self.url}"
+
+
+def get_azd_backend_url() -> str | None:
+    """Get backend URL from azd environment."""
+    try:
+        result = subprocess.run(
+            ["azd", "env", "get-value", "BACKEND_CONTAINER_APP_URL"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            url = result.stdout.strip()
+            if url.startswith("https://"):
+                return url
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return None
+
+
+def get_azd_env_name() -> str | None:
+    """Get current azd environment name."""
+    try:
+        result = subprocess.run(
+            ["azd", "env", "get-value", "AZURE_ENV_NAME"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -174,12 +231,22 @@ def discover_scenarios(base_dir: Path) -> dict[str, list[Scenario]]:
 # Menu Screens
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def show_main_menu() -> str:
+def show_main_menu(backend_target: BackendTarget | None = None) -> str:
     """Show main menu and return action."""
     clear_screen()
     print_header("🎯 Evaluation CLI")
     
     print(f"  {C.DIM}Run agent evaluations with structured streaming output{C.RESET}")
+    
+    # Show current backend target (for info - evals run in-process currently)
+    if backend_target:
+        if backend_target.source == 'local':
+            color = C.GREEN
+        elif backend_target.source == 'azd':
+            color = C.CYAN
+        else:
+            color = C.YELLOW
+        print(f"  {C.DIM}Backend:{C.RESET} {color}{backend_target.name}{C.RESET} {C.DIM}(exported as EVAL_BACKEND_URL){C.RESET}")
     print()
     
     print_menu_item(1, "Run Scenario", "Select and run an evaluation scenario")
@@ -187,10 +254,11 @@ def show_main_menu() -> str:
     print_menu_item(3, "List Scenarios", "Browse all available scenarios")
     print_menu_item(4, "View Results", "Browse recent evaluation results")
     print_menu_item(5, "Dashboard", "Visualize metrics across all runs")
+    print_menu_item(6, "Settings", "Configure backend target")
     print()
     print_menu_item(0, "Exit", highlight=True)
     
-    return get_input("Select option", ["0", "1", "2", "3", "4", "5"])
+    return get_input("Select option", ["0", "1", "2", "3", "4", "5", "6"])
 
 
 def show_category_menu(scenarios_by_category: dict[str, list[Scenario]]) -> str | None:
@@ -369,13 +437,24 @@ def view_result(event_file: Path):
 # Run Evaluation
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def run_scenario(scenario: Scenario, project_root: Path, email_override: str | None = None):
+def run_scenario(scenario: Scenario, project_root: Path, email_override: str | None = None, backend_target: BackendTarget | None = None):
     """Run a scenario with streaming output."""
     clear_screen()
     print_header(f"▶️  Running: {scenario.name}")
     
+    if backend_target:
+        if backend_target.source == 'local':
+            color = C.GREEN
+        elif backend_target.source == 'azd':
+            color = C.CYAN
+        else:
+            color = C.YELLOW
+        print(f"  {C.DIM}Target:{C.RESET} {color}{backend_target.display()}{C.RESET}")
+    
     if email_override:
         print(f"  {C.GREEN}📧 Email override: {email_override}{C.RESET}")
+    
+    if backend_target or email_override:
         print()
     
     # Use the streaming runner
@@ -386,10 +465,12 @@ def run_scenario(scenario: Scenario, project_root: Path, email_override: str | N
         "--input", str(scenario.path),
     ]
     
-    # Set up environment with email override
+    # Set up environment with overrides
     env = os.environ.copy()
     if email_override:
         env["EVAL_EMAIL_OVERRIDE"] = email_override
+    if backend_target:
+        env["EVAL_BACKEND_URL"] = backend_target.url
     
     try:
         subprocess.run(cmd, cwd=project_root, env=env)
@@ -398,6 +479,102 @@ def run_scenario(scenario: Scenario, project_root: Path, email_override: str | N
     
     print()
     get_input("Press Enter to continue", [])
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Settings Menu
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def show_settings_menu(current_target: BackendTarget | None) -> BackendTarget | None:
+    """Show settings menu for backend target selection.
+    
+    Note: Backend selection affects EVAL_BACKEND_URL environment variable passed
+    to evaluation runs. The current evaluation runner uses in-process orchestration,
+    so this is primarily for documentation and future HTTP-mode support.
+    """
+    clear_screen()
+    print_header("⚙️  Settings")
+    
+    # Show current target
+    print(f"  {C.CYAN}Backend Target (for HTTP mode):{C.RESET}")
+    if current_target:
+        if current_target.source == 'local':
+            color = C.GREEN
+        elif current_target.source == 'azd':
+            color = C.CYAN
+        else:
+            color = C.YELLOW
+        print(f"    {color}{current_target.display()}{C.RESET}")
+    else:
+        print(f"    {C.DIM}In-process (default){C.RESET}")
+    print()
+    
+    # Note about current mode
+    print(f"  {C.DIM}Note: Evaluations currently run in-process for fastest execution.{C.RESET}")
+    print(f"  {C.DIM}Backend URL is exported as EVAL_BACKEND_URL for future HTTP mode.{C.RESET}")
+    print()
+    
+    # Build available targets
+    targets: list[BackendTarget] = [
+        BackendTarget("Local Dev (port 8000)", "http://localhost:8000", "local"),
+        BackendTarget("Local Dev (port 8010)", "http://localhost:8010", "local"),
+    ]
+    
+    # Try to get azd backend URL
+    azd_url = get_azd_backend_url()
+    azd_env = get_azd_env_name()
+    if azd_url:
+        env_label = f" ({azd_env})" if azd_env else ""
+        targets.append(BackendTarget(f"Azure Deployed{env_label}", azd_url, "azd"))
+    
+    print(f"  {C.CYAN}Select Backend Target:{C.RESET}")
+    print()
+    
+    print_menu_item(1, "In-process", "Run orchestrator directly (default, fastest)")
+    
+    for i, target in enumerate(targets, 2):
+        if target.source == 'local':
+            print_menu_item(i, target.name, target.url)
+        elif target.source == 'azd':
+            # Truncate long Azure URLs for display
+            short_url = target.url[:55] + "..." if len(target.url) > 55 else target.url
+            print_menu_item(i, target.name, short_url)
+    
+    # Custom URL option
+    custom_idx = len(targets) + 2
+    print_menu_item(custom_idx, "Custom URL", "Enter a custom backend URL")
+    
+    print()
+    print_menu_item(0, "Back", highlight=True)
+    
+    # Status info
+    if not azd_url:
+        print()
+        print(f"  {C.DIM}💡 Azure URL not available. Run 'azd env get-values' to check deployment.{C.RESET}")
+    
+    valid = ["0", "1"] + [str(i) for i in range(2, custom_idx + 1)]
+    choice = get_input("Select target", valid)
+    
+    if choice == "0":
+        return current_target  # No change
+    elif choice == "1":
+        return None  # In-process mode
+    elif choice == str(custom_idx):
+        # Custom URL
+        print()
+        custom_url = input(f"  {C.YELLOW}>{C.RESET} Enter backend URL: ").strip()
+        if custom_url:
+            if not custom_url.startswith(("http://", "https://")):
+                custom_url = "http://" + custom_url
+            return BackendTarget("Custom", custom_url, "custom")
+        return current_target
+    else:
+        # Selected a predefined target
+        idx = int(choice) - 2
+        if 0 <= idx < len(targets):
+            return targets[idx]
+    
+    return current_target
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -414,6 +591,7 @@ def main():
     # State
     last_scenario: Scenario | None = None
     last_email_override: str | None = None
+    backend_target: BackendTarget | None = None  # None = in-process mode
     
     # Discover scenarios
     scenarios_by_category = discover_scenarios(script_dir)
@@ -423,7 +601,7 @@ def main():
         return 1
     
     while True:
-        action = show_main_menu()
+        action = show_main_menu(backend_target)
         
         if action == "0":
             print(f"\n{C.CYAN}Goodbye!{C.RESET}\n")
@@ -438,13 +616,13 @@ def main():
                     if should_run:
                         last_scenario = scenario
                         last_email_override = email_override
-                        run_scenario(scenario, project_root, email_override)
+                        run_scenario(scenario, project_root, email_override, backend_target)
         
         elif action == "2":  # Quick Run
             if last_scenario:
                 email_note = f" (email: {last_email_override})" if last_email_override else ""
                 if confirm(f"Run '{last_scenario.name}' again{email_note}?"):
-                    run_scenario(last_scenario, project_root, last_email_override)
+                    run_scenario(last_scenario, project_root, last_email_override, backend_target)
             else:
                 clear_screen()
                 print_header("⚡ Quick Run")
@@ -480,7 +658,7 @@ def main():
                     if should_run:
                         last_scenario = scenario
                         last_email_override = email_override
-                        run_scenario(scenario, project_root, email_override)
+                        run_scenario(scenario, project_root, email_override, backend_target)
         
         elif action == "4":  # View Results
             result = show_results_menu(runs_dir)
@@ -496,6 +674,9 @@ def main():
                 print_header("📊 Dashboard")
                 print(f"  {C.RED}Dashboard unavailable: {e}{C.RESET}")
                 get_input("Press Enter to continue", [])
+        
+        elif action == "6":  # Settings
+            backend_target = show_settings_menu(backend_target)
     
     return 0
 
