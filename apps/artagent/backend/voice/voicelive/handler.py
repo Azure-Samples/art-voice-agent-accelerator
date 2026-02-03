@@ -161,6 +161,8 @@ class _SessionMessenger:
         self._turn_sequence: int = 0  # Track tool call boundaries within a turn
         self._base_turn_id: str | None = None  # Original turn_id before tool calls
         self._turn_id_advanced: bool = False  # Flag to prevent overwriting advanced turn_id
+        # Deduplication: track (turn_id, text_hash) of sent final messages
+        self._sent_messages: set[tuple[str, int]] = set()
 
     def _ensure_turn_id(self, candidate: str | None, *, allow_generate: bool = True) -> str | None:
         # If turn_id was advanced (post-tool-call), preserve it and don't overwrite
@@ -225,6 +227,8 @@ class _SessionMessenger:
         self._turn_sequence = 0
         self._base_turn_id = None
         self._turn_id_advanced = False
+        # Clear sent message deduplication cache for new turn
+        self._sent_messages.clear()
 
     def begin_user_turn(self, turn_id: str | None) -> str | None:
         """Initialise a user turn and emit a placeholder streaming message."""
@@ -394,6 +398,19 @@ class _SessionMessenger:
             return
 
         message_text = text or ""
+        
+        # Deduplication: prevent sending the same message twice for the same turn_id
+        # This can happen when TRANSCRIPT_DONE fires multiple times or events race
+        msg_key = (turn_id, hash(message_text))
+        if msg_key in self._sent_messages:
+            logger.debug(
+                "[Dedup] Skipping duplicate message | turn_id=%s text_len=%d",
+                turn_id,
+                len(message_text),
+            )
+            return
+        self._sent_messages.add(msg_key)
+        
         sender_name = self._resolve_sender(sender)
         payload = {
             "type": "assistant",

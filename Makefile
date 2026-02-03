@@ -128,60 +128,60 @@ eval:
 
 # Run a single evaluation scenario with streaming output
 # Usage: make eval-run SCENARIO=tests/evaluation/scenarios/session_based/banking_declined_card_verbosity.yaml
-eval-run:
-	@if [ -z "$(SCENARIO)" ]; then \
-		echo "❌ Usage: make eval-run SCENARIO=<path-to-scenario.yaml>"; \
-		exit 1; \
-	fi
-	@$(PYTHON_INTERPRETER) tests/evaluation/run-eval-stream.py run --input $(SCENARIO)
+# eval-run:
+# 	@if [ -z "$(SCENARIO)" ]; then \
+# 		echo "❌ Usage: make eval-run SCENARIO=<path-to-scenario.yaml>"; \
+# 		exit 1; \
+# 	fi
+# 	@$(PYTHON_INTERPRETER) tests/evaluation/run-eval-stream.py run --input $(SCENARIO)
 
-# Run all declined card evaluation scenarios
-eval-declined-card:
-	@echo "📺 Running all declined card scenarios"
-	@echo "═══════════════════════════════════════════════════"
-	@for scenario in tests/evaluation/scenarios/session_based/banking_declined_card_*.yaml; do \
-		echo ""; \
-		echo "📋 Running: $$scenario"; \
-		$(PYTHON_INTERPRETER) tests/evaluation/run-eval-stream.py run --input "$$scenario" || true; \
-	done
-	@echo ""
-	@echo "✅ All declined card evaluations complete"
+# # Run all declined card evaluation scenarios
+# eval-declined-card:
+# 	@echo "📺 Running all declined card scenarios"
+# 	@echo "═══════════════════════════════════════════════════"
+# 	@for scenario in tests/evaluation/scenarios/session_based/banking_declined_card_*.yaml; do \
+# 		echo ""; \
+# 		echo "📋 Running: $$scenario"; \
+# 		$(PYTHON_INTERPRETER) tests/evaluation/run-eval-stream.py run --input "$$scenario" || true; \
+# 	done
+# 	@echo ""
+# 	@echo "✅ All declined card evaluations complete"
 
-# Run all session-based evaluation scenarios
-eval-session:
-	@echo "📺 Running all session-based scenarios"
-	@echo "═══════════════════════════════════════════════════"
-	@for scenario in tests/evaluation/scenarios/session_based/*.yaml; do \
-		echo ""; \
-		echo "📋 Running: $$scenario"; \
-		$(PYTHON_INTERPRETER) tests/evaluation/run-eval-stream.py run --input "$$scenario" || true; \
-	done
-	@echo ""
-	@echo "✅ All session-based evaluations complete"
+# # Run all session-based evaluation scenarios
+# eval-session:
+# 	@echo "📺 Running all session-based scenarios"
+# 	@echo "═══════════════════════════════════════════════════"
+# 	@for scenario in tests/evaluation/scenarios/session_based/*.yaml; do \
+# 		echo ""; \
+# 		echo "📋 Running: $$scenario"; \
+# 		$(PYTHON_INTERPRETER) tests/evaluation/run-eval-stream.py run --input "$$scenario" || true; \
+# 	done
+# 	@echo ""
+# 	@echo "✅ All session-based evaluations complete"
 
-# Run smoke tests (quick validation)
-eval-smoke:
-	@echo "💨 Running smoke test scenarios"
-	@echo "═══════════════════════════════════════════════════"
-	@for scenario in tests/evaluation/scenarios/smoke/*.yaml; do \
-		echo ""; \
-		echo "📋 Running: $$scenario"; \
-		$(PYTHON_INTERPRETER) tests/evaluation/run-eval-stream.py run --input "$$scenario" || true; \
-	done
-	@echo ""
-	@echo "✅ Smoke tests complete"
+# # Run smoke tests (quick validation)
+# eval-smoke:
+# 	@echo "💨 Running smoke test scenarios"
+# 	@echo "═══════════════════════════════════════════════════"
+# 	@for scenario in tests/evaluation/scenarios/smoke/*.yaml; do \
+# 		echo ""; \
+# 		echo "📋 Running: $$scenario"; \
+# 		$(PYTHON_INTERPRETER) tests/evaluation/run-eval-stream.py run --input "$$scenario" || true; \
+# 	done
+# 	@echo ""
+# 	@echo "✅ Smoke tests complete"
 
-# Run A/B comparison tests
-eval-ab:
-	@echo "⚖️  Running A/B comparison scenarios"
-	@echo "═══════════════════════════════════════════════════"
-	@for scenario in tests/evaluation/scenarios/ab_tests/*.yaml; do \
-		echo ""; \
-		echo "📋 Running: $$scenario"; \
-		$(PYTHON_INTERPRETER) tests/evaluation/run-eval-stream.py run --input "$$scenario" || true; \
-	done
-	@echo ""
-	@echo "✅ A/B comparisons complete"
+# # Run A/B comparison tests
+# eval-ab:
+# 	@echo "⚖️  Running A/B comparison scenarios"
+# 	@echo "═══════════════════════════════════════════════════"
+# 	@for scenario in tests/evaluation/scenarios/ab_tests/*.yaml; do \
+# 		echo ""; \
+# 		echo "📋 Running: $$scenario"; \
+# 		$(PYTHON_INTERPRETER) tests/evaluation/run-eval-stream.py run --input "$$scenario" || true; \
+# 	done
+# 	@echo ""
+# 	@echo "✅ A/B comparisons complete"
 
 .PHONY: eval eval-run eval-declined-card eval-session eval-smoke eval-ab
 

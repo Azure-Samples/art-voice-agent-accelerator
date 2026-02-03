@@ -264,6 +264,11 @@ class LiveOrchestrator:
         # Flag to prevent SESSION_UPDATED from cancelling handoff-triggered responses
         self._handoff_response_pending: bool = False
 
+        # Track pending tool outputs to batch them before calling response.create()
+        # When model makes multiple tool calls, we queue results and trigger ONE response
+        self._pending_tool_outputs: list[tuple[str, str]] = []  # [(call_id, output_json), ...]
+        self._response_had_tool_calls: bool = False
+
         # MemoManager for session state continuity (consistent with CascadeOrchestratorAdapter)
         self._memo_manager: MemoManager | None = memo_manager
 
@@ -1276,13 +1281,69 @@ class LiveOrchestrator:
                     self._active_response_id = None
 
     async def _handle_response_done(self, event) -> None:
-        """Handle response complete."""
+        """Handle response complete.
+
+        CRITICAL: When the model makes multiple tool calls in a single response,
+        each tool is executed but we defer response.create() until ALL tools finish.
+        This handler flushes pending tool outputs and triggers ONE response.
+        """
         logger.debug("Response complete")
         response_id = self._response_id_from_event(event)
         if response_id and response_id == self._active_response_id:
             self._active_response_id = None
 
         self._emit_model_metrics(event)
+
+        # Flush pending tool outputs if any and trigger ONE model response
+        # This prevents duplicate messages when model makes multiple tool calls
+        if self._pending_tool_outputs:
+            logger.debug(
+                "[Response Done] Flushing %d pending tool outputs",
+                len(self._pending_tool_outputs),
+            )
+
+            # Create all tool output items
+            for call_id, output_json in self._pending_tool_outputs:
+                try:
+                    output_item = FunctionCallOutputItem(
+                        call_id=call_id,
+                        output=output_json,
+                    )
+                    await self.conn.conversation.item.create(item=output_item)
+                    logger.debug("Created function_call_output item for call_id=%s", call_id)
+                except Exception:
+                    logger.warning(
+                        "Failed to create tool output item for call_id=%s", call_id, exc_info=True
+                    )
+
+            # Clear pending outputs
+            self._pending_tool_outputs = []
+
+            # Update session context with collected information BEFORE response
+            await self._update_session_context()
+
+            # Advance turn_id once for all tool calls combined
+            if self.messenger:
+                self.messenger.advance_turn_for_tool()
+
+            # Trigger ONE response for all tool outputs
+            with tracer.start_as_current_span(
+                "voicelive.response.create_batched",
+                kind=trace.SpanKind.SERVER,
+                attributes=create_service_dependency_attrs(
+                    source_service="voicelive_orchestrator",
+                    target_service="azure_voicelive",
+                    call_connection_id=self.call_connection_id,
+                    session_id=(
+                        getattr(self.messenger, "session_id", None) if self.messenger else None
+                    ),
+                ),
+            ):
+                await self.conn.response.create()
+            logger.info("[Response Done] Triggered single response for batched tool outputs")
+
+        # Reset the tool calls flag
+        self._response_had_tool_calls = False
 
         # Sync state to MemoManager in background to avoid hot path latency
         self._schedule_background_sync()
@@ -1915,49 +1976,20 @@ class LiveOrchestrator:
                 return True
 
             else:
-                # Business tool - send result back to model
-                output_item = FunctionCallOutputItem(
-                    call_id=call_id,
-                    output=json.dumps(result),
+                # Business tool - queue output for batched response at RESPONSE_DONE
+                # This prevents duplicate messages when model makes multiple tool calls
+                #
+                # CRITICAL: Do NOT call response.create() here! The model may have
+                # multiple tool calls in a single response. We queue all outputs and
+                # trigger ONE response in _handle_response_done().
+                output_json = json.dumps(result)
+                self._pending_tool_outputs.append((call_id, output_json))
+                self._response_had_tool_calls = True
+                logger.debug(
+                    "[Business Tool] Queued output for call_id=%s | pending_count=%d",
+                    call_id, len(self._pending_tool_outputs)
                 )
 
-                with tracer.start_as_current_span(
-                    "voicelive.conversation.item_create",
-                    kind=trace.SpanKind.SERVER,
-                    attributes=create_service_dependency_attrs(
-                        source_service="voicelive_orchestrator",
-                        target_service="azure_voicelive",
-                        call_connection_id=self.call_connection_id,
-                        session_id=(
-                            getattr(self.messenger, "session_id", None) if self.messenger else None
-                        ),
-                    ),
-                ):
-                    await self.conn.conversation.item.create(item=output_item)
-                logger.debug("Created function_call_output item for call_id=%s", call_id)
-
-                # Update session instructions with new context BEFORE triggering response
-                # This ensures the model sees collected slots/tool outputs when formulating its reply
-                await self._update_session_context()
-
-                # Advance turn_id to create a new message segment for post-tool response
-                # This prevents the UI from overwriting pre-tool assistant content
-                if self.messenger:
-                    self.messenger.advance_turn_for_tool()
-
-                with tracer.start_as_current_span(
-                    "voicelive.response.create",
-                    kind=trace.SpanKind.SERVER,
-                    attributes=create_service_dependency_attrs(
-                        source_service="voicelive_orchestrator",
-                        target_service="azure_voicelive",
-                        call_connection_id=self.call_connection_id,
-                        session_id=(
-                            getattr(self.messenger, "session_id", None) if self.messenger else None
-                        ),
-                    ),
-                ):
-                    await self.conn.response.create()
                 if self.messenger:
                     try:
                         await self.messenger.notify_tool_end(

@@ -2129,6 +2129,17 @@ function RealTimeVoiceApp() {
           if (!base) {
             return prev;
           }
+          // DEDUPLICATION: Don't create a new message if the last message has same speaker+text
+          // This prevents duplicate bubbles when turnId changes but content is the same
+          const lastMsg = prev.at(-1);
+          if (lastMsg && lastMsg.speaker === base.speaker && lastMsg.text === base.text) {
+            // Update the existing message's turnId instead of creating duplicate
+            return prev.map((m, i) => 
+              i === prev.length - 1 
+                ? { ...m, turnId: speaker ? `${turnId}_${speaker}` : turnId, streaming: false }
+                : m
+            );
+          }
           // For new messages with a speaker, use qualified turnId to isolate from other agents
           const effectiveTurnId = speaker ? `${turnId}_${speaker}` : turnId;
           return [...prev, { ...base, turnId: effectiveTurnId }];
@@ -2149,6 +2160,15 @@ function RealTimeVoiceApp() {
           const newMsg = base 
             ? { ...base, ...patch, turnId: qualifiedTurnId } 
             : { ...patch, turnId: qualifiedTurnId };
+          // DEDUPLICATION: Don't add if last message already has same speaker+text
+          const lastMsg = prev.at(-1);
+          if (lastMsg && lastMsg.speaker === newMsg.speaker && lastMsg.text === newMsg.text) {
+            return prev.map((m, i) => 
+              i === prev.length - 1 
+                ? { ...m, turnId: qualifiedTurnId, streaming: false }
+                : m
+            );
+          }
           return [...prev, newMsg];
         }
 
