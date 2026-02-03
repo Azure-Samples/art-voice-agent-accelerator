@@ -158,8 +158,18 @@ class _SessionMessenger:
         self._pending_user_turn_id: str | None = None
         self._active_agent_name: str | None = None
         self._active_agent_label: str | None = None
+        self._turn_sequence: int = 0  # Track tool call boundaries within a turn
+        self._base_turn_id: str | None = None  # Original turn_id before tool calls
+        self._turn_id_advanced: bool = False  # Flag to prevent overwriting advanced turn_id
+        # Deduplication: track (turn_id, text_hash) of sent final messages
+        self._sent_messages: set[tuple[str, int]] = set()
 
     def _ensure_turn_id(self, candidate: str | None, *, allow_generate: bool = True) -> str | None:
+        # If turn_id was advanced (post-tool-call), preserve it and don't overwrite
+        # with the new response_id. This ensures post-tool responses appear as new
+        # messages in the frontend rather than overwriting pre-tool content.
+        if self._turn_id_advanced and self._active_turn_id:
+            return self._active_turn_id
         if candidate:
             self._active_turn_id = candidate
             return candidate
@@ -174,8 +184,51 @@ class _SessionMessenger:
     def _release_turn(self, turn_id: str | None) -> None:
         if turn_id and self._active_turn_id == turn_id:
             self._active_turn_id = None
+            self._turn_id_advanced = False
         elif turn_id is None:
             self._active_turn_id = None
+            self._turn_id_advanced = False
+
+    def advance_turn_for_tool(self) -> str | None:
+        """
+        Advance the turn_id after a tool call to create a new message segment.
+
+        This ensures post-tool assistant responses appear as new messages
+        rather than overwriting pre-tool content in the UI.
+
+        Returns:
+            The new turn_id to use for post-tool responses, or None if no turn active.
+        """
+        if not self._active_turn_id:
+            return None
+
+        # Store original turn_id as base if not already set
+        if not self._base_turn_id:
+            self._base_turn_id = self._active_turn_id
+
+        # Increment sequence and generate new turn_id
+        self._turn_sequence += 1
+        new_turn_id = f"{self._base_turn_id}_s{self._turn_sequence}"
+        self._active_turn_id = new_turn_id
+        
+        # Mark that turn_id was advanced so _ensure_turn_id won't overwrite it
+        self._turn_id_advanced = True
+
+        logger.debug(
+            "[TurnAdvance] Advanced turn_id: base=%s, seq=%d, new=%s",
+            self._base_turn_id,
+            self._turn_sequence,
+            new_turn_id,
+        )
+        return new_turn_id
+
+    def reset_turn_sequence(self) -> None:
+        """Reset turn sequence tracking for a new user turn."""
+        self._turn_sequence = 0
+        self._base_turn_id = None
+        self._turn_id_advanced = False
+        # Clear sent message deduplication cache for new turn
+        self._sent_messages.clear()
 
     def begin_user_turn(self, turn_id: str | None) -> str | None:
         """Initialise a user turn and emit a placeholder streaming message."""
@@ -185,6 +238,8 @@ class _SessionMessenger:
         if self._pending_user_turn_id == turn_id:
             return turn_id
         self._pending_user_turn_id = turn_id
+        # Reset turn sequence for new user turn - post-tool segments start fresh
+        self.reset_turn_sequence()
         if not self._can_emit():
             return turn_id
 
@@ -343,6 +398,19 @@ class _SessionMessenger:
             return
 
         message_text = text or ""
+        
+        # Deduplication: prevent sending the same message twice for the same turn_id
+        # This can happen when TRANSCRIPT_DONE fires multiple times or events race
+        msg_key = (turn_id, hash(message_text))
+        if msg_key in self._sent_messages:
+            logger.debug(
+                "[Dedup] Skipping duplicate message | turn_id=%s text_len=%d",
+                turn_id,
+                len(message_text),
+            )
+            return
+        self._sent_messages.add(msg_key)
+        
         sender_name = self._resolve_sender(sender)
         payload = {
             "type": "assistant",
@@ -378,7 +446,9 @@ class _SessionMessenger:
             ),
             label="assistant_transcript_envelope",
         )
-        self._release_turn(turn_id)
+        # NOTE: Do NOT call _release_turn() here. The turn_id must remain active
+        # until advance_turn_for_tool() can use it. The turn will be naturally
+        # reset when begin_user_turn() is called for the next user turn.
 
     async def send_assistant_streaming(
         self,

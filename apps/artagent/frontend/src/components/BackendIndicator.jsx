@@ -532,6 +532,131 @@ const BackendIndicator = ({ url, onConfigureClick, onStatusChange, onAgentSelect
               </div>
             )}
 
+            {/* MCP Servers Status */}
+            {readinessData?.mcp_servers && Object.keys(readinessData.mcp_servers).length > 0 && (
+              <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' }}>
+                <div style={{
+                  fontSize: '11px',
+                  fontWeight: '600',
+                  color: '#475569',
+                  marginBottom: '8px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}>
+                  <span>🔌</span>
+                  MCP Servers ({Object.keys(readinessData.mcp_servers).length})
+                </div>
+                {Object.entries(readinessData.mcp_servers).map(([name, server], idx) => {
+                  const isHealthy = server.status === 'healthy';
+                  const statusIcon = isHealthy ? '✓' : '✕';
+                  const background = isHealthy ? '#f0fdf4' : '#fef2f2';
+                  const border = isHealthy ? '#bbf7d0' : '#fecaca';
+                  const statusColor = isHealthy ? '#166534' : '#dc2626';
+                  
+                  // Format tool names (truncate if > 3)
+                  const toolNames = server.tool_names || [];
+                  const displayTools = toolNames.length > 3 
+                    ? [...toolNames.slice(0, 3), `+${toolNames.length - 3} more`]
+                    : toolNames;
+                  
+                  // Extract endpoint from URL (mask long URLs)
+                  const maskUrl = (url) => {
+                    if (!url) return 'N/A';
+                    try {
+                      const parsed = new URL(url);
+                      const host = parsed.hostname.length > 30 
+                        ? parsed.hostname.slice(0, 15) + '...' + parsed.hostname.slice(-10)
+                        : parsed.hostname;
+                      return `${parsed.protocol}//${host}${parsed.pathname}`;
+                    } catch {
+                      return url.length > 50 ? url.slice(0, 25) + '...' + url.slice(-20) : url;
+                    }
+                  };
+
+                  return (
+                    <div 
+                      key={idx} 
+                      style={{
+                        padding: '10px',
+                        background,
+                        borderRadius: '8px',
+                        marginBottom: '8px',
+                        border: `1px solid ${border}`,
+                      }}
+                    >
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        marginBottom: '6px',
+                      }}>
+                        <div style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          fontSize: '11px',
+                          fontWeight: '600',
+                          color: statusColor,
+                        }}>
+                          <span style={{ fontSize: '14px' }}>🔌</span>
+                          <span>{name}</span>
+                        </div>
+                        <div style={{
+                          fontSize: '16px',
+                          color: statusColor,
+                        }}>
+                          {statusIcon}
+                        </div>
+                      </div>
+                      
+                      {/* Server Description */}
+                      <div style={{
+                        fontSize: '9px',
+                        color: '#64748b',
+                        marginBottom: '6px',
+                        lineHeight: '1.4',
+                      }}>
+                        MCP Tool Provider - Model Context Protocol server
+                      </div>
+
+                      {/* Server Details (verbose like other health checks) */}
+                      <div style={{
+                        fontSize: '9px',
+                        color: statusColor,
+                        fontFamily: 'monospace',
+                        background: 'rgba(255,255,255,0.5)',
+                        padding: '6px 8px',
+                        borderRadius: '4px',
+                        wordBreak: 'break-word',
+                        lineHeight: '1.6',
+                      }}>
+                        <div>📡 Protocol: {server.transport || 'streamable-http'}</div>
+                        <div>🌐 Endpoint: {maskUrl(server.url)}</div>
+                        <div>🧰 Tools ({server.tools_count || 0}): {displayTools.length > 0 ? displayTools.join(', ') : 'none'}</div>
+                      </div>
+
+                      {/* Error Details */}
+                      {server.error && (
+                        <div style={{
+                          fontSize: '9px',
+                          color: '#dc2626',
+                          marginTop: '6px',
+                          fontFamily: 'monospace',
+                          background: 'rgba(254,226,226,0.5)',
+                          padding: '4px 6px',
+                          borderRadius: '4px',
+                          wordBreak: 'break-word',
+                        }}>
+                          ❌ {String(server.error)}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
             {/* Agents Summary */}
             {agentsData?.agents && agentsData.agents.length > 0 && (
               <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' }}>
@@ -934,6 +1059,79 @@ const BackendIndicator = ({ url, onConfigureClick, onStatusChange, onAgentSelect
                 fontStyle: "italic",
               }}>
                 Updated: {new Date(healthData.timestamp * 1000).toLocaleTimeString()}
+              </div>
+            </div>
+          )}
+
+          {/* MCP Servers Section (Expanded View) */}
+          {shouldBeExpanded && readinessData?.mcp_servers && Object.keys(readinessData.mcp_servers).length > 0 && (
+            <div style={{
+              marginTop: "10px",
+              paddingTop: "10px",
+              borderTop: "1px solid #f1f5f9",
+            }}>
+              <div style={{
+                fontSize: "10px",
+                fontWeight: "600",
+                color: "#374151",
+                marginBottom: "6px",
+                display: "flex",
+                alignItems: "center",
+                gap: "4px",
+              }}>
+                🔌 MCP Servers
+              </div>
+              
+              <div style={{
+                display: "grid",
+                gridTemplateColumns: "1fr",
+                gap: "6px",
+                fontSize: "9px",
+              }}>
+                {Object.entries(readinessData.mcp_servers).map(([name, server], idx) => {
+                  const isHealthy = server.status === 'healthy';
+                  return (
+                    <div 
+                      key={idx}
+                      style={{
+                        padding: "6px 8px",
+                        border: `1px solid ${isHealthy ? "#bbf7d0" : "#fecaca"}`,
+                        borderRadius: "6px",
+                        backgroundColor: isHealthy ? "#f0fdf4" : "#fef2f2",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                      }}
+                    >
+                      <div style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px",
+                      }}>
+                        <span style={{
+                          width: "8px",
+                          height: "8px",
+                          borderRadius: "50%",
+                          backgroundColor: isHealthy ? "#10b981" : "#ef4444",
+                          display: "inline-block",
+                        }}></span>
+                        <span style={{ fontWeight: "600", color: "#374151" }}>{name}</span>
+                      </div>
+                      <div style={{
+                        fontSize: "8px",
+                        color: "#64748b",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px",
+                      }}>
+                        <span title="MCP Tools">🧰 {server.tools_count || 0}</span>
+                        <span title={`Status: ${server.status}`}>
+                          {isHealthy ? "✓" : "✕"}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

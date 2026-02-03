@@ -74,6 +74,10 @@ import yaml
 
 from tests.evaluation.mocks import MockMemoManager
 from tests.evaluation.recorder import EventRecorder
+from tests.evaluation.demo_user import (
+    create_demo_user,
+    extract_user_context,
+)
 from tests.evaluation.schemas import (
     FoundryExportConfig,
     ModelProfile,
@@ -108,6 +112,246 @@ from utils.ml_logging import get_logger
 
 
 _runtime_bootstrapped = False
+_mcp_initialized = False
+
+
+async def _bootstrap_mcp_servers() -> dict[str, dict]:
+    """
+    Initialize MCP servers for evaluation tests.
+    
+    This mirrors the production `register_mcp_servers_step` logic but runs
+    in the eval context without the FastAPI app dependency.
+    
+    Returns:
+        Dict mapping server names to their status info
+    """
+    global _mcp_initialized
+    if _mcp_initialized:
+        return {}
+    
+    try:
+        import httpx
+        from apps.artagent.backend.config.settings import (
+            MCP_ENABLED_SERVERS,
+            MCP_SERVER_TIMEOUT,
+            get_enabled_mcp_servers,
+        )
+        from apps.artagent.backend.registries.toolstore.mcp import (
+            MCPClientSession,
+            MCPServerConfig,
+            MCPTransport,
+        )
+        from apps.artagent.backend.registries.toolstore.mcp.auth import (
+            get_mcp_auth_headers,
+        )
+        from apps.artagent.backend.registries.toolstore.registry import (
+            register_mcp_tool,
+        )
+    except ImportError as e:
+        logger.warning(f"MCP bootstrap skipped - module not available: {e}")
+        _mcp_initialized = True
+        return {}
+    
+    if not MCP_ENABLED_SERVERS:
+        logger.info("No MCP servers configured, skipping MCP initialization for evals")
+        _mcp_initialized = True
+        return {}
+    
+    servers = get_enabled_mcp_servers()
+    if not servers:
+        logger.info("No MCP servers with valid URLs configured")
+        _mcp_initialized = True
+        return {}
+    
+    logger.info(f"Initializing {len(servers)} MCP server(s) for evaluation: {[s['name'] for s in servers]}")
+    
+    mcp_status: dict[str, dict] = {}
+    total_tools_registered = 0
+    
+    for server in servers:
+        name = server["name"]
+        url = server["url"]
+        transport = server.get("transport", "streamable-http")
+        timeout = server.get("timeout", 30.0)
+        auth_enabled = server.get("auth_enabled", False)
+        app_id = server.get("app_id", "")
+        auth_headers: dict[str, str] = {}
+
+        if auth_enabled and app_id:
+            auth_headers = await get_mcp_auth_headers(app_id)
+
+        # First check health endpoint
+        health_url = f"{url.rstrip('/')}/health"
+        is_healthy = False
+        tools_count = 0
+        tool_names: list[str] = []
+        error_msg = None
+        
+        try:
+            async with httpx.AsyncClient(timeout=MCP_SERVER_TIMEOUT) as client:
+                response = await client.get(health_url, headers=auth_headers)
+                is_healthy = response.status_code == 200
+                
+                if is_healthy:
+                    try:
+                        health_data = response.json()
+                        tools_count = health_data.get("tools_count", 0)
+                        tool_names = health_data.get("tool_names", [])
+                    except Exception:
+                        pass
+                else:
+                    error_msg = f"HTTP {response.status_code}"
+                    
+        except httpx.ConnectError as e:
+            error_msg = f"Connection failed: {e}"
+            logger.warning(f"MCP server '{name}' unreachable at {url}: {e}")
+        except Exception as e:
+            error_msg = str(e)
+            logger.warning(f"MCP server '{name}' health check failed: {e}")
+        
+        # If healthy, connect via MCP client to discover and register tools
+        if is_healthy:
+            try:
+                config = MCPServerConfig(
+                    name=name,
+                    url=url,
+                    transport=MCPTransport(transport),
+                    timeout=timeout,
+                )
+                session = MCPClientSession(config)
+                
+                if await session.connect():
+                    # Discover tools from MCP server
+                    discovered_tools = await session.list_tools()
+                    tools_count = len(discovered_tools)
+                    tool_names = [f"{name}_{t.name}" for t in discovered_tools]
+                    
+                    # Register each tool in the central registry (matches lifecycle/steps.py)
+                    for tool_info in discovered_tools:
+                        prefixed_name = f"{name}_{tool_info.name}"
+                        original_name = tool_info.name
+                        server_url = url
+                        server_timeout = timeout
+                        
+                        # Create executor that calls the MCP server's HTTP tool endpoint
+                        def make_executor(
+                            tool_original_name: str,
+                            mcp_url: str,
+                            mcp_timeout: float,
+                            mcp_auth_enabled: bool,
+                            mcp_app_id: str,
+                        ):
+                            async def executor(args: dict) -> dict:
+                                """Execute MCP tool via HTTP endpoint."""
+                                import httpx
+                                from apps.artagent.backend.registries.toolstore.mcp.auth import (
+                                    get_mcp_auth_headers,
+                                )
+                                
+                                exec_headers: dict[str, str] = {}
+                                if mcp_auth_enabled and mcp_app_id:
+                                    exec_headers = await get_mcp_auth_headers(mcp_app_id)
+                                    if not exec_headers:
+                                        return {
+                                            "success": False,
+                                            "error": "Failed to acquire auth token for MCP server",
+                                        }
+
+                                # Strip /mcp suffix - REST endpoints are at /tools/*, MCP protocol at /mcp
+                                base_url = mcp_url.rstrip("/")
+                                if base_url.endswith("/mcp"):
+                                    base_url = base_url[:-4]
+                                tool_endpoint = f"{base_url}/tools/{tool_original_name}"
+                                
+                                try:
+                                    async with httpx.AsyncClient(timeout=mcp_timeout) as client:
+                                        response = await client.get(
+                                            tool_endpoint,
+                                            params=args,
+                                            headers=exec_headers,
+                                        )
+                                        
+                                        if response.status_code == 200:
+                                            data = response.json()
+                                            if "result" in data:
+                                                return {"success": True, "result": data["result"]}
+                                            return {"success": True, "result": data}
+                                        if response.status_code == 401:
+                                            return {
+                                                "success": False,
+                                                "error": "Authentication failed (401). Token may have expired.",
+                                            }
+                                        if response.status_code == 403:
+                                            return {
+                                                "success": False,
+                                                "error": "Access denied (403). Insufficient permissions.",
+                                            }
+                                        else:
+                                            return {
+                                                "success": False,
+                                                "error": f"MCP tool returned HTTP {response.status_code}: {response.text[:200]}",
+                                            }
+                                except httpx.ConnectError as e:
+                                    return {
+                                        "success": False,
+                                        "error": f"Failed to connect to MCP server: {e}",
+                                    }
+                                except Exception as e:
+                                    return {
+                                        "success": False,
+                                        "error": f"MCP tool execution failed: {e}",
+                                    }
+                            return executor
+                        
+                        executor = make_executor(
+                            original_name,
+                            server_url,
+                            server_timeout,
+                            auth_enabled,
+                            app_id,
+                        )
+                        
+                        schema = {
+                            "name": prefixed_name,
+                            "description": tool_info.description or f"MCP tool from {name}",
+                            "parameters": tool_info.input_schema or {"type": "object", "properties": {}},
+                        }
+                        
+                        register_mcp_tool(
+                            name=prefixed_name,
+                            schema=schema,
+                            mcp_server=name,
+                            mcp_transport=transport,
+                            executor=executor,
+                            override=True,
+                        )
+                        total_tools_registered += 1
+                    
+                    await session.disconnect()
+                    logger.info(f"MCP server '{name}' initialized for evals, registered {tools_count} tools: {tool_names}")
+                else:
+                    error_msg = "MCP client connection failed"
+                    is_healthy = False
+                    logger.warning(f"MCP server '{name}' health OK but client connection failed")
+                    
+            except Exception as e:
+                error_msg = f"Tool discovery failed: {e}"
+                logger.warning(f"MCP server '{name}' tool discovery failed: {e}")
+        
+        mcp_status[name] = {
+            "status": "healthy" if is_healthy and not error_msg else "unhealthy",
+            "url": url,
+            "transport": transport,
+            "tools_count": tools_count,
+            "tool_names": tool_names,
+            "error": error_msg,
+        }
+    
+    if total_tools_registered > 0:
+        logger.info(f"Registered {total_tools_registered} MCP tool(s) for evaluation tests")
+    
+    _mcp_initialized = True
+    return mcp_status
 
 
 def _bootstrap_runtime() -> None:
@@ -146,7 +390,17 @@ def _bootstrap_runtime() -> None:
     except Exception as exc:  # noqa: BLE001 - proceed with env vars only
         logger.warning("App Config load failed: %s", exc)
 
+    # Note: MCP servers are initialized lazily via async _bootstrap_mcp_servers()
+    # Called during first async scenario run to avoid blocking sync bootstrap
+
     _runtime_bootstrapped = True
+
+
+async def _ensure_mcp_initialized() -> None:
+    """Ensure MCP servers are initialized (call from async context)."""
+    global _mcp_initialized
+    if not _mcp_initialized:
+        await _bootstrap_mcp_servers()
 
 logger = get_logger(__name__)
 
@@ -704,6 +958,9 @@ class ScenarioRunner:
         Returns:
             RunSummary with aggregated metrics
         """
+        # Ensure MCP servers are initialized for tool availability
+        await _ensure_mcp_initialized()
+        
         scenario_name = self.scenario["scenario_name"]
         scenario_template = self.scenario.get("scenario_template")
         session_config_data = self.scenario.get("session_config")
@@ -717,6 +974,80 @@ class ScenarioRunner:
         memo_manager = MockMemoManager(session_id, context_vars)
         if scenario_template:
             memo_manager.set_value_in_corememory("scenario_name", scenario_template)
+
+        # ═══════════════════════════════════════════════════════════════════════
+        # Create demo user if configured
+        # This provides realistic data for tools like get_user_profile,
+        # verify_client_identity, lookup_decline_code, etc.
+        # ═══════════════════════════════════════════════════════════════════════
+        demo_user_config = self.scenario.get("demo_user")
+        demo_user_data = None
+        
+        if demo_user_config:
+            # Check for email override from environment (set by CLI)
+            email_override = os.environ.get("EVAL_EMAIL_OVERRIDE")
+            demo_email = email_override or demo_user_config.get("email", "sarah.johnson@example.com")
+            
+            if email_override:
+                logger.info(f"📧 Email override active: {email_override}")
+            
+            logger.info(f"Creating demo user: {demo_user_config.get('full_name', 'unknown')} (email={demo_email})")
+            demo_user_data = await create_demo_user(
+                full_name=demo_user_config.get("full_name", "Sarah Johnson"),
+                email=demo_email,
+                phone_number=demo_user_config.get("phone_number"),
+                scenario=demo_user_config.get("scenario", "banking"),
+                session_id=session_id,
+                seed=demo_user_config.get("seed"),
+                persist=demo_user_config.get("persist", False),
+                insurance_role=demo_user_config.get("insurance_role"),
+                insurance_company_name=demo_user_config.get("insurance_company_name"),
+                test_scenario=demo_user_config.get("test_scenario"),
+            )
+            
+            if demo_user_data:
+                # Extract context for tools and inject into memo_manager
+                demo_context = extract_user_context(demo_user_data)
+                for key, value in demo_context.items():
+                    memo_manager.set_value_in_corememory(key, value)
+                    context_vars[key] = value
+                
+                # Store the full demo user response for reference
+                memo_manager.set_value_in_corememory("demo_user_response", demo_user_data)
+                
+                # CRITICAL: Store session_profile and client_id for orchestrator injection
+                # The orchestrator injects _session_profile and _client_id into tool args
+                profile = demo_user_data.get("profile", {})
+                if profile:
+                    # Build session_profile with demo_metadata to match what tools expect
+                    # Tools look for _session_profile.demo_metadata.transactions etc.
+                    session_profile = {
+                        **profile,
+                        "demo_metadata": {
+                            "transactions": demo_user_data.get("transactions", []),
+                            "policies": demo_user_data.get("policies"),
+                            "claims": demo_user_data.get("claims"),
+                        },
+                    }
+                    memo_manager.set_value_in_corememory("session_profile", session_profile)
+                    memo_manager.set_value_in_corememory("client_id", profile.get("client_id"))
+                    memo_manager.set_value_in_corememory("caller_name", profile.get("full_name"))
+                    # Also store customer_intelligence for profile-aware tools
+                    if profile.get("customer_intelligence"):
+                        memo_manager.set_value_in_corememory(
+                            "customer_intelligence", profile["customer_intelligence"]
+                        )
+                
+                # Log key identifiers for debugging
+                txn_count = len(demo_user_data.get("transactions", []))
+                logger.info(
+                    f"Demo user created | client_id={profile.get('client_id')} "
+                    f"ssn_last4={profile.get('company_code_last4')} "
+                    f"cards={len(demo_context.get('demo_cards', []))} "
+                    f"transactions={txn_count}"
+                )
+            else:
+                logger.warning("Failed to create demo user - tools may not have realistic data")
 
         # Get agent overrides from scenario
         agent_overrides = self.scenario.get("agent_overrides", [])
@@ -1043,6 +1374,9 @@ class ComparisonRunner:
         Returns:
             Dict mapping variant_id -> RunSummary
         """
+        # Ensure MCP servers are initialized for tool availability
+        await _ensure_mcp_initialized()
+        
         comparison_name = self.comparison["comparison_name"]
         logger.info(f"Running comparison: {comparison_name}")
 

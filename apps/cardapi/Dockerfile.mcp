@@ -2,19 +2,24 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Ensure shared modules (utils, etc.) are importable
+# Ensure shared modules (utils, src) are importable
 ENV PYTHONPATH="/app"
 ENV PORT=80
+# Allow PyMongo OIDC auth to Cosmos DB MongoDB clusters
+ENV MONGODB_OIDC_ALLOWED_HOSTS="*.mongocluster.cosmos.azure.com"
 
 # Copy requirements (from repo root context)
 COPY apps/cardapi/mcp_app/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy shared utils
+# Copy shared libraries
 COPY utils/ /app/utils/
+COPY src/__init__.py /app/src/__init__.py
+COPY src/cosmosdb/ /app/src/cosmosdb/
 
 # Copy MCP server
 COPY apps/cardapi/mcp_app/ /app/mcp_app/
+# Note: decline_codes JSON fallback file not copied - MCP loads from Cosmos DB via App Config
 
 WORKDIR /app/mcp_app
 

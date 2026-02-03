@@ -150,6 +150,11 @@ class EvaluationOrchestratorWrapper:
             if model_config.model_name == "unknown":
                 model_config = self._fallback_model_config(context.metadata)
 
+            # OrchestratorResult uses output_tokens, map to response_tokens for consistency
+            response_tokens = (
+                getattr(result, "response_tokens", None)
+                or getattr(result, "output_tokens", None)
+            )
             self._recorder.record_turn_end(
                 turn_id=turn_id,
                 agent=final_agent,
@@ -157,7 +162,7 @@ class EvaluationOrchestratorWrapper:
                 e2e_ms=(turn_end - turn_start) * 1000,
                 timestamp=turn_end,
                 model_config=model_config,
-                response_tokens=getattr(result, "response_tokens", None),
+                response_tokens=response_tokens,
                 input_tokens=getattr(result, "input_tokens", None),
                 error=result.error if hasattr(result, "error") else None,
             )

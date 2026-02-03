@@ -193,10 +193,13 @@ APPCONFIG_KEY_MAP: dict[str, str] = {
     # Monitoring
     "app/monitoring/metrics-interval": "METRICS_COLLECTION_INTERVAL",
     "app/monitoring/pool-metrics-interval": "POOL_METRICS_INTERVAL",
-    # Application Services
-    "app/cardapi/url": "CARDAPI_URL",
-    # Application Services
-    "app/cardapi/mcp-url": "CARDAPI_MCP_URL",
+    # MCP Server Configuration
+    "app/mcp/servers/cardapi/url": "MCP_SERVER_CARDAPI_URL",
+    "app/mcp/servers/cardapi/timeout": "MCP_SERVER_CARDAPI_TIMEOUT",
+    "app/mcp/servers/cardapi/transport": "MCP_SERVER_CARDAPI_TRANSPORT",
+    "app/mcp/servers/cardapi/auth-enabled": "MCP_SERVER_CARDAPI_AUTH_ENABLED",
+    "app/mcp/servers/cardapi/app-id": "MCP_SERVER_CARDAPI_APP_ID",
+    "app/mcp/enabled-servers": "MCP_ENABLED_SERVERS",
     # Environment
     "app/environment": "ENVIRONMENT",
     # Application URLs (set by postprovision)
@@ -315,8 +318,10 @@ def sync_appconfig_to_env(config_dict: dict[str, Any] | None = None) -> dict[str
             if _env_override_allowed_when_appconfig_loaded(env_var_name):
                 skipped_local += 1
                 continue
-            os.environ[env_var_name] = str(value)
-            synced[env_var_name] = str(value)
+            # Strip whitespace/newlines that may have been introduced during storage
+            clean_value = str(value).strip()
+            os.environ[env_var_name] = clean_value
+            synced[env_var_name] = clean_value
 
     # Single summary line
     endpoint_name = APPCONFIG_ENDPOINT.split("//")[-1].split(".")[0] if APPCONFIG_ENDPOINT else "unknown"
@@ -380,7 +385,7 @@ def get_config_value(
     with _config_lock:
         config_loaded = _config is not None
         if _config and appconfig_key in _config:
-            return str(_config[appconfig_key])
+            return str(_config[appconfig_key]).strip()
 
     # Fall back to environment variable
     if env_var_name:
@@ -392,7 +397,7 @@ def get_config_value(
             return default
         value = os.getenv(env_var_name)
         if value is not None:
-            return value
+            return value.strip()
 
     return default
 

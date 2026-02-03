@@ -1,5 +1,8 @@
 #!/bin/bash
 # Local development script for Card Decline API
+# The MCP server is self-contained and loads data from:
+# - Local JSON (development): database/decline_codes_policy_pack.json
+# - Cosmos DB (Azure): via AZURE_COSMOS_* env vars
 
 set -e
 
@@ -24,84 +27,51 @@ check_port() {
 
 # Install dependencies if needed
 echo "1. Checking dependencies..."
-if [ ! -d "backend/venv" ]; then
-    echo "   Creating virtual environment for backend..."
-    cd backend
-    python3 -m venv venv
-    source venv/bin/activate
-    pip install -r requirements.txt
-    deactivate
-    cd ..
-fi
-
-if [ ! -d "mcp/venv" ]; then
+if [ ! -d "mcp_app/.venv" ]; then
     echo "   Creating virtual environment for MCP server..."
-    cd mcp
-    python3 -m venv venv
-    source venv/bin/activate
+    cd mcp_app
+    python3 -m venv .venv
+    source .venv/bin/activate
     pip install -r requirements.txt
     deactivate
     cd ..
 fi
-
 echo "   Dependencies OK"
 echo ""
 
-# Start backend
-echo "2. Starting Backend API (port 8000)..."
-check_port 8000 || true
-cd backend
-source venv/bin/activate
-nohup python main.py > ../backend.log 2>&1 &
-BACKEND_PID=$!
-echo "   Backend PID: $BACKEND_PID"
-deactivate
-cd ..
-
-# Wait for backend to start
-echo "   Waiting for backend to start..."
-sleep 3
-
-# Check if backend is running
-if ! curl -s http://localhost:8000/health > /dev/null; then
-    echo "   Error: Backend failed to start"
-    kill $BACKEND_PID 2>/dev/null || true
-    exit 1
-fi
-echo "   Backend started successfully"
-echo ""
-
 # Start MCP server
-echo "3. Starting MCP Server (port 8001)..."
+echo "2. Starting MCP Server (self-contained)..."
 check_port 8001 || true
-cd mcp
-source venv/bin/activate
-export CARDAPI_BACKEND_URL=http://localhost:8000
+cd mcp_app
+source .venv/bin/activate
+export PYTHONPATH="$(cd ../../../ && pwd)"
 nohup python service.py > ../mcp.log 2>&1 &
 MCP_PID=$!
 echo "   MCP PID: $MCP_PID"
 deactivate
 cd ..
 
+# Wait for server to start
+echo "   Waiting for server to start..."
+sleep 2
+
 echo ""
 echo "====================================="
-echo "Services Started!"
+echo "MCP Server Started!"
 echo "====================================="
-echo "Backend API:  http://localhost:8000"
-echo "API Docs:     http://localhost:8000/docs"
 echo "MCP Server:   Running (PID: $MCP_PID)"
 echo ""
+echo "Data source: Local JSON (database/decline_codes_policy_pack.json)"
+echo "To use Azure Cosmos DB, set:"
+echo "  AZURE_COSMOS_DATABASE_NAME=cardapi"
+echo "  AZURE_COSMOS_COLLECTION_NAME=declinecodes"
+echo ""
 echo "Logs:"
-echo "  Backend: apps/cardapi/backend.log"
-echo "  MCP:     apps/cardapi/mcp_app.log"
+echo "  MCP:     apps/cardapi/mcp.log"
 echo ""
-echo "To stop services:"
-echo "  kill $BACKEND_PID $MCP_PID"
-echo ""
-echo "To test the API:"
-echo "  python test_api.py"
+echo "To stop service:"
+echo "  kill $MCP_PID"
 echo "====================================="
 
-# Save PIDs to file
-echo "$BACKEND_PID" > .backend.pid
+# Save PID to file
 echo "$MCP_PID" > .mcp.pid

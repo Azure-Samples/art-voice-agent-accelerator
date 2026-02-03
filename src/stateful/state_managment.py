@@ -14,6 +14,7 @@ Key Features:
 - TTS interrupt handling and queue management
 - Tool output persistence and slot-based state management
 - Latency tracking for performance monitoring
+- MCP (Model Context Protocol) session management for external tool servers
 
 The MemoManager extends basic memory management with live-refresh helpers that
 keep local state synchronized with a shared Redis cache, enabling real-time
@@ -39,12 +40,14 @@ Example:
     ```
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import time
 import uuid
 from collections import deque
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from utils.ml_logging import get_logger
 
@@ -55,6 +58,12 @@ from src.agenticmemory.utils import LatencyTracker
 # TODO Fix this area
 from src.redis.manager import AzureRedisManager
 from src.tools.latency_helpers import PersistentLatency, StageSample
+
+if TYPE_CHECKING:
+    from apps.artagent.backend.registries.toolstore.mcp import (
+        MCPServerConfig,
+        MCPSessionManager,
+    )
 
 logger = get_logger("src.stateful.state_managment")
 
@@ -127,6 +136,7 @@ class MemoManager:
             - latency: LatencyTracker for performance monitoring
             - _is_tts_interrupted: Flag for TTS interruption state
             - _redis_manager: Stored Redis manager for persistence
+            - _mcp_manager: MCPSessionManager for MCP server connections
 
         Example:
             ```python
@@ -153,6 +163,8 @@ class MemoManager:
         self.latency = LatencyTracker()
         self._redis_manager: AzureRedisManager | None = redis_mgr
         self._pending_persist_task: asyncio.Task | None = None
+        self._mcp_manager: MCPSessionManager | None = None
+        self._turn_sequence: int = 0  # Track turn segments for tool call boundaries
         now = time.time()
         self.corememory.set("created_at", now)
         self.corememory.set("last_activity", now)
@@ -824,6 +836,48 @@ class MemoManager:
         """
         return self.corememory.get("tool_outputs", {}).get(tool_name, default)
 
+    # --- TURN SEQUENCE TRACKING ---------------------------------------
+    def advance_turn_sequence(self) -> int:
+        """
+        Increment and return the turn sequence counter.
+
+        Used to generate unique turn segment identifiers after tool calls,
+        ensuring post-tool responses appear as new messages rather than
+        overwriting pre-tool assistant content.
+
+        Returns:
+            int: The new turn sequence number after incrementing.
+
+        Example:
+            ```python
+            # After tool execution completes
+            seq = manager.advance_turn_sequence()
+            new_turn_id = f"{base_turn_id}_s{seq}"
+            ```
+        """
+        self._turn_sequence += 1
+        logger.debug(f"Advanced turn sequence to {self._turn_sequence}")
+        return self._turn_sequence
+
+    def get_turn_sequence(self) -> int:
+        """
+        Get the current turn sequence counter without incrementing.
+
+        Returns:
+            int: The current turn sequence number.
+        """
+        return self._turn_sequence
+
+    def reset_turn_sequence(self) -> None:
+        """
+        Reset the turn sequence counter to zero.
+
+        Typically called when starting a new conversation turn
+        (e.g., after user speaks).
+        """
+        self._turn_sequence = 0
+        logger.debug("Reset turn sequence to 0")
+
     # --- LATENCY ------------------------------------------------------
     def note_latency(self, stage: str, start_t: float, end_t: float) -> None:
         """
@@ -1289,6 +1343,193 @@ class MemoManager:
     async def reset_queue_on_interrupt(self) -> None:
         """Reset the queue state when an interrupt is detected."""
         await self.message_queue.reset_on_interrupt()
+
+    # --- MCP SESSION MANAGEMENT ---------------------------------------
+
+    @property
+    def mcp_manager(self) -> MCPSessionManager | None:
+        """Get the MCP session manager for this session."""
+        return self._mcp_manager
+
+    async def init_mcp_servers(
+        self,
+        server_configs: list[MCPServerConfig],
+    ) -> dict[str, bool]:
+        """
+        Initialize MCP server connections for this session.
+
+        Connects to the specified MCP servers and discovers their tools.
+        Tools become available immediately after successful connection.
+
+        Args:
+            server_configs: List of MCP server configurations to connect to
+
+        Returns:
+            Dict mapping server names to connection success status
+
+        Example:
+            ```python
+            from apps.artagent.backend.registries.toolstore.mcp import MCPServerConfig
+
+            results = await manager.init_mcp_servers([
+                MCPServerConfig(name="cardapi", url="http://localhost:80"),
+            ])
+            # results: {"cardapi": True}
+            ```
+        """
+        if not server_configs:
+            return {}
+
+        # Lazy import to avoid circular dependencies
+        from apps.artagent.backend.registries.toolstore.mcp import MCPSessionManager
+
+        if self._mcp_manager is None:
+            self._mcp_manager = MCPSessionManager(session_id=self.session_id)
+
+        results = await self._mcp_manager.connect_servers(server_configs)
+
+        # Register discovered tools with the global registry
+        if self._mcp_manager.available_tools:
+            await self._register_mcp_tools_to_global_registry()
+
+        logger.info(
+            f"[{self.session_id}] Initialized MCP servers: {results}, "
+            f"tools available: {len(self._mcp_manager.available_tools)}"
+        )
+        return results
+
+    async def _register_mcp_tools_to_global_registry(self) -> None:
+        """Register discovered MCP tools with the global tool registry."""
+        if not self._mcp_manager:
+            return
+
+        from apps.artagent.backend.registries.toolstore import register_mcp_tool
+
+        for tool_name in self._mcp_manager.available_tools:
+            tool_info = self._mcp_manager._tools_cache.get(tool_name)
+            if not tool_info:
+                continue
+
+            # Create executor that proxies to MCP manager.
+            # Validation must happen at execution time since manager may be
+            # cleaned up between registration and invocation.
+            def make_executor(name: str):
+                async def executor(args: dict[str, Any]) -> dict[str, Any]:
+                    # Validate manager state at execution time, not capture time
+                    if self._mcp_manager is None:
+                        return {
+                            "success": False,
+                            "error": "MCP session has been cleaned up",
+                        }
+                    try:
+                        return await self._mcp_manager.execute_tool(name, args)
+                    except Exception as e:
+                        return {
+                            "success": False,
+                            "error": f"MCP tool execution failed: {e}",
+                        }
+
+                return executor
+
+            executor = make_executor(tool_name)
+
+            schema = {
+                "name": tool_name,
+                "description": tool_info.description,
+                "parameters": tool_info.input_schema,
+            }
+
+            mcp_transport = None
+            session = self._mcp_manager._sessions.get(tool_info.server_name)
+            if session:
+                transport = session.config.transport
+                mcp_transport = transport.value if hasattr(transport, "value") else str(transport)
+
+            register_mcp_tool(
+                name=tool_name,
+                schema=schema,
+                mcp_server=tool_info.server_name,
+                mcp_transport=mcp_transport,
+                executor=executor,
+                override=True,
+            )
+
+            logger.debug(f"[{self.session_id}] Registered MCP tool: {tool_name}")
+
+    def get_mcp_tools(self) -> list[dict[str, Any]]:
+        """
+        Get OpenAI-compatible tool schemas for all connected MCP servers.
+
+        Returns:
+            List of tool schemas in OpenAI format, or empty list if no MCP manager
+        """
+        if not self._mcp_manager:
+            return []
+        return self._mcp_manager.get_tool_schemas()
+
+    def get_mcp_tool_names(self) -> list[str]:
+        """
+        Get list of available MCP tool names.
+
+        Returns:
+            List of MCP tool names (with server prefixes)
+        """
+        if not self._mcp_manager:
+            return []
+        return self._mcp_manager.available_tools
+
+    async def execute_mcp_tool(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Execute an MCP tool.
+
+        Args:
+            tool_name: The prefixed tool name (e.g., "cardapi_lookup_decline_code")
+            arguments: Tool arguments
+
+        Returns:
+            Tool execution result
+        """
+        if not self._mcp_manager:
+            return {
+                "success": False,
+                "error": "MCP manager not initialized",
+            }
+        return await self._mcp_manager.execute_tool(tool_name, arguments)
+
+    def is_mcp_tool(self, tool_name: str) -> bool:
+        """
+        Check if a tool name corresponds to an MCP tool.
+
+        Args:
+            tool_name: The tool name to check
+
+        Returns:
+            True if the tool is from an MCP server
+        """
+        if not self._mcp_manager:
+            return False
+        return self._mcp_manager.is_mcp_tool(tool_name)
+
+    async def cleanup_mcp_servers(self) -> None:
+        """
+        Disconnect from all MCP servers and cleanup resources.
+
+        Should be called when the session ends to release MCP connections.
+        """
+        if self._mcp_manager:
+            # Unregister MCP tools from global registry
+            from apps.artagent.backend.registries.toolstore import unregister_mcp_tools
+
+            for server_name in self._mcp_manager.connected_servers:
+                unregister_mcp_tools(server_name)
+
+            await self._mcp_manager.disconnect_all()
+            self._mcp_manager = None
+            logger.info(f"[{self.session_id}] Cleaned up MCP server connections")
 
     # --- LIVE DATA REFRESH -------------------------------------------
     async def refresh_from_redis_async(self, redis_mgr: AzureRedisManager) -> bool:

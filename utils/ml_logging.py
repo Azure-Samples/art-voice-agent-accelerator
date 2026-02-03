@@ -452,9 +452,19 @@ def get_logger(
         logger.addFilter(WebSocketNoiseFilter())
 
     # Add StreamHandler for console output (not for Azure Monitor)
-    if include_stream_handler and not any(
-        isinstance(h, logging.StreamHandler) for h in logger.handlers
-    ):
+    # Check entire logger hierarchy to prevent duplicate output via propagation
+    def _has_stream_handler_in_hierarchy(lgr: logging.Logger) -> bool:
+        """Check if this logger or any parent already has a StreamHandler."""
+        current = lgr
+        while current:
+            if any(isinstance(h, logging.StreamHandler) for h in current.handlers):
+                return True
+            if not current.propagate:
+                break
+            current = current.parent
+        return False
+
+    if include_stream_handler and not _has_stream_handler_in_hierarchy(logger):
         sh = logging.StreamHandler()
         sh.setFormatter(JsonFormatter() if is_production else PrettyFormatter())
         sh.addFilter(TraceLogFilter())

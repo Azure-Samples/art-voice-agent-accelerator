@@ -60,12 +60,20 @@ session:
   tool_choice: auto
 
 # ─────────────────────────────────────────────────────────────────────────────
+# MCP Servers (external tool providers)
+# ─────────────────────────────────────────────────────────────────────────────
+mcp_servers:
+  - cardapi                    # Card decline codes MCP server
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Tools (referenced by name from shared registry)
 # ─────────────────────────────────────────────────────────────────────────────
 tools:
-  # Decline Code Lookup & Search
-  - lookup_decline_code
-  - search_decline_codes
+  # Decline Code Lookup & Search (MCP tools from cardapi server)
+  - cardapi_lookup_decline_code
+  - cardapi_search_decline_codes
+  - cardapi_get_all_decline_codes
+  - cardapi_get_decline_codes_metadata
   
   # Knowledge Base for additional context
   - search_knowledge_base
@@ -78,9 +86,13 @@ tools:
   - ship_replacement_card
   - verify_client_identity
   
+  # Email summary (send before fraud escalation or on request)
+  - send_decline_summary_email
+  
   # Handoffs (for escalation or routing)
   - handoff_concierge        # Return to concierge (banking scenario)
   - escalate_human           # Escalate to human agent
+  - handoff_fraud_agent      # For suspected fraud cases (AFTER asking user consent)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Prompt Configuration

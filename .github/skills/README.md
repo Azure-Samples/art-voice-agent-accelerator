@@ -17,10 +17,12 @@ Task-oriented skills for AI assistants working with this codebase.
 | `add-component` | Add React component with Material UI |
 | `add-endpoint` | Add FastAPI endpoint |
 | `add-evaluation` | Create evaluation scenario |
+| `add-mcp-server` | Integrate MCP server for agent tools |
 | `add-message-handler` | Handle new WebSocket message type |
 | `add-tool` | Add tool to agent registry |
 | `add-voice-handler` | Add voice module feature |
 | `create-agent` | Create complete agent with tools |
+| `deployment-guide` | Guide azd deployment flow, hooks, and troubleshooting |
 
 ## Skill Conventions
 

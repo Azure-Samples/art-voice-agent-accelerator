@@ -5,9 +5,7 @@ import os
 import re
 from typing import Mapping, Optional, Protocol, Sequence
 
-from azure.identity import CredentialUnavailableError, DefaultAzureCredential
 from pymongo import MongoClient
-from pymongo.auth_oidc import OIDCCallback, OIDCCallbackContext, OIDCCallbackResult
 from pymongo.collection import Collection
 from pymongo.database import Database
 from pymongo.errors import InvalidURI
@@ -30,17 +28,6 @@ class ManagerProtocol(Protocol):
         document: Mapping[str, object],
         query: Mapping[str, object],
     ) -> None: ...
-
-
-class AzureIdentityTokenCallback(OIDCCallback):
-    def __init__(self, credential):
-        self.credential = credential
-
-    def fetch(self, context: OIDCCallbackContext) -> OIDCCallbackResult:
-        token = self.credential.get_token(
-            "https://ossrdbms-aad.database.windows.net/.default"
-        ).token
-        return OIDCCallbackResult(access_token=token)
 
 
 class _ExistingClientManager:
@@ -148,15 +135,12 @@ async def main(args: argparse.Namespace) -> None:
     else:
         raise ValueError("Could not determine cluster name for OIDC authentication")
 
-    # Setup Azure Identity credential for OIDC
-    credential = DefaultAzureCredential()
-    auth_callback = AzureIdentityTokenCallback(credential)
+    # Use PyMongo's built-in Azure OIDC environment
+    # This handles Managed Identity authentication automatically
     auth_properties = {
-        "OIDC_CALLBACK": auth_callback,
+        "ENVIRONMENT": "azure",
+        "TOKEN_RESOURCE": "https://ossrdbms-aad.database.windows.net/.default",
     }
-    
-    # Allow Cosmos DB MongoDB cluster hosts for OIDC
-    os.environ.setdefault("MONGODB_OIDC_ALLOWED_HOSTS", "*.mongocluster.cosmos.azure.com")
 
     # Override connection string for OIDC
     connection_string = f"mongodb+srv://{cluster_name}.global.mongocluster.cosmos.azure.com/"

@@ -6,6 +6,47 @@ All notable changes to the **Azure Real-Time (ART) Agent Accelerator** are docum
 
 ---
 
+## [2.1.0] - 2026-02-01
+
+### 🔌 MCP Protocol & Lifecycle Management
+
+This release updates the MCP integration to spec 2025-11-25, introduces deferred startup for non-blocking health checks, and enhances lifecycle observability.
+
+### Added
+
+- **Deferred Startup Pattern** — MCP validation runs asynchronously after `/health` returns 200, preventing deployment probe failures
+- **Health Endpoints** — New `/api/v1/ready`, `/api/v1/readiness`, and `/api/v1/pools` endpoints for granular startup observability
+- **Lifecycle Dashboard** — Background task status with pending/in-progress/completed/failed states
+- **MCP Server Skill** — Comprehensive deployment guide with Container App and Function App patterns
+- **Lifecycle Documentation** — New `docs/architecture/lifecycle.md` covering startup phases and health probes
+
+### Enhanced
+
+- **MCP Protocol** — Updated to spec 2025-11-25 with `streamable-http` as default transport (replaces `sse`)
+- **FastMCP Integration** — CardAPI MCP server refactored with `@mcp.custom_route()` for health endpoints
+- **Backend Indicator** — Frontend now shows deferred startup status and pending task count
+- **Agent Builder** — Added Responses API toggle functionality
+- **Postprovision Scripts** — Enhanced CardAPI data provisioning with improved error handling
+
+### Fixed
+
+- **Terraform Git Commit** — Fixed `data.external.git_commit` to output valid JSON
+- **MCP Client** — Improved error handling for `streamable-http` transport connections
+- **Cosmos Init** — Enhanced database initialization with better retry logic
+
+### Infrastructure
+
+- **Deployment Workflow** — Added CardAPI MCP test step to CI/CD template
+- **VS Code Launch Config** — Updated debug configurations for MCP servers
+
+### Documentation
+
+- **MCP Integration Guide** — Added transport types table, deferred startup section, settings reference
+- **API Documentation** — Updated with new health endpoints and MCP management section
+- **Architecture README** — Added Registries and Lifecycle to deep dives table
+
+---
+
 ## [2.0.0-beta.1] - 2026-01-04
 
 ### 🎯 Scenario Builder & Voice Handler Refactoring

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "art-voice-agent-accelerator"
-version = "2.0.0-beta"
+version = "2.1.0"
 description = "Real-time voice agent with Azure AI and Apps Service"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -49,7 +49,6 @@ dependencies = [
     "azure-communication-email",
     "azure-communication-identity>=1.5.0",
     "azure-keyvault-secrets>=4.7.0",
-    "azure-eventgrid>=4.10.0",
     "azure-appconfiguration>=1.7.0",
     "azure-appconfiguration-provider>=1.0.0",
     "azure-ai-agents==1.2.0b5",
@@ -76,10 +75,7 @@ dependencies = [
     "httpx>=0.27.0",
     "aiofiles>=23.0.0",
     # Async and networking tools
-    "tenacity>=8.5.0",
     "websockets>=12.0",
-    "websocket-client>=1.6.0",
-    "backoff>=2.0.0",
     # Data processing and YAML configuration
     "numpy>=1.24.0",
     "python-dotenv>=1.0.0",
@@ -88,12 +84,10 @@ dependencies = [
     "typing-extensions>=4.8.0",
     "langdetect>=1.0.9",
     "pyyaml>=6.0.0",
-    "pyyaml-include>=1.3.0",
     # Audio processing
     # NOTE: local microphone capture/playback deps live in the `audio` extra.
     # Database drivers
     "pymongo>=4.6.0",
-    "rapidfuzz>=3.13.0",
 ]
 
 [project.urls]
@@ -126,6 +120,13 @@ dev = [
     "locust>=2.20.0",
     # Evaluation (Foundry cloud submission)
     "azure-ai-evaluation>=1.0.0",
+    # Local utilities (not needed in Docker)
+    "tenacity>=8.5.0",
+    "backoff>=2.0.0",
+    "rapidfuzz>=3.13.0",
+    "websocket-client>=1.6.0",
+    "pyyaml-include>=1.3.0",
+    "azure-eventgrid>=4.10.0",
 ]
 
 # Local audio capture/playback - requires system portaudio library
@@ -166,6 +167,13 @@ dev-all = [
     # Local audio (mic capture / playback)
     "sounddevice>=0.4.6",
     "pyaudio>=0.2.11",
+    # Local utilities (not needed in Docker)
+    "tenacity>=8.5.0",
+    "backoff>=2.0.0",
+    "rapidfuzz>=3.13.0",
+    "websocket-client>=1.6.0",
+    "pyyaml-include>=1.3.0",
+    "azure-eventgrid>=4.10.0",
 ]
 
 docs = [

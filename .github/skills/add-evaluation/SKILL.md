@@ -1,92 +1,102 @@
 ---
 name: add-evaluation
-description: Create a new evaluation scenario for agent testing
+description: Create or update evaluation scenarios for the tests/evaluation framework, including session-based scenarios and A/B comparisons
 ---
 
 # Add Evaluation Skill
 
-Create evaluation scenarios in `tests/eval_scenarios/`.
+Create evaluation scenarios in `tests/evaluation/scenarios/`.
 
 ## Scenario Types
 
 | Type | Location | Purpose |
 |------|----------|---------|
-| Agent | `agents/` | Test single agent tool calling |
-| Workflow | `workflows/` | Test multi-agent handoffs |
-| A/B Test | `ab_tests/` | Compare model variants |
+| Session-based | `session_based/` | Multi-agent sessions and handoffs |
+| A/B Comparison | `ab_tests/` | Compare model variants |
 
-## Agent Scenario Template
+## Session-Based Scenario Template
 
 ```yaml
-# tests/eval_scenarios/agents/{agent_name}_basic.yaml
-scenario_name: agent_name_tool_calling
-agent: AgentName
-scope: agent
+# tests/evaluation/scenarios/session_based/{scenario_name}.yaml
+scenario_name: banking_multi_agent
+description: "Session-based multi-agent evaluation"
 
-metadata:
-  environment: development
-  version: "1.0.0"
-  tags:
-    - agent-evaluation
+# Optional: Create demo user for realistic tool responses
+demo_user:
+  full_name: "Sarah Johnson"
+  email: "sarah.johnson@example.com"
+  phone_number: "+18885551234"
+  scenario: banking  # or "insurance"
+  seed: 42           # Fixed seed for reproducible data
+  persist: false     # Don't persist to database
+
+session_config:
+  agents: [BankingConcierge, CardRecommendation]
+  start_agent: BankingConcierge
+  handoff_type: announced
 
 turns:
   - turn_id: turn_1
-    user_input: "User message here"
+    user_input: "I'd like to check my account"
     expectations:
       tools_called:
-        - expected_tool_name
-      tools_optional:
-        - optional_tool
-      response_constraints:
-        max_tokens: 150
+        - verify_client_identity
 ```
 
-## Workflow Scenario Template
+## Demo User Configuration
+
+The `demo_user` section creates a realistic user profile before running the scenario.
+This ensures tools like `get_user_profile`, `verify_client_identity`, and `lookup_decline_code`
+have actual data to return.
 
 ```yaml
-# tests/eval_scenarios/workflows/{workflow_name}.yaml
-scenario_name: workflow_name
-scope: scenario
-
-agents:
-  - Concierge
-  - SpecialistAgent
-
-turns:
-  - turn_id: turn_1
-    user_input: "Initial message"
-    expected_agent: Concierge
-    expectations:
-      handoff:
-        to_agent: SpecialistAgent
-
-  - turn_id: turn_2
-    user_input: "Follow-up message"
-    expected_agent: SpecialistAgent
-    expectations:
-      tools_called:
-        - specialist_tool
+demo_user:
+  full_name: "Sarah Johnson"     # Required: User's name
+  email: "sarah@example.com"     # Required: User's email
+  phone_number: "+18885551234"   # Optional: E.164 format
+  scenario: banking              # "banking" or "insurance"
+  seed: 42                       # Optional: For reproducible data
+  persist: false                 # Whether to save to database
+  
+  # Insurance-only options:
+  insurance_role: policyholder   # "policyholder" or "cc_rep"
+  insurance_company_name: "..."  # If cc_rep
+  test_scenario: golden_path     # Predefined test scenarios
 ```
+
+**Banking demo user includes:**
+- Client ID and SSN last 4 for verification
+- Multiple cards with different names/statuses
+- Recent transactions with decline codes
+- Customer intelligence profile
+
+**Insurance demo user includes:**
+- Policies (auto, home, umbrella)
+- Claims with various statuses
+- Subrogation demands
 
 ## A/B Comparison Template
 
 ```yaml
-# tests/eval_scenarios/ab_tests/{comparison_name}.yaml
-comparison_name: model_a_vs_model_b
-scope: agent
+# tests/evaluation/scenarios/ab_tests/{comparison_name}.yaml
+comparison_name: fraud_model_comparison
+scenario_template: banking
+description: "Compare model variants for banking scenario"
 
 variants:
   - variant_id: baseline
-    agent: AgentName
-    model_override:
-      deployment_id: gpt-4o
-      temperature: 0.6
+    agent_overrides:
+      - agent: BankingConcierge
+        model_override:
+          deployment_id: gpt-4o
+          temperature: 0.6
 
   - variant_id: experimental
-    agent: AgentName
-    model_override:
-      deployment_id: o1-preview
-      reasoning_effort: medium
+    agent_overrides:
+      - agent: BankingConcierge
+        model_override:
+          deployment_id: gpt-5.1
+          reasoning_effort: medium
 
 turns:
   - turn_id: turn_1
@@ -98,25 +108,30 @@ turns:
 comparison_metrics:
   - tool_precision
   - latency_p95_ms
-  - cost_per_turn_usd
+  - cost_per_turn
 ```
 
 ## Steps
 
-1. Choose scenario type (agent, workflow, or ab_test)
+1. Choose scenario type (session_based or ab_tests)
 2. Create YAML file in appropriate directory
 3. Define turns with user inputs
 4. Add expectations (tools, handoffs, constraints)
 5. Run evaluation:
 
 ```bash
-# Single scenario
-python -m tests.evaluation.cli scenario \
-    --input tests/eval_scenarios/agents/my_scenario.yaml
+# Via Makefile (recommended)
+make eval-run SCENARIO=tests/evaluation/scenarios/session_based/my_scenario.yaml
 
-# A/B comparison
-python -m tests.evaluation.cli compare \
-    --input tests/eval_scenarios/ab_tests/my_comparison.yaml
+# Or interactive CLI
+make eval
+```
+
+```bash
+# Submit to Azure AI Foundry (optional)
+python -m tests.evaluation.cli submit \
+    --data runs/my_run/foundry_eval.jsonl \
+    --endpoint "$AZURE_AI_FOUNDRY_PROJECT_ENDPOINT"
 ```
 
 ## Expectations Reference
@@ -125,11 +140,16 @@ python -m tests.evaluation.cli compare \
 expectations:
   tools_called: [tool1, tool2]      # Required tools
   tools_optional: [tool3]           # Won't fail if missing
+  tools_forbidden: [tool4]          # Must NOT be called
   handoff:
     to_agent: TargetAgent           # Expected handoff
+  no_handoff: false                 # Assert no handoff occurs
   response_constraints:
     max_tokens: 150
     must_include: ["keyword"]
+    must_not_include: ["forbidden"]
+    must_ask_for: ["missing info"]
+  max_latency_ms: 5000
 ```
 
 ## Azure AI Foundry Export
@@ -142,7 +162,7 @@ foundry_export:
   enabled: true
   output_filename: foundry_eval.jsonl
   include_metadata: true
-  context_source: evidence  # 'evidence' | 'conversation' | 'none'
+  context_source: evidence  # 'evidence' | 'raw_tool_results' | 'none'
   evaluators:
     # AI-based quality evaluators (require model deployment)
     - id: builtin.relevance

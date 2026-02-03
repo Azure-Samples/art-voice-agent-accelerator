@@ -135,11 +135,34 @@ class CascadeSessionScope:
     memo_manager: MemoManager | None = None
     active_agent: str = ""
     turn_id: str = ""
+    _turn_sequence: int = field(default=0, repr=False)  # Track tool call boundaries
+    _base_turn_id: str = field(default="", repr=False)  # Original turn_id before tools
 
     @classmethod
     def get_current(cls) -> CascadeSessionScope | None:
         """Get the current session scope from context variable."""
         return _cascade_session_ctx.get()
+
+    def advance_turn_for_tool(self) -> str:
+        """
+        Advance the turn_id after a tool call to create a new message segment.
+
+        Returns:
+            The new turn_id to use for post-tool responses.
+        """
+        if not self._base_turn_id:
+            self._base_turn_id = self.turn_id or ""
+        self._turn_sequence += 1
+        self.turn_id = f"{self._base_turn_id}_s{self._turn_sequence}"
+        logger.debug(
+            "[TurnAdvance] Cascade turn_id advanced: base=%s, seq=%d, new=%s",
+            self._base_turn_id, self._turn_sequence, self.turn_id
+        )
+        return self.turn_id
+
+    def get_effective_turn_id(self) -> str:
+        """Get the current effective turn_id (which may have been advanced)."""
+        return self.turn_id
 
     @classmethod
     @contextmanager
@@ -467,6 +490,72 @@ class CascadeOrchestratorAdapter:
         Uses HandoffService for consistent resolution.
         """
         return self.handoff_service.get_handoff_target(tool_name)
+
+    # ─────────────────────────────────────────────────────────────────
+    # MCP Server Integration
+    # ─────────────────────────────────────────────────────────────────
+
+    async def _init_mcp_for_agent(self, agent_name: str, memo_manager: MemoManager | None) -> None:
+        """
+        Initialize MCP server connections for an agent's configured servers.
+        
+        Connects to MCP servers listed in the agent's mcp_servers field.
+        Tools from connected servers become available for the session.
+        
+        Args:
+            agent_name: Name of the agent to initialize MCP for
+            memo_manager: MemoManager instance for session state
+        """
+        if not memo_manager:
+            return
+            
+        agent = self.agents.get(agent_name)
+        if not agent or not agent.mcp_servers:
+            return
+            
+        # Check if already initialized for this agent
+        if hasattr(self, "_mcp_initialized_agents"):
+            if agent_name in self._mcp_initialized_agents:
+                return
+        else:
+            self._mcp_initialized_agents = set()
+            
+        try:
+            from apps.artagent.backend.registries.toolstore.mcp import get_mcp_configs_for_agent
+            
+            configs = get_mcp_configs_for_agent(agent.mcp_servers)
+            if not configs:
+                logger.debug(
+                    "[CascadeOrchestrator] No MCP servers configured for agent %s",
+                    agent_name,
+                )
+                return
+                
+            results = await memo_manager.init_mcp_servers(configs)
+            
+            self._mcp_initialized_agents.add(agent_name)
+            
+            connected = [name for name, success in results.items() if success]
+            failed = [name for name, success in results.items() if not success]
+            
+            if connected:
+                logger.info(
+                    "[CascadeOrchestrator] MCP servers connected for %s: %s",
+                    agent_name,
+                    connected,
+                )
+            if failed:
+                logger.warning(
+                    "[CascadeOrchestrator] MCP servers failed for %s: %s",
+                    agent_name,
+                    failed,
+                )
+        except Exception as exc:
+            logger.warning(
+                "[CascadeOrchestrator] MCP initialization failed for %s: %s",
+                agent_name,
+                exc,
+            )
 
     def _get_tools_with_handoffs(self, agent: UnifiedAgent) -> list[dict[str, Any]]:
         """
@@ -881,6 +970,9 @@ class CascadeOrchestratorAdapter:
             if memo_manager:
                 self.sync_from_memo_manager(memo_manager)
                 self._current_memo_manager = memo_manager
+                
+                # Initialize MCP servers for active agent (non-blocking)
+                await self._init_mcp_for_agent(self._active_agent, memo_manager)
 
                 # Get history and append current user message
                 history = list(memo_manager.get_history(self._active_agent) or [])
@@ -1860,6 +1952,11 @@ class CascadeOrchestratorAdapter:
                                         session_profile = cm.get_value_from_corememory("session_profile")
                                         if session_profile:
                                             args["_session_profile"] = session_profile
+                                        # Always inject _client_id so tools can use the verified value
+                                        # Tools should prefer _client_id over client_id when present
+                                        client_id = cm.get_value_from_corememory("client_id")
+                                        if client_id:
+                                            args["_client_id"] = client_id
                                     result = await agent.execute_tool(tool_name, args)
                                     logger.info(
                                         "Tool executed | name=%s result_keys=%s",
@@ -1925,6 +2022,12 @@ class CascadeOrchestratorAdapter:
                                 )
                         except Exception:
                             logger.debug("Failed to persist tool results to history", exc_info=True)
+
+                    # Advance turn_id to create a new message segment for post-tool response
+                    # This prevents the UI from overwriting pre-tool assistant content
+                    session_scope = CascadeSessionScope.get_current()
+                    if session_scope:
+                        session_scope.advance_turn_for_tool()
 
                     # Recurse to get LLM follow-up response
                     span.add_event(

@@ -15,7 +15,8 @@ Startup Steps:
     4. warmup   - Token pre-fetch, connection warmup
     5. services - Cosmos DB, ACS, phrase manager
     6. agents   - Load unified agents and scenarios
-    7. events   - Register event handlers
+    7. mcp      - Validate MCP server connections
+    8. events   - Register event handlers
 """
 
 from __future__ import annotations
@@ -63,6 +64,7 @@ from lifecycle.steps import (
     register_core_state_step,
     register_event_handlers_step,
     register_external_services_step,
+    register_mcp_servers_step,
     register_speech_pools_step,
     register_warmup_step,
 )
@@ -98,25 +100,34 @@ async def lifespan(app: FastAPI):
 
     Uses the LifecycleManager for clean, modular initialization.
     Each step is defined in lifecycle/steps.py for easy maintenance.
+
+    Deferred steps (warmup, MCP) run in the background after the app
+    starts accepting requests, reducing time-to-first-request.
     """
     tracer = trace.get_tracer(__name__)
     manager = LifecycleManager()
 
     # Register all startup steps (order matters)
+    # Note: warmup and mcp are deferred - they run after yield
     register_core_state_step(manager, app)
     register_speech_pools_step(manager, app)
     register_aoai_step(manager, app)
-    register_warmup_step(manager, app)
+    register_warmup_step(manager, app)  # deferred=True
     register_external_services_step(manager, app)
     register_agents_step(manager, app)
+    register_mcp_servers_step(manager, app)  # deferred=True
     register_event_handlers_step(manager, app)
 
-    # Run startup
+    # Run startup (blocking steps only)
     with tracer.start_as_current_span("startup.lifespan"):
         startup_results = await manager.run_startup()
 
     # Log the dashboard (single info log)
-    logger.info(build_startup_dashboard(app, startup_results))
+    deferred_names = manager.get_deferred_step_names()
+    logger.info(build_startup_dashboard(app, startup_results, deferred_names))
+
+    # Start deferred tasks (warmup, MCP validation) in background
+    manager.start_deferred_startup(app)
 
     # ---- Application runs ----
     yield

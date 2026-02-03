@@ -158,7 +158,7 @@ graph TB
     
     1. **[Getting Started Guide](getting-started/README.md)** - Complete setup walkthrough
     2. **[Architecture Overview](architecture/README.md)** - Understand the system design 
-    3. **[Deployment Guide](deployment/README.md)** - Deploy with `azd up` in 15 minutes
+    3. **[Deployment Guide](deployment/README.md)** - Deploy with `azd up` in ~25 minutes (15-20 infra + 5-10 app container build/push)
     4. **[API Reference](api/README.md)** - Explore the REST and WebSocket APIs
 
 === "🏗️ Platform Engineers"

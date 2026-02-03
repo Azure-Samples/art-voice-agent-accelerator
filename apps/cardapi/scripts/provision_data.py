@@ -6,31 +6,21 @@ cardapi database with minimal interference to existing data.
 
 Authentication: 
 - If COSMOS_ADMIN_PASSWORD is set: Uses admin credentials (for provisioning)
-- Otherwise: Uses Azure Managed Identity with OIDC
+- Otherwise: Uses Azure Managed Identity with OIDC (ENVIRONMENT="azure")
 """
 
 import json
 import os
 import sys
+import warnings
 from pathlib import Path
 from urllib.parse import quote_plus
 
+# Suppress PyMongo CosmosDB compatibility warnings
+warnings.filterwarnings("ignore", message=".*CosmosDB.*")
+
 from pymongo import MongoClient
-from pymongo.auth_oidc import OIDCCallback, OIDCCallbackContext, OIDCCallbackResult
 from pymongo.errors import DuplicateKeyError
-from azure.identity import DefaultAzureCredential
-
-
-class AzureIdentityOIDCCallback(OIDCCallback):
-    """OIDC callback using Azure Managed Identity."""
-
-    def __init__(self):
-        self.credential = DefaultAzureCredential()
-
-    def fetch(self, context: OIDCCallbackContext) -> OIDCCallbackResult:
-        """Fetch Azure access token for Cosmos DB."""
-        token = self.credential.get_token("https://ossrdbms-aad.database.windows.net/.default").token
-        return OIDCCallbackResult(access_token=token)
 
 
 def main():
@@ -64,35 +54,47 @@ def main():
     # Connect to DocumentDB
     try:
         if use_admin_auth:
-            # Use admin credentials with PyMongo's built-in parameter handling
-            # PyMongo automatically handles URL encoding of credentials
+            # Use admin credentials for Cosmos DB MongoDB cluster
+            # Note: Cosmos DB requires TLS and doesn't use authSource like traditional MongoDB
             print(f"[DEBUG] Connecting to {hostname} as {admin_username}...", file=sys.stderr)
+            print(f"[DEBUG] Password length: {len(admin_password)} chars", file=sys.stderr)
+            
+            # For Cosmos DB MongoDB vCore, use SCRAM-SHA-256 authentication
+            # Don't specify authSource (Cosmos handles this internally)
+            encoded_username = quote_plus(admin_username)
+            encoded_password = quote_plus(admin_password)
+            
+            # Build connection string with all required Cosmos DB parameters
+            connection_string = (
+                f"mongodb+srv://{encoded_username}:{encoded_password}@{hostname}/"
+                f"?tls=true&retryWrites=false&authMechanism=SCRAM-SHA-256"
+            )
             
             try:
-                # First try: connection string with embedded credentials
-                encoded_username = quote_plus(admin_username)
-                encoded_password = quote_plus(admin_password)
-                connection_string = f"mongodb+srv://{encoded_username}:{encoded_password}@{hostname}/?retryWrites=false"
-                client = MongoClient(connection_string, serverSelectionTimeoutMS=5000)
+                client = MongoClient(connection_string, serverSelectionTimeoutMS=15000, connectTimeoutMS=15000)
                 client.admin.command("ping")
-                print(f"✓ Connected to DocumentDB with admin credentials")
+                print(f"✓ Connected to Cosmos DB with admin credentials (SCRAM-SHA-256)")
             except Exception as conn_error:
-                # If connection string parsing fails, try with auth parameters separately
-                print(f"[DEBUG] Connection string method failed, trying with separate auth parameters...", file=sys.stderr)
+                print(f"[DEBUG] SCRAM-SHA-256 method failed: {conn_error}", file=sys.stderr)
                 
-                # Second try: use separate authentication parameters (PyMongo handles encoding)
-                client = MongoClient(
-                    f"mongodb+srv://{hostname}/?retryWrites=false",
-                    username=admin_username,
-                    password=admin_password,
-                    authSource="admin",
-                    serverSelectionTimeoutMS=5000
+                # Fallback: try without explicit authMechanism (let Cosmos negotiate)
+                connection_string_simple = (
+                    f"mongodb+srv://{encoded_username}:{encoded_password}@{hostname}/"
+                    f"?tls=true&retryWrites=false"
                 )
-                client.admin.command("ping")
-                print(f"✓ Connected to DocumentDB with admin credentials (using auth parameters)")
+                
+                try:
+                    client = MongoClient(connection_string_simple, serverSelectionTimeoutMS=15000, connectTimeoutMS=15000)
+                    client.admin.command("ping")
+                    print(f"✓ Connected to Cosmos DB with admin credentials (auto-negotiated)")
+                except Exception as fallback_error:
+                    print(f"[DEBUG] Auto-negotiated method also failed: {fallback_error}", file=sys.stderr)
+                    raise conn_error  # Raise original error for better diagnostics
         else:
-            # Use OIDC authentication (same pattern as main.py)
+            # Use OIDC authentication with Azure CLI credentials (works locally and in CI/CD)
             import re
+            from azure.identity import DefaultAzureCredential
+            
             connection_string = os.getenv("AZURE_COSMOS_CONNECTION_STRING")
             
             # Extract cluster name from connection string, stripping any <user>:<password>@ prefix
@@ -102,17 +104,16 @@ def main():
             else:
                 raise ValueError(f"Could not determine cluster name from connection string: {connection_string[:50]}...")
             
-            callback = AzureIdentityOIDCCallback()
+            # Use DefaultAzureCredential which tries: Environment > CLI > Managed Identity
+            credential = DefaultAzureCredential()
+            
+            # Define OIDC callback that uses Azure Identity SDK
+            def oidc_callback(context):
+                token = credential.get_token("https://ossrdbms-aad.database.windows.net/.default")
+                return {"access_token": token.token, "expires_in_seconds": 3600}
             
             # Build OIDC connection string
             oidc_connection_string = f"mongodb+srv://{cluster_name}.mongocluster.cosmos.azure.com/"
-            
-            # Suppress PyMongo CosmosDB warnings
-            import warnings
-            warnings.filterwarnings("ignore", message=".*CosmosDB.*")
-            
-            # Allow Cosmos DB MongoDB cluster hosts for OIDC
-            os.environ.setdefault("MONGODB_OIDC_ALLOWED_HOSTS", "*.mongocluster.cosmos.azure.com")
             
             client = MongoClient(
                 oidc_connection_string,
@@ -120,9 +121,7 @@ def main():
                 tls=True,
                 retryWrites=False,
                 authMechanism="MONGODB-OIDC",
-                authMechanismProperties={
-                    "OIDC_CALLBACK": callback,
-                },
+                authMechanismProperties={"OIDC_CALLBACK": oidc_callback},
             )
             client.admin.command("ping")
             print(f"✓ Connected to Cosmos DB cluster: {cluster_name}")

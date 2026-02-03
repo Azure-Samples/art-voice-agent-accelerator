@@ -123,6 +123,8 @@ class DemoTransaction(BaseModel):
     # Original currency for international transactions
     original_amount: float | None = None
     original_currency: str | None = None
+    status: Literal["posted", "pending", "declined"] = "posted"
+    decline_code: str | None = None
     # Optional notes
     notes: str | None = None
 
@@ -1329,6 +1331,60 @@ def _build_transactions(
                 notes=None,
             ),
         )
+
+    # Add a random card decline for demo purposes
+    decline_code = rng.choice(("87", "75", "61", "55", "33", "05"))
+    transactions.append(
+        DemoTransaction(
+            transaction_id=f"TXN-{client_id}-DECLINE-002",
+            merchant=rng.choice(domestic_merchants),
+            amount=float(round(rng.uniform(5.0, 500.0), 2)),
+            category=rng.choice(domestic_categories),
+            timestamp=anchor - timedelta(hours=rng.randint(1, 96), minutes=rng.randint(0, 59)),
+            risk_score=rng.choice((8, 14, 22, 35)),
+            location=TransactionLocation(
+                city="Boston",
+                state="MA",
+                country="United States",
+                country_code="US",
+                is_international=False,
+            ),
+            card_last4=card_last4,
+            foreign_transaction_fee=None,
+            fee_reason=None,
+            original_amount=None,
+            original_currency=None,
+            decline_code=decline_code,
+            status="declined",
+            notes=None,
+        )
+    )
+    # Add a suspected fraud decline for demo purposes
+    transactions.append(
+        DemoTransaction(
+            transaction_id=f"TXN-{client_id}-DECLINE-001",
+            merchant="Contoso Electronics",
+            amount=99.99,
+            category="electronics",
+            timestamp=anchor - timedelta(hours=rng.randint(1, 96), minutes=rng.randint(0, 59)),
+            risk_score=95,
+            location=TransactionLocation(
+                city="Seattle",
+                state="WA",
+                country="United States",
+                country_code="US",
+                is_international=False,
+            ),
+            card_last4=card_last4,
+            foreign_transaction_fee=None,
+            fee_reason=None,
+            original_amount=None,
+            original_currency=None,
+            decline_code="0W-0Z",
+            status="declined",
+            notes="Transaction declined due to suspected fraud",
+        )
+    )
 
     transactions.sort(key=lambda item: item.timestamp, reverse=True)
     return transactions

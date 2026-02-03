@@ -68,6 +68,7 @@ from .shared import (
 from .speech_cascade.orchestrator import (
     CascadeConfig,
     CascadeOrchestratorAdapter,
+    CascadeSessionScope,
     create_cascade_orchestrator_func,
     get_cascade_orchestrator,
 )

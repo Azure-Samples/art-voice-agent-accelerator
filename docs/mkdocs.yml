@@ -77,6 +77,7 @@ nav:
       - Agents: architecture/registries/agents.md
       - Tool Development: architecture/registries/tools.md
       - Tool Reference: architecture/registries/tool-catalog.md
+      - MCP Integration: architecture/registries/mcp-integration.md
       - Scenarios: architecture/registries/scenarios.md
     - Reference:
       - Catalog: architecture/agents/reference/index.md
@@ -120,6 +121,7 @@ nav:
   - API Reference:
     - Overview: api/README.md
     - Endpoints: api/api-reference.md
+    - MCP API: api/mcp-api.md
   - Industry Solutions:
     - Overview: industry/README.md
     - Banking: industry/banking.md

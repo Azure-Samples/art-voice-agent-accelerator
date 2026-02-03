@@ -1,0 +1,126 @@
+# yaml-language-server: $schema=../scenario.schema.json
+# ═══════════════════════════════════════════════════════════════════════════════
+# Decline Specialist - Email Functionality Test
+# ═══════════════════════════════════════════════════════════════════════════════
+# Targets: DeclineSpecialist agent's ability to send decline summary emails
+#
+# Test Goals:
+# - Verify send_decline_summary_email tool is called
+# - Confirm correct email address from session profile is used
+# - Test end-to-end decline explanation → email flow
+# ═══════════════════════════════════════════════════════════════════════════════
+
+scenario_name: decline_specialist_email_test
+description: |
+  Test that DeclineSpecialist can correctly send decline summary emails
+  using the customer's actual email address from their session profile.
+
+# Demo user with specific email for verification
+demo_user:
+  full_name: "Email User"
+  email: "replace-me@email-to-test-with.com"
+  phone_number: "+14255551234"
+  scenario: banking
+  seed: 100
+  persist: false
+
+session_config:
+  agents:
+    - DeclineSpecialist
+
+  start_agent: DeclineSpecialist
+  handoff_type: announced
+
+  handoffs: []
+
+  generic_handoff:
+    enabled: false
+
+  agent_defaults:
+    institution_name: "Contoso Bank"
+    industry: "banking"
+
+agent_overrides:
+  - agent: DeclineSpecialist
+    model_override:
+      deployment_id: gpt-4o
+      temperature: 0.6
+      max_tokens: 500
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Email Flow Test Turns
+# ═══════════════════════════════════════════════════════════════════════════════
+
+turns:
+  # Turn 1: User identifies themselves and reports a declined card
+  - turn_id: turn_1_report_decline
+    user_input: "Hi, this is Jin Le. My card was declined at Target for $127.50. I already did the phone verification when I called in."
+    expectations:
+      tools_optional:
+        - lookup_decline_code
+        - get_recent_transactions
+      no_handoff: true
+      response_constraints:
+        max_tokens: 150
+
+  # Turn 2: Ask about the decline code - specialist explains
+  - turn_id: turn_2_decline_explanation
+    user_input: "The receipt shows code 51. What does that mean?"
+    expectations:
+      tools_called:
+        - lookup_decline_code
+      no_handoff: true
+      response_constraints:
+        max_tokens: 200
+
+  # Turn 3: Request email summary - THIS IS THE KEY TEST
+  - turn_id: turn_3_request_email
+    user_input: "Please send me an email summary of this decline to my email on file. I need it for my records."
+    expectations:
+      tools_called:
+        - send_decline_summary_email
+      no_handoff: true
+      response_constraints:
+        max_tokens: 100
+      # Custom assertion: email should go to jinle@microsoft.com
+      custom_assertions:
+        - type: tool_result_contains
+          tool: send_decline_summary_email
+          field: recipient
+          expected: "jinle@microsoft.com"
+
+  # Turn 4: Confirm email was sent correctly
+  - turn_id: turn_4_confirm_email
+    user_input: "Great. That should have gone to my Microsoft email right?"
+    expectations:
+      tools_called: []
+      no_handoff: true
+      response_constraints:
+        max_tokens: 80
+        # Agent should confirm the email address
+        should_mention:
+          - "jinle@microsoft.com"
+
+thresholds:
+  min_tool_precision: 0.60
+  min_tool_recall: 0.50
+  min_grounded_ratio: 0.4
+  max_latency_p95_ms: 15000
+
+metadata:
+  test_focus: "email_functionality"
+  target_tool: "send_decline_summary_email"
+  expected_email: "jinle@microsoft.com"
+
+foundry_export:
+  enabled: true
+  output_filename: decline_specialist_email_eval.jsonl
+  context_source: evidence
+  evaluators:
+    - id: builtin.relevance
+      init_params:
+        deployment_name: gpt-4o
+      data_mapping:
+        query: "${data.query}"
+        response: "${data.response}"
+        context: "${data.context}"

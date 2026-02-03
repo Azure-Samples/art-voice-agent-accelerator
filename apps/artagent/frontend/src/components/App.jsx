@@ -2089,7 +2089,7 @@ function RealTimeVoiceApp() {
     };
 
     const updateTurnMessage = (turnId, updater, options = {}) => {
-      const { createIfMissing = true, initial } = options;
+      const { createIfMissing = true, initial, speaker } = options;
 
       setMessages((prev) => {
         if (!turnId) {
@@ -2103,7 +2103,24 @@ function RealTimeVoiceApp() {
           return [...prev, base];
         }
 
-        const index = prev.findIndex((m) => m.turnId === turnId);
+        // After handoff, a message may have been created with a speaker-qualified turnId
+        // (e.g., "abc123_DeclineSpecialist"). Check for that variant first if speaker is known.
+        const speakerQualifiedTurnId = speaker ? `${turnId}_${speaker}` : null;
+        let index = speakerQualifiedTurnId
+          ? prev.findIndex((m) => m.turnId === speakerQualifiedTurnId)
+          : -1;
+        
+        // Fall back to looking for exact turnId match with SAME speaker
+        // This prevents finding a different agent's message with the same base turnId
+        if (index === -1 && speaker) {
+          index = prev.findIndex((m) => m.turnId === turnId && m.speaker === speaker);
+        }
+        
+        // Final fallback: exact turnId match (for cases without speaker info)
+        if (index === -1) {
+          index = prev.findIndex((m) => m.turnId === turnId);
+        }
+
         if (index === -1) {
           if (!createIfMissing) {
             return prev;
@@ -2112,7 +2129,20 @@ function RealTimeVoiceApp() {
           if (!base) {
             return prev;
           }
-          return [...prev, { ...base, turnId }];
+          // DEDUPLICATION: Don't create a new message if the last message has same speaker+text
+          // This prevents duplicate bubbles when turnId changes but content is the same
+          const lastMsg = prev.at(-1);
+          if (lastMsg && lastMsg.speaker === base.speaker && lastMsg.text === base.text) {
+            // Update the existing message's turnId instead of creating duplicate
+            return prev.map((m, i) => 
+              i === prev.length - 1 
+                ? { ...m, turnId: speaker ? `${turnId}_${speaker}` : turnId, streaming: false }
+                : m
+            );
+          }
+          // For new messages with a speaker, use qualified turnId to isolate from other agents
+          const effectiveTurnId = speaker ? `${turnId}_${speaker}` : turnId;
+          return [...prev, { ...base, turnId: effectiveTurnId }];
         }
 
         const current = prev[index];
@@ -2125,12 +2155,25 @@ function RealTimeVoiceApp() {
         // instead of overwriting the previous agent's bubble
         if (patch.speaker && current.speaker && patch.speaker !== current.speaker) {
           const base = typeof initial === "function" ? initial() : initial;
-          const newMsg = base ? { ...base, ...patch } : { ...patch, turnId: `${turnId}_${patch.speaker}` };
+          // MUST use qualified turnId so subsequent lookups can find this message
+          const qualifiedTurnId = `${turnId}_${patch.speaker}`;
+          const newMsg = base 
+            ? { ...base, ...patch, turnId: qualifiedTurnId } 
+            : { ...patch, turnId: qualifiedTurnId };
+          // DEDUPLICATION: Don't add if last message already has same speaker+text
+          const lastMsg = prev.at(-1);
+          if (lastMsg && lastMsg.speaker === newMsg.speaker && lastMsg.text === newMsg.text) {
+            return prev.map((m, i) => 
+              i === prev.length - 1 
+                ? { ...m, turnId: qualifiedTurnId, streaming: false }
+                : m
+            );
+          }
           return [...prev, newMsg];
         }
 
         const next = [...prev];
-        next[index] = { ...current, ...patch, turnId };
+        next[index] = { ...current, ...patch, turnId: current.turnId };
         return next;
       });
     };
@@ -2985,6 +3028,7 @@ function RealTimeVoiceApp() {
           payload.response_id ||
           payload.responseId ||
           null;
+        const cancelledSpeaker = speaker || payload.active_agent || payload.sender || null;
         if (turnId) {
           updateTurnMessage(
             turnId,
@@ -3000,7 +3044,7 @@ function RealTimeVoiceApp() {
                       current.cancelReason,
                   }
                 : null,
-            { createIfMissing: false },
+            { createIfMissing: false, speaker: cancelledSpeaker },
           );
         }
         setActiveSpeaker(null);
@@ -3026,13 +3070,14 @@ function RealTimeVoiceApp() {
           null;
 
         // Always accumulate streaming text into buffer (prevents dropped deltas)
-        // Reset buffer if this is a new turn/response
+        // Track by turnId+speaker to prevent cross-agent contamination during handoffs
         const buffer = assistantStreamBufferRef.current;
-        if (buffer.turnId !== turnId) {
-          buffer.turnId = turnId;
-          buffer.text = txt; // Start fresh for new turn
+        const bufferKey = turnId ? `${turnId}_${streamingSpeaker}` : null;
+        if (buffer.turnId !== bufferKey) {
+          buffer.turnId = bufferKey;
+          buffer.text = txt; // Start fresh for new turn or new speaker
         } else {
-          buffer.text += txt; // Accumulate for same turn
+          buffer.text += txt; // Accumulate for same turn+speaker
         }
 
         if (shouldUpdateUi) {
@@ -3040,63 +3085,47 @@ function RealTimeVoiceApp() {
           // Use accumulated buffer text instead of just current delta
           const accumulatedText = buffer.text;
           
-          if (turnId) {
-            updateTurnMessage(
-              turnId,
-              () => {
-                // For streaming, we replace with full accumulated text (not append)
-                // because the buffer already contains all deltas since last update
-                return {
-                  speaker: streamingSpeaker,
-                  text: accumulatedText,
-                  streaming: true,
-                  streamGeneration,
-                  cancelled: false,
-                  cancelReason: undefined,
-                };
-              },
-              {
-                initial: () => ({
-                  speaker: streamingSpeaker,
-                  text: accumulatedText,
-                  streaming: true,
-                  streamGeneration,
-                  turnId,
-                  cancelled: false,
-                }),
-              },
-            );
-          } else {
-            setMessages((prev) => {
-              const latest = prev.at(-1);
+          // Use speaker+streamGeneration as primary key for finding/updating streaming messages
+          // This is more robust than turnId alone, especially during handoffs where
+          // the same turnId may be used by multiple agents
+          setMessages((prev) => {
+            // Find the most recent streaming message for this speaker with matching generation
+            // Search backwards since we want the latest one
+            for (let idx = prev.length - 1; idx >= 0; idx -= 1) {
+              const candidate = prev[idx];
               if (
-                latest?.streaming &&
-                latest?.speaker === streamingSpeaker &&
-                latest?.streamGeneration === streamGeneration
+                candidate?.streaming &&
+                candidate?.speaker === streamingSpeaker &&
+                candidate?.streamGeneration === streamGeneration
               ) {
+                // Found it - update in place
                 return prev.map((m, i) =>
-                  i === prev.length - 1
+                  i === idx
                     ? {
                         ...m,
                         text: accumulatedText,
+                        turnId: turnId || m.turnId,
                         cancelled: false,
                         cancelReason: undefined,
                       }
                     : m,
                 );
               }
-              return [
-                ...prev,
-                {
-                  speaker: streamingSpeaker,
-                  text: accumulatedText,
-                  streaming: true,
-                  streamGeneration,
-                  cancelled: false,
-                },
-              ];
-            });
-          }
+            }
+            
+            // No existing streaming message for this speaker+generation - create new one
+            return [
+              ...prev,
+              {
+                speaker: streamingSpeaker,
+                text: accumulatedText,
+                streaming: true,
+                streamGeneration,
+                turnId,
+                cancelled: false,
+              },
+            ];
+          });
         }
         const pending = metricsRef.current?.pendingBargeIn;
         if (pending) {
@@ -3155,6 +3184,8 @@ function RealTimeVoiceApp() {
               cancelReason: undefined,
             }),
             {
+              // Pass speaker so we can find messages with speaker-qualified turnIds after handoff
+              speaker: assistantSpeaker,
               initial: () => ({
                 ...messageOptions,
                 streaming: false,

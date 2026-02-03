@@ -5,28 +5,31 @@
 ### Local Development
 ```bash
 cd apps/cardapi
-./start.sh
-./test_api.py    # Run tests
-./stop.sh        # When done
+./start.sh       # Start MCP server
 ```
+
+The MCP server loads data from `database/decline_codes_policy_pack.json` locally.
 
 ### Docker
 ```bash
 cd apps/cardapi
 
-# Build and run backend
-docker build -f Dockerfile.backend -t cardapi-backend .
-docker run -p 8000:8000 cardapi-backend
-
-# Build and run MCP
+# Build and run MCP (self-contained)
 docker build -f Dockerfile.mcp -t cardapi-mcp .
-docker run -e CARDAPI_BACKEND_URL=http://backend:8000 -p 80:80 cardapi-mcp
+docker run -p 80:80 cardapi-mcp
+```
+
+For Azure Cosmos DB connection:
+```bash
+docker run \
+  -e AZURE_COSMOS_DATABASE_NAME=cardapi \
+  -e AZURE_COSMOS_COLLECTION_NAME=declinecodes \
+  -p 80:80 cardapi-mcp
 ```
 
 ### Azure Deployment
 ```bash
 # From project root
-azd deploy cardapi-backend
 azd deploy cardapi-mcp
 ```
 
@@ -139,28 +142,16 @@ Output: Database statistics and info
 
 ## 🐛 Troubleshooting
 
-### Backend won't start
+### MCP server won't start
 ```bash
-# Check if port 8000 is in use
-lsof -i :8000
+# Check if port is in use
+lsof -i :80
 
 # Check logs
-tail -f apps/cardapi/backend.log
+tail -f apps/cardapi/mcp.log
 
 # Verify database exists
 ls -la apps/cardapi/database/decline_codes_policy_pack.json
-```
-
-### MCP connection issues
-```bash
-# Verify backend is running
-curl http://localhost:8000/health
-
-# Check MCP logs
-tail -f apps/cardapi/mcp_app.log
-
-# Verify environment variable
-echo $CARDAPI_BACKEND_URL
 ```
 
 ### Docker build fails
@@ -172,56 +163,58 @@ cd apps/cardapi
 docker ps
 
 # Build with verbose output
-docker build -f Dockerfile.backend --progress=plain -t cardapi-backend .
+docker build -f Dockerfile.mcp --progress=plain -t cardapi-mcp .
+```
+
+### Azure Cosmos DB connection issues
+```bash
+# Check environment variables
+echo $AZURE_COSMOS_DATABASE_NAME
+echo $AZURE_COSMOS_COLLECTION_NAME
+
+# Verify managed identity (in Azure)
+echo $AZURE_CLIENT_ID
 ```
 
 ## 📁 Project Structure
 
 ```
 apps/cardapi/
-├── backend/
-│   ├── main.py              # FastAPI application
-│   ├── requirements.txt     # Python dependencies
-│   └── __init__.py
 ├── mcp_app/
-│   ├── service.py          # MCP server
+│   ├── service.py          # MCP server (self-contained)
 │   ├── requirements.txt    # Python dependencies
 │   └── __init__.py
 ├── database/
-│   └── decline_codes_policy_pack.json  # Decline codes policy pack database
-├── Dockerfile.backend      # Backend container
+│   └── decline_codes_policy_pack.json  # Local decline codes database
+├── scripts/
+│   └── provision_data.py   # Cosmos DB data provisioning
 ├── Dockerfile.mcp          # MCP container
 ├── README.md               # Full documentation
 ├── QUICKSTART.md           # This file
-├── start.sh                # Local dev startup
-├── stop.sh                 # Local dev shutdown
-└── test_api.py             # API test suite
+└── start.sh                # Local dev startup
 ```
 
 ## 🔗 Related Files
 
-- [CARDAPI_USAGE_GUIDE.md](backend/CARDAPI_USAGE_GUIDE.md) - Detailed usage guide
-- [CARDAPI_MCP_UPDATES.md](mcp_app/CARDAPI_MCP_UPDATES.md) - MCP server updates
+- [CARDAPI_MCP_UPDATES.md](mcp_app/CARDAPI_MCP_UPDATES.md) - MCP server details
 - `infra/terraform/cardapi.tf` - Azure infrastructure
 - `azure.yaml` - Deployment configuration
 
 ## 📚 Documentation
 
-- Full API docs: http://localhost:8000/docs (when running locally)
-- ReDoc: http://localhost:8000/redoc
 - Detailed README: [README.md](README.md)
+- MCP Updates: [CARDAPI_MCP_UPDATES.md](mcp_app/CARDAPI_MCP_UPDATES.md)
 
 ## 💡 Tips
 
-1. **Use the OpenAPI docs**: Visit `/docs` for interactive API testing
-2. **Filter your queries**: Use `code_type` parameter to reduce results
+1. **Use MCP tools**: AI agents can query decline codes via MCP protocol
+2. **Filter by code type**: Use numeric/alphanumeric to narrow results
 3. **Check metadata first**: Get counts and info before querying all codes
-4. **Use search wisely**: Search is case-insensitive and searches all fields
-5. **Monitor logs**: Check Application Insights in Azure for production issues
+4. **Monitor logs**: Check Application Insights in Azure for production issues
+5. **Local data**: In dev mode, data loads from JSON file (no network required)
 
 ## 🆘 Support
 
-- Check logs: `backend.log` and `mcp_app.log`
-- Verify health: `curl localhost:8000/health`
-- Run tests: `./test_api.py`
+- Check logs: `mcp.log`
+- Run the start script: `./start.sh`
 - Review errors in Application Insights (Azure deployment)

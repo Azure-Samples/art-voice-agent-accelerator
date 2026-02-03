@@ -11,6 +11,7 @@
             "url": "http://localhost:5173", // Ensure this matches your Vite dev server port
             "webRoot": "${workspaceFolder}/apps/artagent/frontend",
             "sourceMaps": true,
+            "preLaunchTask": "Start Frontend Dev Server",
             "sourceMapPathOverrides": {
             "webpack:///src/*": "${webRoot}/src/*",
             "webpack:///*": "${webRoot}/*"
@@ -37,26 +38,20 @@
             "jinja": true,
             "env": {
                 "PYTHONPATH": "${workspaceFolder}",
-                "CARDAPI_URL": "http://localhost:8000"
+                "MCP_SERVER_CARDAPI_URL": "http://localhost:8080"
             },
             "envFile": "${workspaceFolder}/.env.local"
         },
 
+
         {
-            "name": "[Card API] Python Debugger: FastAPI",
+            "name": "[Card API] MCP Server",
             "type": "debugpy",
             "request": "launch",
-            "module": "uvicorn",
-            "python": "${command:python.interpreterPath}",
-            "args": [
-                "apps.cardapi.backend.main:app",
-                "--reload",
-                "--reload-dir",
-                "${workspaceFolder}/apps/cardapi/backend",
-                "--port",
-                "8000"
-            ],
-            "jinja": true,
+            "program": "${workspaceFolder}/apps/cardapi/mcp_app/service.py",
+            "python": "${workspaceFolder}/apps/cardapi/mcp_app/.venv/bin/python",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/apps/cardapi/mcp_app",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"
             },
@@ -65,11 +60,11 @@
     ],
     "compounds": [
         {
-            "name": "[All] ART Agent + Card API",
+            "name": "[All] ART Agent + MCP",
             "configurations": [
                 "[ART Agent] React App: Browser Debug",
                 "[ART Agent] Python Debugger: FastAPI",
-                "[Card API] Python Debugger: FastAPI",
+                "[Card API] MCP Server"
             ],
             "stopAll": true
         }

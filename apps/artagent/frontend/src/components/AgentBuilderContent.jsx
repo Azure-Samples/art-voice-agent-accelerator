@@ -78,6 +78,10 @@ import BusinessIcon from '@mui/icons-material/Business';
 import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
 import BadgeIcon from '@mui/icons-material/Badge';
 import InsightsIcon from '@mui/icons-material/Insights';
+import AddIcon from '@mui/icons-material/Add';
+import LinkIcon from '@mui/icons-material/Link';
+import LinkOffIcon from '@mui/icons-material/LinkOff';
+import DeleteIcon from '@mui/icons-material/Delete';
 
 import { API_BASE_URL } from '../config/constants.js';
 import logger from '../utils/logger.js';
@@ -164,6 +168,16 @@ const styles = {
       boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
     },
   },
+};
+
+const formatMcpTransport = (transport) => {
+  if (!transport) return null;
+  const normalized = String(transport).toLowerCase();
+  if (normalized === 'streamable-http') return 'HTTP';
+  if (normalized === 'sse') return 'SSE';
+  if (normalized === 'http') return 'HTTP';
+  if (normalized === 'stdio') return 'STDIO';
+  return normalized.toUpperCase();
 };
 
 const CASCADE_MODEL_PRESETS = [
@@ -919,6 +933,26 @@ function ToolDetailsDialog({ open, onClose, tool }) {
             </Typography>
           </Box>
 
+          {(tool.source === 'mcp' || tool.mcp_server) && (
+            <Box>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
+                MCP Source
+              </Typography>
+              <Stack direction="row" flexWrap="wrap" gap={1}>
+                <Chip
+                  size="small"
+                  label={`server: ${tool.mcp_server || 'unknown'}`}
+                />
+                {tool.mcp_transport && (
+                  <Chip
+                    size="small"
+                    label={`protocol: ${formatMcpTransport(tool.mcp_transport)}`}
+                  />
+                )}
+              </Stack>
+            </Box>
+          )}
+
           {tool.tags?.length > 0 && (
             <Box>
               <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
@@ -1018,6 +1052,27 @@ export default function AgentBuilderContent({
   const [selectedTool, setSelectedTool] = useState(null);
   const [showExportInstructions, setShowExportInstructions] = useState(false);
   const [exportedYaml, setExportedYaml] = useState('');
+
+  // MCP Server Management state
+  const [mcpServers, setMcpServers] = useState([]);
+  const [mcpLoading, setMcpLoading] = useState(false);
+  const [showAddMcpDialog, setShowAddMcpDialog] = useState(false);
+  const [mcpTestResult, setMcpTestResult] = useState(null);
+  const [newMcpServer, setNewMcpServer] = useState({
+    name: '',
+    url: '',
+    transport: 'streamable-http',
+    timeout: 30,
+    auth_token: '',
+    auth_method: 'none', // 'none', 'token', or 'oauth'
+    oauth: {
+      client_id: '',
+      auth_url: '',
+      token_url: '',
+      scope: '',
+    },
+  });
+  const [oauthPending, setOauthPending] = useState(null); // { state, popup }
 
   // Agent configuration state
   const [config, setConfig] = useState({
@@ -1228,6 +1283,210 @@ export default function AgentBuilderContent({
     }
   }, [sessionId, editMode]);
 
+  // MCP Server Management functions
+  const fetchMcpServers = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/mcp/servers`);
+      if (response.ok) {
+        const data = await response.json();
+        setMcpServers(data.servers || []);
+      }
+    } catch (err) {
+      logger.error('Failed to fetch MCP servers:', err);
+    }
+  }, []);
+
+  const handleTestMcpConnection = useCallback(async () => {
+    if (!newMcpServer.name || !newMcpServer.url) {
+      setError('Please enter server name and URL');
+      return;
+    }
+    setMcpLoading(true);
+    setMcpTestResult(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/mcp/servers/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newMcpServer),
+      });
+      const data = await response.json();
+      setMcpTestResult(data);
+      if (data.connected && data.tools_count > 0) {
+        setSuccess(`Connected! Found ${data.tools_count} tools`);
+      } else if (data.connected) {
+        setSuccess('Connected, but no tools discovered');
+      } else {
+        setError(data.error || 'Connection failed');
+      }
+    } catch (err) {
+      setError(`Connection test failed: ${err.message}`);
+    } finally {
+      setMcpLoading(false);
+      setTimeout(() => { setSuccess(null); setError(null); }, 3000);
+    }
+  }, [newMcpServer]);
+
+  const handleAddMcpServer = useCallback(async () => {
+    if (!newMcpServer.name || !newMcpServer.url) {
+      setError('Please enter server name and URL');
+      return;
+    }
+    setMcpLoading(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/mcp/servers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newMcpServer),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setSuccess(`MCP server "${newMcpServer.name}" added with ${data.server?.tools_count || 0} tools`);
+        setShowAddMcpDialog(false);
+        setNewMcpServer({ name: '', url: '', transport: 'streamable-http', timeout: 30, auth_token: '', auth_method: 'none', oauth: { client_id: '', auth_url: '', token_url: '', scope: '' } });
+        setMcpTestResult(null);
+        // Refresh servers and tools
+        await Promise.all([fetchMcpServers(), fetchAvailableTools()]);
+      } else {
+        const errData = await response.json();
+        setError(errData.detail || 'Failed to add MCP server');
+      }
+    } catch (err) {
+      setError(`Failed to add MCP server: ${err.message}`);
+    } finally {
+      setMcpLoading(false);
+      setTimeout(() => { setSuccess(null); setError(null); }, 3000);
+    }
+  }, [newMcpServer, fetchMcpServers, fetchAvailableTools]);
+
+  const handleRemoveMcpServer = useCallback(async (serverName) => {
+    if (!window.confirm(`Remove MCP server "${serverName}" and unregister its tools?`)) {
+      return;
+    }
+    setMcpLoading(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/mcp/servers/${serverName}`, {
+        method: 'DELETE',
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setSuccess(`Removed MCP server "${serverName}" and ${data.tools_removed || 0} tools`);
+        // Refresh servers and tools
+        await Promise.all([fetchMcpServers(), fetchAvailableTools()]);
+      } else {
+        const errData = await response.json();
+        setError(errData.detail || 'Failed to remove MCP server');
+      }
+    } catch (err) {
+      setError(`Failed to remove MCP server: ${err.message}`);
+    } finally {
+      setMcpLoading(false);
+      setTimeout(() => { setSuccess(null); setError(null); }, 3000);
+    }
+  }, [fetchMcpServers, fetchAvailableTools]);
+
+  // OAuth flow for MCP servers
+  const handleStartOAuth = useCallback(async () => {
+    if (!newMcpServer.name || !newMcpServer.url) {
+      setError('Server name and URL are required');
+      return;
+    }
+    if (!newMcpServer.oauth.client_id || !newMcpServer.oauth.auth_url || !newMcpServer.oauth.token_url) {
+      setError('OAuth client ID, auth URL, and token URL are required');
+      return;
+    }
+
+    setMcpLoading(true);
+    try {
+      // Generate redirect URI (OAuth callback page)
+      const redirectUri = `${window.location.origin}/oauth/callback.html`;
+
+      const response = await fetch(`${API_BASE_URL}/api/v1/mcp/oauth/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newMcpServer.name,
+          url: newMcpServer.url,
+          oauth: newMcpServer.oauth,
+          redirect_uri: redirectUri,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        // Open OAuth popup
+        const popup = window.open(
+          data.auth_url,
+          'mcp_oauth',
+          'width=500,height=700,menubar=no,toolbar=no,location=yes'
+        );
+        setOauthPending({ state: data.state, popup });
+      } else {
+        const errData = await response.json();
+        setError(errData.detail || 'Failed to start OAuth flow');
+      }
+    } catch (err) {
+      setError(`Failed to start OAuth: ${err.message}`);
+    } finally {
+      setMcpLoading(false);
+    }
+  }, [newMcpServer]);
+
+  // Handle OAuth callback message from popup
+  useEffect(() => {
+    const handleOAuthMessage = async (event) => {
+      if (event.origin !== window.location.origin) return;
+      if (event.data?.type !== 'oauth_callback') return;
+
+      const { code, state, error: oauthError } = event.data;
+
+      if (oauthError) {
+        setError(`OAuth failed: ${oauthError}`);
+        setOauthPending(null);
+        return;
+      }
+
+      if (!oauthPending || oauthPending.state !== state) {
+        setError('OAuth state mismatch');
+        setOauthPending(null);
+        return;
+      }
+
+      // Close popup
+      oauthPending.popup?.close();
+
+      // Exchange code for token
+      setMcpLoading(true);
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/v1/mcp/oauth/callback`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code, state }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          setSuccess(data.message || 'OAuth authentication successful');
+          // Refresh servers to show the authenticated server
+          await fetchMcpServers();
+          // Test the connection now that we're authenticated
+          handleTestMcpConnection();
+        } else {
+          const errData = await response.json();
+          setError(errData.detail || 'Failed to complete OAuth');
+        }
+      } catch (err) {
+        setError(`OAuth callback failed: ${err.message}`);
+      } finally {
+        setMcpLoading(false);
+        setOauthPending(null);
+        setTimeout(() => { setSuccess(null); setError(null); }, 3000);
+      }
+    };
+
+    window.addEventListener('message', handleOAuthMessage);
+    return () => window.removeEventListener('message', handleOAuthMessage);
+  }, [oauthPending, fetchMcpServers, handleTestMcpConnection]);
+
   useEffect(() => {
     setLoading(true);
     Promise.all([
@@ -1235,8 +1494,9 @@ export default function AgentBuilderContent({
       fetchAvailableVoices(),
       fetchAvailableTemplates(),
       fetchExistingConfig(),
+      fetchMcpServers(),
     ]).finally(() => setLoading(false));
-  }, [fetchAvailableTools, fetchAvailableVoices, fetchAvailableTemplates, fetchExistingConfig]);
+  }, [fetchAvailableTools, fetchAvailableVoices, fetchAvailableTemplates, fetchExistingConfig, fetchMcpServers]);
 
   // Apply existing config
   useEffect(() => {
@@ -1252,14 +1512,51 @@ export default function AgentBuilderContent({
   // COMPUTED
   // ─────────────────────────────────────────────────────────────────────────
 
+  // Organize tools into categories with MCP first, then handoffs, then others
   const toolsByCategory = useMemo(() => {
     const grouped = {};
-    availableTools.forEach((tool) => {
-      const category = tool.is_handoff ? 'Handoffs' : (tool.tags?.[0] || 'General');
+    
+    // Sort tools to ensure MCP tools appear first, then handoffs
+    const sortedTools = [...availableTools].sort((a, b) => {
+      // MCP first
+      if (a.source === 'mcp' && b.source !== 'mcp') return -1;
+      if (a.source !== 'mcp' && b.source === 'mcp') return 1;
+      // Handoffs second
+      if (a.is_handoff && !b.is_handoff) return -1;
+      if (!a.is_handoff && b.is_handoff) return 1;
+      // Then sort by name
+      return a.name.localeCompare(b.name);
+    });
+    
+    sortedTools.forEach((tool) => {
+      let category;
+      if (tool.is_handoff) {
+        category = '🔀 Handoffs';
+      } else if (tool.source === 'mcp') {
+        const transportLabel = formatMcpTransport(tool.mcp_transport);
+        category = `🔌 MCP: ${tool.mcp_server || 'unknown'}${transportLabel ? ` (${transportLabel})` : ''}`;
+      } else {
+        category = tool.tags?.[0] || 'General';
+      }
       if (!grouped[category]) grouped[category] = [];
       grouped[category].push(tool);
     });
-    return grouped;
+    
+    // Sort categories to put MCP first, then Handoffs, then others
+    const sortedKeys = Object.keys(grouped).sort((a, b) => {
+      if (a.startsWith('🔌')) return -1;
+      if (b.startsWith('🔌')) return 1;
+      if (a.startsWith('🔀')) return -1;
+      if (b.startsWith('🔀')) return 1;
+      return a.localeCompare(b);
+    });
+    
+    const sortedGrouped = {};
+    sortedKeys.forEach(key => {
+      sortedGrouped[key] = grouped[key];
+    });
+    
+    return sortedGrouped;
   }, [availableTools]);
 
 
@@ -2086,6 +2383,7 @@ export default function AgentBuilderContent({
             {/* TAB 2: TOOLS */}
             <TabPanel value={activeTab} index={2}>
               <Stack spacing={2}>
+                {/* Header with selected count and catalog link */}
                 <Stack direction="row" justifyContent="space-between" alignItems="center">
                   <Typography variant="subtitle2" color="primary" sx={{ fontWeight: 600 }}>
                     🛠️ Available Tools ({config.tools.length} selected)
@@ -2103,96 +2401,293 @@ export default function AgentBuilderContent({
                   </Button>
                 </Stack>
 
-                {Object.entries(toolsByCategory).map(([category, tools]) => (
-                  <Accordion key={category} defaultExpanded={false}>
-                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                      <Typography variant="subtitle2">{category}</Typography>
+                {/* Selected Tools Summary (chips at top) */}
+                {config.tools.length > 0 && (
+                  <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'primary.50', borderColor: 'primary.200' }}>
+                    <Typography variant="caption" color="primary.dark" sx={{ fontWeight: 600, mb: 1, display: 'block' }}>
+                      Selected Tools:
+                    </Typography>
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                      {config.tools.map((toolName) => {
+                        const tool = availableTools.find(t => t.name === toolName);
+                        return (
+                          <Chip
+                            key={toolName}
+                            label={toolName}
+                            size="small"
+                            onDelete={() => handleToolToggle(toolName)}
+                            color={tool?.is_handoff ? 'secondary' : tool?.source === 'mcp' ? 'info' : 'default'}
+                            sx={{ 
+                              height: 24, 
+                              fontSize: 11,
+                              '& .MuiChip-label': { px: 1 },
+                            }}
+                          />
+                        );
+                      })}
+                    </Box>
+                  </Paper>
+                )}
+
+                {/* MCP Server Management */}
+                <Accordion
+                  sx={{
+                    '&:before': { display: 'none' },
+                    boxShadow: 'none',
+                    border: '1px solid',
+                    borderColor: '#a5b4fc',
+                    borderRadius: '8px !important',
+                    backgroundColor: '#eef2ff',
+                    '&.Mui-expanded': { margin: 0 },
+                  }}
+                >
+                  <AccordionSummary
+                    expandIcon={<ExpandMoreIcon />}
+                    sx={{
+                      minHeight: 44,
+                      '&.Mui-expanded': { minHeight: 44 },
+                      '& .MuiAccordionSummary-content': { my: 1 },
+                    }}
+                  >
+                    <Stack direction="row" alignItems="center" spacing={1} sx={{ width: '100%' }}>
+                      <LinkIcon sx={{ color: '#4f46e5', fontSize: 18 }} />
+                      <Typography variant="subtitle2" sx={{ fontWeight: 600, color: '#4f46e5' }}>
+                        MCP Servers
+                      </Typography>
                       <Chip
                         size="small"
-                        label={`${tools.filter((t) => config.tools.includes(t.name)).length}/${tools.length}`}
-                        sx={{ ml: 2 }}
+                        label={mcpServers.length}
+                        color="primary"
+                        sx={{ height: 20, fontSize: 11 }}
                       />
-                    </AccordionSummary>
-                    <AccordionDetails>
-                      <Box
-                        sx={{
-                          display: 'grid',
-                          gridTemplateColumns: 'repeat(2, 1fr)',
-                          gap: 1,
-                        }}
-                      >
-                        {tools.map((tool) => (
-                          <Box
-                            key={tool.name}
-                            onClick={() => handleToolToggle(tool.name)}
-                            sx={{
-                              display: 'flex',
-                              alignItems: 'flex-start',
-                              gap: 1,
-                              p: 1,
-                              borderRadius: 1,
-                              border: '1px solid',
-                              borderColor: config.tools.includes(tool.name) ? 'primary.main' : 'divider',
-                              bgcolor: config.tools.includes(tool.name) ? 'primary.50' : 'transparent',
-                              cursor: 'pointer',
-                              '&:hover': { bgcolor: 'action.hover' },
-                              minWidth: 0,
-                            }}
-                          >
-                            <Checkbox
-                              checked={config.tools.includes(tool.name)}
-                              size="small"
-                              sx={{ p: 0, mt: 0.25 }}
-                            />
-                            <Box sx={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
-                              <Stack direction="row" alignItems="center" spacing={0.5} sx={{ flexWrap: 'wrap' }}>
-                                <Typography
-                                  variant="body2"
-                                  sx={{
-                                    fontWeight: 600,
-                                    fontSize: '0.8rem',
-                                    overflow: 'hidden',
-                                    textOverflow: 'ellipsis',
-                                    whiteSpace: 'nowrap',
-                                  }}
-                                >
-                                  {tool.name}
-                                </Typography>
-                                {tool.is_handoff && (
-                                  <Chip label="handoff" size="small" color="secondary" sx={{ height: 16, fontSize: 9 }} />
-                                )}
+                    </Stack>
+                  </AccordionSummary>
+                  <AccordionDetails sx={{ pt: 0, pb: 1.5, backgroundColor: '#fff' }}>
+                    <Stack spacing={1.5}>
+                      <Typography variant="caption" color="text.secondary">
+                        Connect to MCP servers to discover additional tools. Runtime-added servers persist for this session.
+                      </Typography>
+
+                      {/* Connected Servers */}
+                      {mcpServers.length > 0 && (
+                        <Stack spacing={1}>
+                          {mcpServers.map((server) => (
+                            <Paper
+                              key={server.name}
+                              variant="outlined"
+                              sx={{
+                                p: 1,
+                                borderColor: server.status === 'healthy' ? '#86efac' : '#fca5a5',
+                                backgroundColor: server.status === 'healthy' ? '#f0fdf4' : '#fef2f2',
+                              }}
+                            >
+                              <Stack direction="row" alignItems="center" justifyContent="space-between">
+                                <Stack direction="row" alignItems="center" spacing={1}>
+                                  {server.status === 'healthy' ? (
+                                    <LinkIcon sx={{ color: '#22c55e', fontSize: 16 }} />
+                                  ) : (
+                                    <LinkOffIcon sx={{ color: '#ef4444', fontSize: 16 }} />
+                                  )}
+                                  <Box>
+                                    <Typography variant="body2" sx={{ fontWeight: 600, fontFamily: 'monospace' }}>
+                                      {server.name}
+                                    </Typography>
+                                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                                      {server.url} • {server.tools_count} tools
+                                      {server.source === 'environment' && (
+                                        <Chip
+                                          label="env"
+                                          size="small"
+                                          sx={{ ml: 0.5, height: 14, fontSize: 9 }}
+                                        />
+                                      )}
+                                    </Typography>
+                                  </Box>
+                                </Stack>
+                                <Stack direction="row" spacing={0.5}>
+                                  {server.source === 'runtime' && (
+                                    <Tooltip title="Remove server">
+                                      <IconButton
+                                        size="small"
+                                        onClick={() => handleRemoveMcpServer(server.name)}
+                                        disabled={mcpLoading}
+                                      >
+                                        <DeleteIcon sx={{ fontSize: 16, color: '#ef4444' }} />
+                                      </IconButton>
+                                    </Tooltip>
+                                  )}
+                                </Stack>
                               </Stack>
-                              <Typography
-                                variant="caption"
-                                color="text.secondary"
-                                sx={{
-                                  display: '-webkit-box',
-                                  WebkitLineClamp: 2,
-                                  WebkitBoxOrient: 'vertical',
-                                  overflow: 'hidden',
-                                  fontSize: '0.7rem',
-                                  lineHeight: 1.3,
-                                }}
-                              >
-                                {tool.description || 'No description available.'}
-                              </Typography>
-                            </Box>
-                            <Tooltip title="Tool details">
+                              {server.tool_names?.length > 0 && (
+                                <Box sx={{ mt: 1, display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                                  {server.tool_names.slice(0, 5).map((tool) => (
+                                    <Chip
+                                      key={tool}
+                                      label={tool}
+                                      size="small"
+                                      variant="outlined"
+                                      color="info"
+                                      sx={{ height: 18, fontSize: 9, fontFamily: 'monospace' }}
+                                    />
+                                  ))}
+                                  {server.tool_names.length > 5 && (
+                                    <Chip
+                                      label={`+${server.tool_names.length - 5} more`}
+                                      size="small"
+                                      sx={{ height: 18, fontSize: 9 }}
+                                    />
+                                  )}
+                                </Box>
+                              )}
+                            </Paper>
+                          ))}
+                        </Stack>
+                      )}
+
+                      {/* Add Server Button */}
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        startIcon={<AddIcon />}
+                        onClick={() => setShowAddMcpDialog(true)}
+                        sx={{ textTransform: 'none', borderStyle: 'dashed' }}
+                      >
+                        Add MCP Server
+                      </Button>
+                    </Stack>
+                  </AccordionDetails>
+                </Accordion>
+
+                {/* Tools by Category */}
+                {Object.entries(toolsByCategory).map(([category, tools], catIdx) => (
+                  <Accordion 
+                    key={category} 
+                    defaultExpanded={catIdx === 0}
+                    sx={{
+                      '&:before': { display: 'none' },
+                      boxShadow: 'none',
+                      border: '1px solid',
+                      borderColor: 'divider',
+                      borderRadius: '8px !important',
+                      '&.Mui-expanded': { margin: 0 },
+                    }}
+                  >
+                    <AccordionSummary 
+                      expandIcon={<ExpandMoreIcon />}
+                      sx={{ 
+                        minHeight: 44,
+                        '&.Mui-expanded': { minHeight: 44 },
+                        '& .MuiAccordionSummary-content': { my: 1 },
+                      }}
+                    >
+                      <Stack direction="row" alignItems="center" spacing={1} sx={{ width: '100%' }}>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>{category}</Typography>
+                        <Chip
+                          size="small"
+                          label={`${tools.filter((t) => config.tools.includes(t.name)).length}/${tools.length}`}
+                          color={tools.some(t => config.tools.includes(t.name)) ? 'primary' : 'default'}
+                          sx={{ height: 20, fontSize: 11 }}
+                        />
+                      </Stack>
+                    </AccordionSummary>
+                    <AccordionDetails sx={{ pt: 0, pb: 1.5 }}>
+                      <List dense disablePadding>
+                        {tools.map((tool) => (
+                          <ListItem
+                            key={tool.name}
+                            dense
+                            disablePadding
+                            secondaryAction={
                               <IconButton
+                                edge="end"
                                 size="small"
-                                sx={{ p: 0.25, flexShrink: 0 }}
                                 onClick={(e) => {
-                                  e.preventDefault();
                                   e.stopPropagation();
                                   handleOpenToolDetails(tool);
                                 }}
                               >
                                 <InfoOutlinedIcon sx={{ fontSize: 16 }} />
                               </IconButton>
-                            </Tooltip>
-                          </Box>
+                            }
+                            sx={{
+                              py: 0.5,
+                              px: 1,
+                              mb: 0.5,
+                              borderRadius: 1,
+                              border: '1px solid',
+                              borderColor: config.tools.includes(tool.name) ? 'primary.main' : 'transparent',
+                              bgcolor: config.tools.includes(tool.name) ? 'primary.50' : 'transparent',
+                              '&:hover': { bgcolor: 'action.hover' },
+                              cursor: 'pointer',
+                            }}
+                            onClick={() => handleToolToggle(tool.name)}
+                          >
+                            <ListItemIcon sx={{ minWidth: 32 }}>
+                              <Checkbox
+                                checked={config.tools.includes(tool.name)}
+                                size="small"
+                                sx={{ p: 0 }}
+                              />
+                            </ListItemIcon>
+                            <ListItemText
+                              primary={
+                                <Stack direction="row" alignItems="center" spacing={0.5} sx={{ flexWrap: 'wrap' }}>
+                                  <Typography
+                                    variant="body2"
+                                    sx={{
+                                      fontWeight: 500,
+                                      fontSize: '0.8rem',
+                                      fontFamily: 'monospace',
+                                    }}
+                                  >
+                                    {tool.name}
+                                  </Typography>
+                                  {tool.is_handoff && (
+                                    <Chip 
+                                      label="handoff" 
+                                      size="small" 
+                                      color="secondary" 
+                                      sx={{ height: 16, fontSize: 9, ml: 0.5 }} 
+                                    />
+                                  )}
+                                  {tool.source === 'mcp' && (
+                                    <>
+                                      <Chip 
+                                        label={`MCP: ${tool.mcp_server}`} 
+                                        size="small" 
+                                        color="info"
+                                        variant="outlined"
+                                        sx={{ height: 16, fontSize: 9, ml: 0.5 }} 
+                                      />
+                                      {tool.mcp_transport && (
+                                        <Chip
+                                          label={formatMcpTransport(tool.mcp_transport)}
+                                          size="small"
+                                          color="info"
+                                          variant="outlined"
+                                          sx={{ height: 16, fontSize: 9 }}
+                                        />
+                                      )}
+                                    </>
+                                  )}
+                                </Stack>
+                              }
+                              secondary={tool.description || 'No description'}
+                              secondaryTypographyProps={{
+                                sx: {
+                                  fontSize: '0.7rem',
+                                  lineHeight: 1.3,
+                                  display: '-webkit-box',
+                                  WebkitLineClamp: 2,
+                                  WebkitBoxOrient: 'vertical',
+                                  overflow: 'hidden',
+                                  pr: 3,
+                                },
+                              }}
+                            />
+                          </ListItem>
                         ))}
-                      </Box>
+                      </List>
                     </AccordionDetails>
                   </Accordion>
                 ))}
@@ -3126,6 +3621,267 @@ export default function AgentBuilderContent({
         onClose={handleCloseToolDetails}
         tool={selectedTool}
       />
+
+      {/* Add MCP Server Dialog */}
+      <Dialog
+        open={showAddMcpDialog}
+        onClose={() => {
+          setShowAddMcpDialog(false);
+          setMcpTestResult(null);
+          setNewMcpServer({ name: '', url: '', transport: 'streamable-http', timeout: 30, auth_token: '', auth_method: 'none', oauth: { client_id: '', auth_url: '', token_url: '', scope: '' } });
+        }}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <LinkIcon color="primary" />
+          <Box sx={{ flex: 1 }}>
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>
+              Add MCP Server
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Connect to an MCP server to discover and register its tools
+            </Typography>
+          </Box>
+          <IconButton
+            onClick={() => {
+              setShowAddMcpDialog(false);
+              setMcpTestResult(null);
+              setNewMcpServer({ name: '', url: '', transport: 'streamable-http', timeout: 30, auth_token: '', auth_method: 'none', oauth: { client_id: '', auth_url: '', token_url: '', scope: '' } });
+            }}
+          >
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+
+        <DialogContent dividers>
+          <Stack spacing={2.5}>
+            <TextField
+              label="Server Name"
+              value={newMcpServer.name}
+              onChange={(e) => setNewMcpServer((prev) => ({ ...prev, name: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '') }))}
+              fullWidth
+              required
+              placeholder="e.g., knowledge, cardapi"
+              helperText="Unique identifier (lowercase, alphanumeric, hyphens, underscores)"
+              inputProps={{ pattern: '[a-z0-9_-]+' }}
+            />
+
+            <TextField
+              label="Server URL"
+              value={newMcpServer.url}
+              onChange={(e) => setNewMcpServer((prev) => ({ ...prev, url: e.target.value }))}
+              fullWidth
+              required
+              placeholder="http://localhost:8080"
+              helperText="HTTP endpoint of the MCP server"
+            />
+
+            <Stack direction="row" spacing={2}>
+              <TextField
+                select
+                label="Transport"
+                value={newMcpServer.transport}
+                onChange={(e) => setNewMcpServer((prev) => ({ ...prev, transport: e.target.value }))}
+                sx={{ minWidth: 120 }}
+                SelectProps={{ native: true }}
+              >
+                <option value="sse">SSE</option>
+                <option value="http">HTTP</option>
+                <option value="stdio">STDIO</option>
+              </TextField>
+
+              <TextField
+                label="Timeout (s)"
+                type="number"
+                value={newMcpServer.timeout}
+                onChange={(e) => setNewMcpServer((prev) => ({ ...prev, timeout: parseInt(e.target.value) || 30 }))}
+                inputProps={{ min: 1, max: 120 }}
+                sx={{ width: 100 }}
+              />
+            </Stack>
+
+            {/* Authentication Section */}
+            <Box>
+              <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+                Authentication
+              </Typography>
+              <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
+                {['none', 'token', 'oauth'].map((method) => (
+                  <Chip
+                    key={method}
+                    label={method === 'none' ? 'None' : method === 'token' ? 'Bearer Token' : 'OAuth 2.0'}
+                    onClick={() => setNewMcpServer((prev) => ({ ...prev, auth_method: method }))}
+                    color={newMcpServer.auth_method === method ? 'primary' : 'default'}
+                    variant={newMcpServer.auth_method === method ? 'filled' : 'outlined'}
+                    sx={{ cursor: 'pointer' }}
+                  />
+                ))}
+              </Stack>
+
+              {newMcpServer.auth_method === 'token' && (
+                <TextField
+                  label="Bearer Token"
+                  value={newMcpServer.auth_token}
+                  onChange={(e) => setNewMcpServer((prev) => ({ ...prev, auth_token: e.target.value }))}
+                  fullWidth
+                  type="password"
+                  placeholder="Enter your access token"
+                  helperText="Token will be sent as 'Authorization: Bearer <token>' header"
+                />
+              )}
+
+              {newMcpServer.auth_method === 'oauth' && (
+                <Stack spacing={2}>
+                  <TextField
+                    label="Client ID"
+                    value={newMcpServer.oauth.client_id}
+                    onChange={(e) => setNewMcpServer((prev) => ({
+                      ...prev,
+                      oauth: { ...prev.oauth, client_id: e.target.value }
+                    }))}
+                    fullWidth
+                    required
+                    placeholder="OAuth application client ID"
+                  />
+                  <TextField
+                    label="Authorization URL"
+                    value={newMcpServer.oauth.auth_url}
+                    onChange={(e) => setNewMcpServer((prev) => ({
+                      ...prev,
+                      oauth: { ...prev.oauth, auth_url: e.target.value }
+                    }))}
+                    fullWidth
+                    required
+                    placeholder="https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize"
+                  />
+                  <TextField
+                    label="Token URL"
+                    value={newMcpServer.oauth.token_url}
+                    onChange={(e) => setNewMcpServer((prev) => ({
+                      ...prev,
+                      oauth: { ...prev.oauth, token_url: e.target.value }
+                    }))}
+                    fullWidth
+                    required
+                    placeholder="https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
+                  />
+                  <TextField
+                    label="Scopes (Optional)"
+                    value={newMcpServer.oauth.scope}
+                    onChange={(e) => setNewMcpServer((prev) => ({
+                      ...prev,
+                      oauth: { ...prev.oauth, scope: e.target.value }
+                    }))}
+                    fullWidth
+                    placeholder="api://example/.default openid profile"
+                    helperText="Space-separated OAuth scopes"
+                  />
+                  <Button
+                    variant="outlined"
+                    color="primary"
+                    onClick={handleStartOAuth}
+                    disabled={mcpLoading || !newMcpServer.oauth.client_id || !newMcpServer.oauth.auth_url || !newMcpServer.oauth.token_url}
+                    startIcon={oauthPending ? <CircularProgress size={16} /> : <LinkIcon />}
+                    fullWidth
+                  >
+                    {oauthPending ? 'Waiting for OAuth...' : 'Connect with OAuth'}
+                  </Button>
+                  <Typography variant="caption" color="text.secondary">
+                    Opens a popup window for OAuth authentication. After authorizing, the token will be used automatically.
+                  </Typography>
+                </Stack>
+              )}
+            </Box>
+
+            {/* Test Results */}
+            {mcpTestResult && (
+              <Paper
+                variant="outlined"
+                sx={{
+                  p: 2,
+                  borderColor: mcpTestResult.connected ? '#86efac' : '#fca5a5',
+                  backgroundColor: mcpTestResult.connected ? '#f0fdf4' : '#fef2f2',
+                }}
+              >
+                <Stack spacing={1}>
+                  <Stack direction="row" alignItems="center" spacing={1}>
+                    {mcpTestResult.connected ? (
+                      <CheckIcon sx={{ color: '#22c55e' }} />
+                    ) : (
+                      <WarningAmberIcon sx={{ color: '#ef4444' }} />
+                    )}
+                    <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                      {mcpTestResult.connected ? 'Connection Successful' : 'Connection Failed'}
+                    </Typography>
+                  </Stack>
+
+                  {mcpTestResult.connected && (
+                    <>
+                      <Typography variant="body2" color="text.secondary">
+                        Discovered {mcpTestResult.tools_count} tool(s) in {mcpTestResult.response_time_ms}ms
+                      </Typography>
+                      {mcpTestResult.tools?.length > 0 && (
+                        <Box sx={{ mt: 1 }}>
+                          <Typography variant="caption" sx={{ fontWeight: 600, display: 'block', mb: 0.5 }}>
+                            Available Tools:
+                          </Typography>
+                          <Stack direction="row" flexWrap="wrap" gap={0.5}>
+                            {mcpTestResult.tools.map((tool) => (
+                              <Tooltip key={tool.prefixed_name} title={tool.description}>
+                                <Chip
+                                  label={tool.prefixed_name}
+                                  size="small"
+                                  color="info"
+                                  sx={{ fontFamily: 'monospace', fontSize: 11 }}
+                                />
+                              </Tooltip>
+                            ))}
+                          </Stack>
+                        </Box>
+                      )}
+                    </>
+                  )}
+
+                  {mcpTestResult.error && (
+                    <Typography variant="body2" color="error">
+                      {mcpTestResult.error}
+                    </Typography>
+                  )}
+                </Stack>
+              </Paper>
+            )}
+          </Stack>
+        </DialogContent>
+
+        <DialogActions sx={{ p: 2 }}>
+          <Button
+            onClick={() => {
+              setShowAddMcpDialog(false);
+              setMcpTestResult(null);
+              setNewMcpServer({ name: '', url: '', transport: 'streamable-http', timeout: 30, auth_token: '', auth_method: 'none', oauth: { client_id: '', auth_url: '', token_url: '', scope: '' } });
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="outlined"
+            onClick={handleTestMcpConnection}
+            disabled={mcpLoading || !newMcpServer.name || !newMcpServer.url}
+            startIcon={mcpLoading ? <CircularProgress size={16} /> : <LinkIcon />}
+          >
+            Test Connection
+          </Button>
+          <Button
+            variant="contained"
+            onClick={handleAddMcpServer}
+            disabled={mcpLoading || !newMcpServer.name || !newMcpServer.url}
+            startIcon={mcpLoading ? <CircularProgress size={16} color="inherit" /> : <AddIcon />}
+          >
+            Add Server
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Footer */}
       <Divider />

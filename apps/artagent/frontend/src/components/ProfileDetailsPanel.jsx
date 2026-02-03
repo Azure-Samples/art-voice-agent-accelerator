@@ -769,6 +769,26 @@ const ProfileDetailsPanel = ({ profile, sessionId, open, onClose }) => {
                             </Typography>
                           </Box>
                         )}
+
+                        {txn.status && (
+                          <Typography sx={{ 
+                            color: txn.status === 'declined' ? '#dc2626' : '#64748b', 
+                            fontSize: '10px', 
+                            fontWeight: 600,
+                            mt: 0.5 
+                          }}>
+                            Status: {toTitleCase(txn.status)}
+                            {txn.status === 'declined' && txn.decline_code && (
+                              <Typography sx={{ 
+                              color: '#dc2626', 
+                              fontSize: '10px', 
+                              fontWeight: 600,
+                              }}>
+                              Reason: {txn.decline_code}
+                              </Typography>
+                            )}
+                          </Typography>
+                        )}
                         
                         {txn.notes && (
                           <Typography sx={{ color: '#64748b', fontSize: '9px', mt: 0.5, fontStyle: 'italic' }}>

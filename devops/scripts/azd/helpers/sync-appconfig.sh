@@ -109,13 +109,30 @@ set_kv() {
     if error_output=$(az appconfig kv set "${cmd_args[@]}" 2>&1); then
         return 0
     else
-        warn "Failed to set: $key"
-        # Show the error message (first line only, cleaned up)
+        fail "Failed to set key: $key"
+        log "  └─ Value attempted: ${value:0:100}..."
+        # Show the full error message for debugging
         local error_msg
-        error_msg=$(echo "$error_output" | head -1 | sed 's/^ERROR: //')
-        [[ -n "$error_msg" ]] && log "  └─ $error_msg"
+        error_msg=$(echo "$error_output" | head -3)
+        [[ -n "$error_msg" ]] && log "  └─ Error: $error_msg"
         return 1
     fi
+}
+
+# Helper to get existing App Config value (for preserving values not in azd env)
+get_appconfig_value() {
+    local key="$1"
+    local label_arg=""
+    [[ -n "$LABEL" ]] && label_arg="--label $LABEL"
+    
+    # shellcheck disable=SC2086
+    az appconfig kv show \
+        --endpoint "$ENDPOINT" \
+        --key "$key" \
+        $label_arg \
+        --auth-mode login \
+        --query value \
+        --output tsv 2>/dev/null || echo ""
 }
 
 # Helper to add Key Vault reference
@@ -173,8 +190,10 @@ set_kv "azure/redis/hostname" "$(get_azd_value REDIS_HOSTNAME)" && ((++count)) |
 set_kv "azure/redis/port" "$(get_azd_value REDIS_PORT)" && ((++count)) || ((++errors))
 
 # Cosmos DB
+# Using ++count to overcome an occasional bug in count and errors when the value is zero
 set_kv "azure/cosmos/database-name" "$(get_azd_value AZURE_COSMOS_DATABASE_NAME)" && ((++count)) || ((++errors))
 set_kv "azure/cosmos/collection-name" "$(get_azd_value AZURE_COSMOS_COLLECTION_NAME)" && ((++count)) || ((++errors))
+# Cosmos Entra connection string (Key Vault reference with OIDC auth for managed identity)
 set_kv_ref "azure/cosmos/connection-string" "cosmos-entra-connection-string" && ((++count)) || ((++errors))
 
 # Storage
@@ -204,17 +223,62 @@ if [[ -n "$ai_foundry_project_id" ]]; then
     fi
 fi
 
-# Application Services
-cardapi_url=$(get_azd_value CARDAPI_BACKEND_URL)
-if [[ -n "$cardapi_url" ]]; then
-    set_kv "app/cardapi/url" "$cardapi_url" && ((++count)) || ((++errors))
+# CardAPI MCP server endpoint (self-contained, direct Cosmos DB access)
+# Priority: 1. Environment variable override, 2. azd env value, 3. Azure CLI query, 4. Existing App Config value
+cardapi_url=""
+
+# Check for environment variable override (from GitHub Actions or local)
+if [[ -n "${MCP_SERVER_CARDAPI_URL:-}" ]]; then
+    cardapi_url="$MCP_SERVER_CARDAPI_URL"
+    info "Using MCP_SERVER_CARDAPI_URL from environment: $cardapi_url"
+else
+    # Try azd env value (from Terraform outputs)
+    cardapi_url=$(get_azd_value CARDAPI_CONTAINER_APP_URL)
+    if [[ -n "$cardapi_url" ]]; then
+        info "Using CARDAPI_CONTAINER_APP_URL from azd env: $cardapi_url"
+    fi
 fi
 
-# Application Services
-# CardAPI MCP server endpoint
-cardapi_url=$(get_azd_value CARDAPI_CONTAINER_APP_URL)
+# If still empty, query Azure directly for the Container App FQDN
+if [[ -z "$cardapi_url" ]]; then
+    resource_group=$(get_azd_value AZURE_RESOURCE_GROUP)
+    if [[ -n "$resource_group" ]]; then
+        # Find cardapi container app by name pattern
+        cardapi_fqdn=$(az containerapp list \
+            --resource-group "$resource_group" \
+            --query "[?contains(name, 'cardapi')].properties.configuration.ingress.fqdn" \
+            --output tsv 2>/dev/null | head -1 | tr -d '\n\r' || echo "")
+        if [[ -n "$cardapi_fqdn" ]]; then
+            cardapi_url="https://${cardapi_fqdn}"
+            info "Discovered CardAPI MCP URL from Azure: $cardapi_url"
+        fi
+    fi
+fi
+
+# If still empty, preserve existing App Config value
+if [[ -z "$cardapi_url" ]]; then
+    existing_url=$(get_appconfig_value "app/mcp/servers/cardapi/url")
+    if [[ -n "$existing_url" ]]; then
+        cardapi_url="$existing_url"
+        info "Preserving existing app/mcp/servers/cardapi/url: $cardapi_url"
+    fi
+fi
+
 if [[ -n "$cardapi_url" ]]; then
-    set_kv "app/cardapi/mcp-url" "$cardapi_url" && ((++count)) || ((++errors))
+    # Backend expects this key to load MCP_SERVER_CARDAPI_URL
+    set_kv "app/mcp/servers/cardapi/url" "$cardapi_url" && ((++count)) || ((++errors))
+else
+    warn "CardAPI MCP URL not configured (set MCP_SERVER_CARDAPI_URL or deploy cardapi service)"
+fi
+
+# CardAPI MCP auth settings (for EasyAuth-protected deployments)
+cardapi_auth_enabled=$(get_azd_value CARDAPI_MCP_AUTH_ENABLED)
+cardapi_app_id=$(get_azd_value CARDAPI_MCP_APP_ID)
+if [[ -n "$cardapi_auth_enabled" ]]; then
+    set_kv "app/mcp/servers/cardapi/auth-enabled" "$cardapi_auth_enabled" && ((++count)) || ((++errors))
+fi
+if [[ -n "$cardapi_app_id" ]]; then
+    set_kv "app/mcp/servers/cardapi/app-id" "$cardapi_app_id" && ((++count)) || ((++errors))
 fi
 
 # Environment metadata

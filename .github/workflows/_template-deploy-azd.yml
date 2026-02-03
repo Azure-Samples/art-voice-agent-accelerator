@@ -99,6 +99,8 @@ jobs:
       appconfig_label_existing: ${{ vars.AZURE_APPCONFIG_LABEL }}
       container_registry_endpoint_existing: ${{ vars.AZURE_CONTAINER_REGISTRY_ENDPOINT }}
       resource_group_existing: ${{ vars.AZURE_RESOURCE_GROUP }}
+      # MCP Server configuration
+      mcp_server_cardapi_url_existing: ${{ vars.MCP_SERVER_CARDAPI_URL }}
     
     env:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -320,6 +322,8 @@ jobs:
       EXISTING_CONTAINER_REGISTRY_ENDPOINT: ${{ needs.setup.outputs.container_registry_endpoint_existing }}
       # Use existing resource group from environment variables if available (deploy-only runs)
       EXISTING_AZURE_RESOURCE_GROUP: ${{ needs.setup.outputs.resource_group_existing }}
+      # MCP Server configuration (optional override)
+      MCP_SERVER_CARDAPI_URL: ${{ needs.setup.outputs.mcp_server_cardapi_url_existing }}
     
     steps:
       - name: 🛒 Checkout
@@ -393,6 +397,13 @@ jobs:
             echo "📌 Using existing AZURE_RESOURCE_GROUP from environment: $EXISTING_AZURE_RESOURCE_GROUP"
             azd env set AZURE_RESOURCE_GROUP "$EXISTING_AZURE_RESOURCE_GROUP"
             echo "AZURE_RESOURCE_GROUP=$EXISTING_AZURE_RESOURCE_GROUP" >> "$GITHUB_ENV"
+          fi
+
+          # Use MCP server URL from GitHub environment if available (for external MCP servers)
+          if [ -n "$MCP_SERVER_CARDAPI_URL" ]; then
+            echo "📌 Using MCP_SERVER_CARDAPI_URL from environment: $MCP_SERVER_CARDAPI_URL"
+            # Export for sync-appconfig.sh to use during postprovision
+            echo "MCP_SERVER_CARDAPI_URL=$MCP_SERVER_CARDAPI_URL" >> "$GITHUB_ENV"
           fi
 
       - name: 🔧 Setup Terraform Parameters

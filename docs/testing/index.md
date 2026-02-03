@@ -128,12 +128,14 @@ make run_load_test_acs_media
     Run evaluations directly on your machine:
 
     ```bash
-    # Via pytest (recommended)
-    pytest tests/evaluation/test_scenarios.py -v
+    # Interactive CLI (recommended for exploration)
+    make eval
 
-    # Via CLI
-    python -m tests.evaluation.cli run \
-        --input tests/evaluation/scenarios/session_based/banking_multi_agent.yaml
+    # Single scenario
+    make eval-run SCENARIO=tests/evaluation/scenarios/session_based/banking_multi_agent.yaml
+
+    # Via pytest
+    pytest tests/evaluation/test_scenarios.py -v
     ```
 
 === ":material-cog: CI/CD Pipeline"
@@ -152,9 +154,9 @@ make run_load_test_acs_media
     ```bash
     pytest tests/evaluation/test_scenarios.py --submit-to-foundry
 
-    # Or via CLI
-    python -m tests.evaluation.cli submit \
-        --input runs/my_run/foundry_eval.jsonl \
+    # Or via Python directly
+    python tests/evaluation/foundry_exporter.py \
+        --data runs/my_run/foundry_eval.jsonl \
         --endpoint "$AZURE_AI_FOUNDRY_PROJECT_ENDPOINT"
     ```
 

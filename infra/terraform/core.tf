@@ -5,7 +5,9 @@
 resource "azurerm_resource_group" "main" {
   name     = local.resource_names.resource_group
   location = var.location
-  tags     = local.tags
+  tags = merge(local.tags, {
+    "git-commit" = data.external.git_commit.result["commit"]
+  })
 }
 
 # ============================================================================

@@ -1,6 +1,6 @@
 # :material-rocket-launch: Quickstart
 
-!!! success "From Zero to Running Voice Agent in 15 Minutes"
+!!! success "From Zero to Running Voice Agent in ~25 Minutes"
     This guide gets you from clone to a working voice agent as fast as possible.
 
 ---
@@ -20,7 +20,7 @@ flowchart LR
 | Step | Time | What Happens |
 |------|------|--------------|
 | Clone & Login | 2 min | Get the code, authenticate |
-| Deploy | 12 min | Azure resources + app deployment |
+| Deploy | ~25 min | 15-20 min infra + 5-10 min app container build/push |
 | Test | 1 min | Open browser, start talking |
 
 ---

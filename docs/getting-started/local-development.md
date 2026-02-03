@@ -3,7 +3,7 @@
 !!! info "Prerequisite: Azure Resources"
     This guide assumes you've already deployed infrastructure via [Quickstart](quickstart.md).
     
-    If you haven't deployed yet, run `azd up` first—it only takes 15 minutes.
+    If you haven't deployed yet, run `azd up` first—plan for ~25 minutes total (15-20 min infra + 5-10 min app container build/push).
 
 ---
 

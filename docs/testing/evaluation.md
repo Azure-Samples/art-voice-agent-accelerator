@@ -46,42 +46,69 @@ Simplified evaluation framework for testing voice agent scenarios.
 ## Quick Start
 
 ```bash
-# Run a single scenario
-python -m tests.evaluation.cli run --input tests/evaluation/scenarios/smoke/basic_identity_verification.yaml
+# Interactive evaluation menu (recommended for exploration)
+make eval
 
-# Run an A/B comparison (auto-detected from YAML)
-python -m tests.evaluation.cli run --input tests/evaluation/scenarios/ab_tests/fraud_detection_comparison.yaml
+# Run a single scenario with streaming output
+make eval-run SCENARIO=tests/evaluation/scenarios/smoke/basic_identity_verification.yaml
 
-# Submit results to Azure AI Foundry
-python -m tests.evaluation.cli submit --data runs/my_scenario/foundry_eval.jsonl
+# Or use Python directly
+python tests/evaluation/run-eval-stream.py run --input tests/evaluation/scenarios/smoke/basic_identity_verification.yaml
+
+# Run all session-based scenarios
+make eval-session
+
+# Run smoke tests (quick validation)
+make eval-smoke
+
+# Run A/B comparisons
+make eval-ab
 ```
 
 ## CLI Reference
 
-### `run` - Execute Scenarios
+### Interactive CLI
 
-Runs a scenario or A/B comparison. The type is auto-detected from the YAML structure.
+Launch the interactive evaluation menu for browsing and running scenarios:
 
 ```bash
-python -m tests.evaluation.cli run --input <yaml_file> [--output <directory>]
+make eval
+# Or directly:
+python tests/evaluation/eval_cli.py
+```
+
+Features:
+- Browse scenarios by category (smoke, session-based, A/B tests)
+- View scenario details before running
+- Quick-run previously executed scenarios
+- View recent evaluation results
+
+### `run` - Execute Scenarios
+
+Runs a scenario or A/B comparison with streaming per-turn output.
+
+```bash
+python tests/evaluation/run-eval-stream.py run --input <yaml_file>
+
+# Or via Makefile:
+make eval-run SCENARIO=<yaml_file>
 ```
 
 | Option | Description |
 |--------|-------------|
 | `--input`, `-i` | Path to scenario YAML file (required) |
-| `--output`, `-o` | Output directory (default: `runs/`) |
 
 **Examples:**
 
 ```bash
 # Run smoke test
-python -m tests.evaluation.cli run -i tests/evaluation/scenarios/smoke/basic_identity_verification.yaml
+make eval-run SCENARIO=tests/evaluation/scenarios/smoke/basic_identity_verification.yaml
 
-# Run with custom output directory
-python -m tests.evaluation.cli run -i tests/evaluation/scenarios/session_based/banking_multi_agent.yaml -o runs/my_test
+# Run session-based scenario
+python tests/evaluation/run-eval-stream.py run -i tests/evaluation/scenarios/session_based/banking_multi_agent.yaml
 
 # Run A/B comparison
-python -m tests.evaluation.cli run -i tests/evaluation/scenarios/ab_tests/fraud_detection_comparison.yaml
+make eval-run SCENARIO=tests/evaluation/scenarios/ab_tests/fraud_detection_comparison.yaml
 ```
 
 ### `submit` - Upload to Azure AI Foundry
@@ -89,7 +116,7 @@ python -m tests.evaluation.cli run -i tests/evaluation/scenarios/ab_tests/fraud_
 Submits evaluation results to Azure AI Foundry for cloud-based evaluation.
 
 ```bash
-python -m tests.evaluation.cli submit --data <jsonl_file_or_directory> [options]
+python tests/evaluation/foundry_exporter.py --data <jsonl_file_or_directory> [options]
 ```
 
 | Option | Description |
@@ -104,7 +131,7 @@ python -m tests.evaluation.cli submit --data <jsonl_file_or_directory> [options]
 **Example:**
 
 ```bash
-python -m tests.evaluation.cli submit \
+python tests/evaluation/foundry_exporter.py \
   --data runs/smoke_basic_identity_1737849600/foundry_eval.jsonl \
   --endpoint "https://your-project.api.azureml.ms"
 ```
@@ -391,7 +418,7 @@ foundry_export:
 Then submit:
 
 ```bash
-python -m tests.evaluation.cli submit \
+python tests/evaluation/foundry_exporter.py \
   --data runs/my_scenario/ \
   --endpoint "https://your-project.api.azureml.ms"
 ```

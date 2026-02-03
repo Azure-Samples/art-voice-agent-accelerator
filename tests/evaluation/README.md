@@ -4,10 +4,32 @@ Simplified evaluation framework for voice agent orchestration.
 
 ## Quick Start
 
-### CLI Commands
+### Makefile Targets (Recommended)
 
 ```bash
+# Interactive CLI - browse and run scenarios
+make eval
+
+# Run a single scenario with streaming output
+make eval-run SCENARIO=tests/evaluation/scenarios/session_based/banking_multi_agent.yaml
+
+# Run all scenarios by category
+make eval-smoke       # Quick validation tests
+make eval-session     # Multi-turn, multi-agent flows
+make eval-ab          # A/B model comparisons
+```
+
+### Python CLI (Direct)
+
+```bash
+# Interactive menu
+python tests/evaluation/eval_cli.py
+
 # Run a scenario (auto-detects single vs A/B comparison)
+python tests/evaluation/run-eval-stream.py run \
+    --input tests/evaluation/scenarios/session_based/banking_multi_agent.yaml
+
+# Module-based CLI (lower-level)
 python -m tests.evaluation.cli run \
     --input tests/evaluation/scenarios/session_based/banking_multi_agent.yaml
 

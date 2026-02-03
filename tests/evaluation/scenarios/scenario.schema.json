@@ -23,6 +23,7 @@
           "type": "string",
           "description": "Human-readable description of the scenario"
         },
+        "demo_user": { "$ref": "#/definitions/DemoUser" },
         "session_config": { "$ref": "#/definitions/SessionConfig" },
         "agent_overrides": {
           "type": "array",
@@ -273,6 +274,68 @@
         "max_latency_ms": {
           "type": "integer",
           "description": "Maximum E2E latency in milliseconds"
+        }
+      }
+    },
+    "DemoUser": {
+      "type": "object",
+      "description": "Demo user configuration for realistic tool testing",
+      "required": ["full_name", "email"],
+      "additionalProperties": false,
+      "properties": {
+        "full_name": {
+          "type": "string",
+          "description": "User's full name (e.g., 'Sarah Johnson')"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "User's email address"
+        },
+        "phone_number": {
+          "type": "string",
+          "pattern": "^\\+\\d{10,15}$",
+          "description": "Phone number in E.164 format (e.g., +18885551234)"
+        },
+        "scenario": {
+          "type": "string",
+          "enum": ["banking", "insurance"],
+          "default": "banking",
+          "description": "Demo scenario type"
+        },
+        "seed": {
+          "type": "integer",
+          "description": "Random seed for reproducible profiles"
+        },
+        "persist": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether to persist demo user to database"
+        },
+        "insurance_role": {
+          "type": "string",
+          "enum": ["policyholder", "cc_rep"],
+          "description": "For insurance: policyholder or claimant carrier rep"
+        },
+        "insurance_company_name": {
+          "type": "string",
+          "description": "For insurance: company name if cc_rep role"
+        },
+        "test_scenario": {
+          "type": "string",
+          "enum": [
+            "golden_path",
+            "demand_under_review",
+            "demand_paid",
+            "no_demand",
+            "coverage_denied",
+            "pending_assignment",
+            "liability_denied",
+            "cvq_open",
+            "demand_exceeds_limits",
+            "random"
+          ],
+          "description": "For insurance: specific test scenario"
         }
       }
     },

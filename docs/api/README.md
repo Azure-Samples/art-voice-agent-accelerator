@@ -21,10 +21,17 @@ The V1 API provides REST and WebSocket endpoints organized by domain:
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/v1/health` | GET | Basic liveness check for load balancers |
+| `/api/v1/ready` | GET | Quick readiness check (deferred tasks, warmup, MCP) |
 | `/api/v1/readiness` | GET | Comprehensive dependency health validation |
+| `/api/v1/pools` | GET | Resource pool metrics (TTS/STT warmable pools) |
+| `/api/v1/appconfig` | GET | Azure App Configuration provider status |
+| `/api/v1/appconfig/refresh` | POST | Force refresh App Configuration cache |
 | `/api/v1/agents` | GET | List loaded agents with configuration |
 | `/api/v1/agents/{name}` | GET | Get specific agent details |
 | `/api/v1/agents/{name}` | PUT | Update agent runtime configuration |
+
+!!! info "Startup Behavior"
+    The `/health` endpoint returns 200 as soon as the server is running. Use `/ready` to check if deferred startup tasks (MCP, warmup) have completed. For Kubernetes, use `/health` for liveness probes and optionally `/ready` for readiness probes.
 
 ### Call Management
 
@@ -82,11 +89,27 @@ The V1 API provides REST and WebSocket endpoints organized by domain:
 | `/api/v1/demo-env/temporary-user` | POST | Create synthetic demo user profile |
 | `/api/v1/demo-env/temporary-user` | GET | Lookup demo profile by email |
 
-### TTS Health
+### MCP Management
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/v1/tts/dedicated/health` | GET | TTS pool health status |
+| `/api/v1/mcp/servers` | GET | List MCP servers with status and tools |
+| `/api/v1/mcp/servers` | POST | Add and register a new MCP server |
+| `/api/v1/mcp/servers/test` | POST | Test connection without registering |
+| `/api/v1/mcp/servers/{name}` | DELETE | Remove server and unregister tools |
+| `/api/v1/mcp/tools` | GET | List all registered MCP tools |
+| `/api/v1/mcp/oauth/start` | POST | Initiate OAuth 2.0 flow |
+| `/api/v1/mcp/oauth/callback` | POST | Complete OAuth 2.0 flow |
+| `/api/v1/mcp/oauth/status/{name}` | GET | Check OAuth token status |
+
+**📖 [MCP API Reference](mcp-api.md)** - Complete MCP endpoint documentation
+
+### Resource Pools
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/pools` | GET | Combined TTS/STT pool health and metrics |
+| `/api/v1/tts/dedicated/health` | GET | TTS pool health status (legacy) |
 | `/api/v1/tts/dedicated/metrics` | GET | TTS pool performance metrics |
 | `/api/v1/tts/dedicated/status` | GET | Ultra-fast status for load balancers |
 

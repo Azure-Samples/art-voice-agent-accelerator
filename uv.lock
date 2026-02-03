@@ -183,7 +183,7 @@ wheels = [
 
 [[package]]
 name = "art-voice-agent-accelerator"
-version = "2.0.0b0"
+version = "2.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
@@ -200,12 +200,10 @@ dependencies = [
     { name = "azure-communication-sms" },
     { name = "azure-core" },
     { name = "azure-cosmos" },
-    { name = "azure-eventgrid" },
     { name = "azure-identity" },
     { name = "azure-keyvault-secrets" },
     { name = "azure-monitor-opentelemetry" },
     { name = "azure-storage-blob" },
-    { name = "backoff" },
     { name = "colorama" },
     { name = "fastapi" },
     { name = "httpx" },
@@ -230,16 +228,12 @@ dependencies = [
     { name = "python-json-logger" },
     { name = "python-multipart" },
     { name = "pyyaml" },
-    { name = "pyyaml-include" },
-    { name = "rapidfuzz" },
     { name = "redis" },
     { name = "redis-entraid" },
     { name = "starlette" },
-    { name = "tenacity" },
     { name = "typing-extensions" },
     { name = "urllib3" },
     { name = "uvicorn", extra = ["standard"] },
-    { name = "websocket-client" },
     { name = "websockets" },
 ]
 
@@ -251,6 +245,8 @@ audio = [
 dev = [
     { name = "anyio" },
     { name = "azure-ai-evaluation" },
+    { name = "azure-eventgrid" },
+    { name = "backoff" },
     { name = "bandit" },
     { name = "black", extra = ["jupyter"] },
     { name = "flake8" },
@@ -262,13 +258,19 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
+    { name = "pyyaml-include" },
+    { name = "rapidfuzz" },
     { name = "ruff" },
+    { name = "tenacity" },
     { name = "types-pyyaml" },
     { name = "types-requests" },
+    { name = "websocket-client" },
 ]
 dev-all = [
     { name = "anyio" },
     { name = "azure-ai-evaluation" },
+    { name = "azure-eventgrid" },
+    { name = "backoff" },
     { name = "bandit" },
     { name = "black", extra = ["jupyter"] },
     { name = "flake8" },
@@ -281,10 +283,14 @@ dev-all = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
+    { name = "pyyaml-include" },
+    { name = "rapidfuzz" },
     { name = "ruff" },
     { name = "sounddevice" },
+    { name = "tenacity" },
     { name = "types-pyyaml" },
     { name = "types-requests" },
+    { name = "websocket-client" },
 ]
 docs = [
     { name = "mkdocs" },
@@ -324,12 +330,14 @@ requires-dist = [
     { name = "azure-communication-sms" },
     { name = "azure-core", specifier = ">=1.38.0" },
     { name = "azure-cosmos", specifier = ">=4.5.0" },
-    { name = "azure-eventgrid", specifier = ">=4.10.0" },
+    { name = "azure-eventgrid", marker = "extra == 'dev'", specifier = ">=4.10.0" },
+    { name = "azure-eventgrid", marker = "extra == 'dev-all'", specifier = ">=4.10.0" },
     { name = "azure-identity", specifier = ">=1.15.0" },
     { name = "azure-keyvault-secrets", specifier = ">=4.7.0" },
     { name = "azure-monitor-opentelemetry", specifier = ">=1.6.11" },
     { name = "azure-storage-blob", specifier = ">=12.19.0" },
-    { name = "backoff", specifier = ">=2.0.0" },
+    { name = "backoff", marker = "extra == 'dev'", specifier = ">=2.0.0" },
+    { name = "backoff", marker = "extra == 'dev-all'", specifier = ">=2.0.0" },
     { name = "bandit", marker = "extra == 'dev'" },
     { name = "bandit", marker = "extra == 'dev-all'" },
     { name = "black", extras = ["jupyter"], marker = "extra == 'dev'", specifier = "==25.1.0" },
@@ -386,8 +394,10 @@ requires-dist = [
     { name = "python-json-logger", specifier = ">=2.0.0" },
     { name = "python-multipart", specifier = ">=0.0.6" },
     { name = "pyyaml", specifier = ">=6.0.0" },
-    { name = "pyyaml-include", specifier = ">=1.3.0" },
-    { name = "rapidfuzz", specifier = ">=3.13.0" },
+    { name = "pyyaml-include", marker = "extra == 'dev'", specifier = ">=1.3.0" },
+    { name = "pyyaml-include", marker = "extra == 'dev-all'", specifier = ">=1.3.0" },
+    { name = "rapidfuzz", marker = "extra == 'dev'", specifier = ">=3.13.0" },
+    { name = "rapidfuzz", marker = "extra == 'dev-all'", specifier = ">=3.13.0" },
     { name = "redis", specifier = ">=5.0.0" },
     { name = "redis-entraid", specifier = ">=1.0.0" },
     { name = "ruff", marker = "extra == 'dev'" },
@@ -395,7 +405,8 @@ requires-dist = [
     { name = "sounddevice", marker = "extra == 'audio'", specifier = ">=0.4.6" },
     { name = "sounddevice", marker = "extra == 'dev-all'", specifier = ">=0.4.6" },
     { name = "starlette", specifier = ">=0.27.0" },
-    { name = "tenacity", specifier = ">=8.5.0" },
+    { name = "tenacity", marker = "extra == 'dev'", specifier = ">=8.5.0" },
+    { name = "tenacity", marker = "extra == 'dev-all'", specifier = ">=8.5.0" },
     { name = "types-pyyaml", marker = "extra == 'dev'" },
     { name = "types-pyyaml", marker = "extra == 'dev-all'" },
     { name = "types-requests", marker = "extra == 'dev'" },
@@ -403,7 +414,8 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.8.0" },
     { name = "urllib3", specifier = ">=2.6.3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.24.0" },
-    { name = "websocket-client", specifier = ">=1.6.0" },
+    { name = "websocket-client", marker = "extra == 'dev'", specifier = ">=1.6.0" },
+    { name = "websocket-client", marker = "extra == 'dev-all'", specifier = ">=1.6.0" },
     { name = "websockets", specifier = ">=12.0" },
 ]
 provides-extras = ["dev", "audio", "dev-all", "docs"]
