@@ -143,13 +143,13 @@ def create_demo_user_sync(
             response_data = {
                 "entry_id": f"demo-entry-{rng.randint(100000, 999999)}",
                 "expires_at": expires_at.isoformat(),
-                "profile": profile.model_dump(),
+                "profile": profile.model_dump(mode='json'),
                 "transactions": transactions,
-                "interaction_plan": _build_interaction_plan(payload, rng).model_dump(),
+                "interaction_plan": _build_interaction_plan(payload, rng).model_dump(mode='json'),
                 "session_id": session_id,
                 "scenario": "insurance",
-                "policies": [p.model_dump() for p in policies],
-                "claims": [c.model_dump() for c in claims],
+                "policies": [p.model_dump(mode='json') for p in policies],
+                "claims": [c.model_dump(mode='json') for c in claims],
             }
         else:
             # Banking scenario
@@ -165,9 +165,9 @@ def create_demo_user_sync(
             response_data = {
                 "entry_id": f"demo-entry-{rng.randint(100000, 999999)}",
                 "expires_at": expires_at.isoformat(),
-                "profile": profile.model_dump(),
-                "transactions": [t.model_dump() for t in transactions],
-                "interaction_plan": _build_interaction_plan(payload, rng).model_dump(),
+                "profile": profile.model_dump(mode='json'),
+                "transactions": [t.model_dump(mode='json') for t in transactions],
+                "interaction_plan": _build_interaction_plan(payload, rng).model_dump(mode='json'),
                 "session_id": session_id,
                 "scenario": "banking",
                 "policies": None,

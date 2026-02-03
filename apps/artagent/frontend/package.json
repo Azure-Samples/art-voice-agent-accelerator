@@ -16,26 +16,26 @@
     "@emotion/styled": "^11.14.1",
     "@mui/icons-material": "^7.3.4",
     "@mui/material": "^7.3.4",
-    "@vitejs/plugin-react": "^4.5.2",
-    "dotenv": "^16.5.0",
-    "js-yaml": "^4.1.1",
-    "lucide-react": "^0.501.0",
     "microsoft-cognitiveservices-speech-sdk": "^1.43.1",
-    "prop-types": "^15.8.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "reagraph": "^4.30.7",
-    "serve": "^14.2.4",
-    "styled-components": "^6.1.19",
-    "vite": "^6.4.1"
+    "serve": "^14.2.4"
   },
   "devDependencies": {
     "@eslint/js": "^9.21.0",
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",
+    "@vitejs/plugin-react": "^4.5.2",
+    "dotenv": "^16.5.0",
     "eslint": "^9.21.0",
     "eslint-plugin-react-hooks": "^5.1.0",
     "eslint-plugin-react-refresh": "^0.4.19",
-    "globals": "^15.15.0"
+    "globals": "^15.15.0",
+    "js-yaml": "^4.1.1",
+    "lucide-react": "^0.501.0",
+    "prop-types": "^15.8.1",
+    "reagraph": "^4.30.7",
+    "styled-components": "^6.1.19",
+    "vite": "^6.4.1"
   }
 }

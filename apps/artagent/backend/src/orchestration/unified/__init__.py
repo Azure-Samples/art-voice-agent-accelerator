@@ -692,13 +692,20 @@ async def route_turn(
                     result.agent_name or adapter.current_agent or memo_agent or "Assistant"
                 )
                 final_label = _resolve_agent_label(final_agent)
+                
+                # Use effective turn_id from CascadeSessionScope to match streaming envelopes
+                # This ensures the final message updates the streaming message rather than
+                # creating a duplicate when turn_id was advanced for tool calls
+                session_scope = CascadeSessionScope.get_current()
+                effective_turn_id = session_scope.get_effective_turn_id() if session_scope else run_id
+                
                 payload = {
                     "type": "assistant",
                     "message": result.response_text,
                     "content": result.response_text,
                     "streaming": False,
-                    "turn_id": run_id,
-                    "response_id": run_id,
+                    "turn_id": effective_turn_id,
+                    "response_id": effective_turn_id,
                     "status": "error" if result.error else "completed",
                     "sender": final_agent,
                     "speaker": final_agent,
@@ -728,9 +735,10 @@ async def route_turn(
                         broadcast_only=is_acs,
                     )
                     logger.info(
-                        "Sent final assistant envelope | agent=%s text_len=%d turn_id=%s",
+                        "Sent final assistant envelope | agent=%s text_len=%d turn_id=%s (run_id=%s)",
                         final_agent,
                         len(result.response_text),
+                        effective_turn_id,
                         run_id,
                     )
                 except Exception:
