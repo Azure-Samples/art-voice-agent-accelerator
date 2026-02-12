@@ -141,14 +141,15 @@ resource "azapi_resource" "mongo_firewall_all" {
 
 
 # Store Entra ID connection string in Key Vault
-# NOTE: The base connectionString has user:password placeholders and SCRAM-SHA-256,
-# which are incompatible with OIDC. We build a clean OIDC connection string instead.
+# NOTE: We construct this manually because the Azure-provided connectionString
+# includes password credentials, which conflict with MONGODB-OIDC auth.
 resource "azurerm_key_vault_secret" "cosmos_entra_connection_string" {
-  name         = "cosmos-entra-connection-string"
-  value        = "mongodb+srv://${azapi_resource.mongoCluster.name}.mongocluster.cosmos.azure.com/?tls=true&authMechanism=MONGODB-OIDC&retrywrites=false&maxIdleTimeMS=120000"
-  key_vault_id = azurerm_key_vault.main.id
-
-  depends_on = [azurerm_role_assignment.keyvault_admin, data.azapi_resource.mongo_cluster_info]
+  name            = "cosmos-entra-connection-string"
+  value           = "mongodb+srv://${azapi_resource.mongoCluster.name}.mongocluster.cosmos.azure.com/?tls=true&authMechanism=MONGODB-OIDC&retrywrites=false&maxIdleTimeMS=120000"
+  key_vault_id    = azurerm_key_vault.main.id
+  content_type    = "text/plain"
+  expiration_date = timeadd(timestamp(), "720h") # 30 days
+  depends_on = [azurerm_role_assignment.keyvault_admin, azapi_resource.mongoCluster]
 }
 
 # Generate random password for Cosmos DB admin
@@ -161,9 +162,11 @@ resource "random_password" "cosmos_admin" {
 
 # Store Cosmos DB admin password in Key Vault
 resource "azurerm_key_vault_secret" "cosmos_admin_password" {
-  name         = "cosmos-admin-password"
-  value        = random_password.cosmos_admin.result
-  key_vault_id = azurerm_key_vault.main.id
+  name            = "cosmos-admin-password"
+  value           = random_password.cosmos_admin.result
+  key_vault_id    = azurerm_key_vault.main.id
+  content_type    = "text/plain"
+  expiration_date = timeadd(timestamp(), "720h") # 30 days
 
   depends_on = [azurerm_role_assignment.keyvault_admin]
 }
@@ -246,9 +249,11 @@ data "azapi_resource" "mongo_cluster_info" {
 
 # Store MongoDB connection details in Key Vault
 resource "azurerm_key_vault_secret" "cosmos_connection_string" {
-  name         = "cosmos-connection-string"
-  value        = data.azapi_resource.mongo_cluster_info.output.properties.connectionString
-  key_vault_id = azurerm_key_vault.main.id
+  name            = "cosmos-connection-string"
+  value           = data.azapi_resource.mongo_cluster_info.output.properties.connectionString
+  key_vault_id    = azurerm_key_vault.main.id
+  content_type    = "text/plain"
+  expiration_date = timeadd(timestamp(), "720h") # 30 days
 
   depends_on = [azurerm_role_assignment.keyvault_admin, data.azapi_resource.mongo_cluster_info]
 }

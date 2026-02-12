@@ -192,12 +192,12 @@ variable "model_deployments" {
       sku_name = "DataZoneStandard"
       capacity = 50
     },
-    # {
-    #   name     = "gpt-5.1"
-    #   version  = "2025-11-13"
-    #   sku_name = "DataZoneStandard"
-    #   capacity = 150
-    # },
+    {
+      name     = "gpt-5.1"
+      version  = "2025-11-13"
+      sku_name = "DataZoneStandard"
+      capacity = 150
+    },
     {
       name     = "text-embedding-3-large"
       version  = "1"
