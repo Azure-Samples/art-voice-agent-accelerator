@@ -3,6 +3,7 @@
 
 """
 
+import asyncio
 import base64
 import json
 import mimetypes
@@ -15,7 +16,7 @@ from typing import Any, Literal
 import openai
 from azure.identity import get_bearer_token_provider
 from dotenv import load_dotenv
-from openai import AzureOpenAI
+from openai import AsyncAzureOpenAI
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
 from utils.azure_auth import get_credential
@@ -195,13 +196,13 @@ class AzureOpenAIManager:
             token_provider = get_bearer_token_provider(
                 get_credential(), "https://cognitiveservices.azure.com/.default"
             )
-            self.openai_client = AzureOpenAI(
+            self.openai_client = AsyncAzureOpenAI(
                 api_version=self.api_version,
                 azure_endpoint=self.azure_endpoint,
                 azure_ad_token_provider=token_provider,
             )
         else:
-            self.openai_client = AzureOpenAI(
+            self.openai_client = AsyncAzureOpenAI(
                 api_version=self.api_version,
                 azure_endpoint=self.azure_endpoint,
                 api_key=self.api_key,
@@ -470,7 +471,7 @@ class AzureOpenAIManager:
                     seed=seed,
                 )
 
-                response = self.openai_client.chat.completions.create(
+                response = await self.openai_client.chat.completions.create(
                     model=model_name,
                     messages=messages_for_api,
                     temperature=temperature,
@@ -488,7 +489,7 @@ class AzureOpenAIManager:
                         event_text = event.choices[0].delta
                         if event_text:
                             print(event_text.content, end="", flush=True)
-                            time.sleep(0.01)  # Maintain minimal sleep to reduce latency
+                            await asyncio.sleep(0.01)  # Maintain minimal sleep to reduce latency
         except Exception as e:
             print(f"An error occurred: {str(e)}")
 
@@ -598,7 +599,7 @@ class AzureOpenAIManager:
                 f"Sending request to Azure OpenAI at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))}"
             )
 
-            response = self.openai_client.chat.completions.create(
+            response = await self.openai_client.chat.completions.create(
                 model=model,
                 messages=messages_for_api,
                 # max_completion_tokens=max_completion_tokens,
@@ -615,7 +616,7 @@ class AzureOpenAIManager:
                             continue
                         print(event_text.content, end="", flush=True)
                         response_content += event_text.content
-                        time.sleep(0.001)  # Maintain minimal sleep to reduce latency
+                        await asyncio.sleep(0.001)  # Maintain minimal sleep to reduce latency
             else:
                 response_content = response.choices[0].message.content
                 logger.info(f"Model_used: {response.model}")
@@ -792,7 +793,7 @@ class AzureOpenAIManager:
                         seed=seed,
                     )
 
-                    response = self.openai_client.chat.completions.create(
+                    response = await self.openai_client.chat.completions.create(
                         model=self.chat_model_name,
                         messages=messages_for_api,
                         temperature=temperature,
@@ -820,7 +821,7 @@ class AzureOpenAIManager:
                                 continue
                             print(event_text.content, end="", flush=True)
                             response_content += event_text.content
-                            time.sleep(0.001)  # Minimal sleep to reduce latency
+                            await asyncio.sleep(0.001)  # Minimal sleep to reduce latency
                 else:
                     response_content = response.choices[0].message.content
 
@@ -1020,7 +1021,7 @@ class AzureOpenAIManager:
                         seed=seed,
                     )
 
-                    response = self.openai_client.chat.completions.create(
+                    response = await self.openai_client.chat.completions.create(
                         model=self.chat_model_name,
                         messages=messages_for_api,
                         temperature=temperature,
@@ -1047,7 +1048,7 @@ class AzureOpenAIManager:
                                 continue
                             print(event_text.content, end="", flush=True)
                             response_content += event_text.content
-                            time.sleep(0.001)  # Maintain minimal sleep to reduce latency
+                            await asyncio.sleep(0.001)  # Maintain minimal sleep to reduce latency
                 else:
                     response_content = response.choices[0].message.content
 
@@ -1746,17 +1747,17 @@ class AzureOpenAIManager:
                     # Make the API call
                     if use_responses:
                         try:
-                            raw_response = self.openai_client.responses.create(**params)
+                            raw_response = await self.openai_client.responses.create(**params)
                         except AttributeError:
                             # Fallback if responses endpoint not available
                             logger.warning(
                                 "Responses endpoint not available in SDK, falling back to chat/completions"
                             )
                             params_chat = self._prepare_chat_params(model_config, messages, stream=stream, **kwargs)
-                            raw_response = self.openai_client.chat.completions.create(**params_chat)
+                            raw_response = await self.openai_client.chat.completions.create(**params_chat)
                             endpoint_type = "chat"
                     else:
-                        raw_response = self.openai_client.chat.completions.create(**params)
+                        raw_response = await self.openai_client.chat.completions.create(**params)
 
                     # 5. Parse response into UnifiedResponse
                     if not stream:

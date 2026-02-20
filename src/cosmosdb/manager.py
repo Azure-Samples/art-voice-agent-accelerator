@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import re
@@ -502,6 +503,41 @@ class CosmosDBMongoCoreManager:
         except PyMongoError as e:
             logger.error(f"Failed to query active documents: {e}")
             return []
+
+    # ── Async wrappers (non-blocking for asyncio event loops) ──────────────
+
+    async def async_insert_document(self, document: dict[str, Any]) -> Any | None:
+        """Async wrapper for insert_document using asyncio.to_thread."""
+        return await asyncio.to_thread(self.insert_document, document)
+
+    async def async_upsert_document(self, document: dict[str, Any], query: dict[str, Any]) -> Any | None:
+        """Async wrapper for upsert_document using asyncio.to_thread."""
+        return await asyncio.to_thread(self.upsert_document, document, query)
+
+    async def async_read_document(self, query: dict[str, Any]) -> dict[str, Any] | None:
+        """Async wrapper for read_document using asyncio.to_thread."""
+        return await asyncio.to_thread(self.read_document, query)
+
+    async def async_query_documents(
+        self,
+        query: dict[str, Any],
+        projection: dict[str, Any] | None = None,
+        sort: Sequence[tuple[str, int]] | None = None,
+        skip: int | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Async wrapper for query_documents using asyncio.to_thread."""
+        return await asyncio.to_thread(
+            self.query_documents, query, projection, sort, skip, limit
+        )
+
+    async def async_document_exists(self, query: dict[str, Any]) -> bool:
+        """Async wrapper for document_exists using asyncio.to_thread."""
+        return await asyncio.to_thread(self.document_exists, query)
+
+    async def async_delete_document(self, query: dict[str, Any]) -> bool:
+        """Async wrapper for delete_document using asyncio.to_thread."""
+        return await asyncio.to_thread(self.delete_document, query)
 
     def close_connection(self):
         """Close the connection to Cosmos DB."""

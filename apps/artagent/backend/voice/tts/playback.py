@@ -335,15 +335,18 @@ class TTSPlayback:
             run_id,
         )
 
-        async with self._tts_lock:
-            if self._cancel_event.is_set():
-                self._cancel_event.clear()
-                return False
+        # Synthesize under lock, stream without lock to avoid blocking
+        # concurrent TTS requests during the (slower) streaming phase.
+        pcm_bytes = None
+        try:
+            async with self._tts_lock:
+                if self._cancel_event.is_set():
+                    self._cancel_event.clear()
+                    return False
 
-            self._is_playing = True
-            synth = None
+                self._is_playing = True
+                synth = None
 
-            try:
                 # Acquire TTS synthesizer from pool
                 synth, tier = await self._app_state.tts_pool.acquire_for_session(self._session_id)
 
@@ -355,26 +358,31 @@ class TTSPlayback:
                     )
                     return False
 
-                # Synthesize audio
+                # Synthesize audio (under lock)
                 pcm_bytes = await self._synthesize(
                     synth, text, voice_name, style, rate, SAMPLE_RATE_BROWSER
                 )
 
-                if not pcm_bytes:
-                    logger.warning("[%s] TTS returned empty audio", self._session_short)
-                    return False
-
-                # Stream to browser
-                return await self._stream_to_browser(pcm_bytes, on_first_audio, run_id)
-
-            except asyncio.CancelledError:
-                logger.debug("[%s] Browser TTS cancelled", self._session_short)
+            # Lock released — check cancel before streaming
+            if self._cancel_event.is_set():
+                self._cancel_event.clear()
                 return False
-            except Exception as e:
-                logger.error("[%s] Browser TTS failed: %s", self._session_short, e)
+
+            if not pcm_bytes:
+                logger.warning("[%s] TTS returned empty audio", self._session_short)
                 return False
-            finally:
-                self._is_playing = False
+
+            # Stream to browser (without lock)
+            return await self._stream_to_browser(pcm_bytes, on_first_audio, run_id)
+
+        except asyncio.CancelledError:
+            logger.debug("[%s] Browser TTS cancelled", self._session_short)
+            return False
+        except Exception as e:
+            logger.error("[%s] Browser TTS failed: %s", self._session_short, e)
+            return False
+        finally:
+            self._is_playing = False
 
     async def play_to_acs(
         self,
@@ -424,15 +432,18 @@ class TTSPlayback:
             run_id,
         )
 
-        async with self._tts_lock:
-            if self._cancel_event.is_set():
-                self._cancel_event.clear()
-                return False
+        # Synthesize under lock, stream without lock to avoid blocking
+        # concurrent TTS requests during the (slower) streaming phase.
+        pcm_bytes = None
+        try:
+            async with self._tts_lock:
+                if self._cancel_event.is_set():
+                    self._cancel_event.clear()
+                    return False
 
-            self._is_playing = True
-            synth = None
+                self._is_playing = True
+                synth = None
 
-            try:
                 # Acquire TTS synthesizer from pool
                 synth, tier = await self._app_state.tts_pool.acquire_for_session(self._session_id)
 
@@ -444,31 +455,36 @@ class TTSPlayback:
                     )
                     return False
 
-                # Synthesize audio
+                # Synthesize audio (under lock)
                 logger.info("[%s] ACS TTS: Starting synthesis at %dHz", self._session_short, SAMPLE_RATE_ACS)
                 pcm_bytes = await self._synthesize(
                     synth, text, voice_name, style, rate, SAMPLE_RATE_ACS
                 )
 
-                if not pcm_bytes:
-                    logger.error("[%s] ACS TTS returned empty audio (synthesis failed)", self._session_short)
-                    return False
-
-                logger.info("[%s] ACS TTS: Synthesis OK, got %d bytes, starting stream", self._session_short, len(pcm_bytes))
-
-                # Stream to ACS
-                result = await self._stream_to_acs(pcm_bytes, blocking, on_first_audio, run_id)
-                logger.info("[%s] ACS TTS: Stream complete, result=%s", self._session_short, result)
-                return result
-
-            except asyncio.CancelledError:
-                logger.debug("[%s] ACS TTS cancelled", self._session_short)
+            # Lock released — check cancel before streaming
+            if self._cancel_event.is_set():
+                self._cancel_event.clear()
                 return False
-            except Exception as e:
-                logger.error("[%s] ACS TTS failed: %s", self._session_short, e)
+
+            if not pcm_bytes:
+                logger.error("[%s] ACS TTS returned empty audio (synthesis failed)", self._session_short)
                 return False
-            finally:
-                self._is_playing = False
+
+            logger.info("[%s] ACS TTS: Synthesis OK, got %d bytes, starting stream", self._session_short, len(pcm_bytes))
+
+            # Stream to ACS (without lock)
+            result = await self._stream_to_acs(pcm_bytes, blocking, on_first_audio, run_id)
+            logger.info("[%s] ACS TTS: Stream complete, result=%s", self._session_short, result)
+            return result
+
+        except asyncio.CancelledError:
+            logger.debug("[%s] ACS TTS cancelled", self._session_short)
+            return False
+        except Exception as e:
+            logger.error("[%s] ACS TTS failed: %s", self._session_short, e)
+            return False
+        finally:
+            self._is_playing = False
 
     @trace_speech(operation="tts.synthesize")
     async def _synthesize(

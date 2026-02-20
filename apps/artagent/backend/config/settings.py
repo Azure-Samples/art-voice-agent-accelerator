@@ -382,8 +382,9 @@ ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development").lower()
 
 # Documentation (auto-detect based on environment)
 _enable_docs_raw = os.getenv("ENABLE_DOCS", "auto").lower()
+_PROD_ENVIRONMENTS = ("production", "prod", "staging", "uat")
 if _enable_docs_raw == "auto":
-    ENABLE_DOCS = ENVIRONMENT not in ("production", "prod", "staging", "uat")
+    ENABLE_DOCS = ENVIRONMENT not in _PROD_ENVIRONMENTS
 else:
     ENABLE_DOCS = _enable_docs_raw in ("true", "1", "yes", "on")
 
@@ -413,11 +414,12 @@ ENTRA_EXEMPT_PATHS: list[str] = [
     ACS_WEBSOCKET_PATH,
     "/health",
     "/readiness",
+    "/api/v1/health",
+    "/api/v1/readiness",
     "/docs",
     "/redoc",
     "/openapi.json",
     "/metrics",
-    "/v1/health",
 ]
 
 

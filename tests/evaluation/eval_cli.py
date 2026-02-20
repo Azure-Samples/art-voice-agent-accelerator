@@ -399,6 +399,11 @@ def view_result(event_file: Path):
     clear_screen()
     print_header(f"📊 {event_file.stem.replace('_events', '')}")
     
+    # Show raw file path
+    print(f"  {C.CYAN}Raw file:{C.RESET}")
+    print(f"    {C.DIM}{event_file}{C.RESET}")
+    print()
+    
     events = []
     with open(event_file, encoding='utf-8') as f:
         for line in f:
@@ -411,13 +416,60 @@ def view_result(event_file: Path):
         total_turns = len(events)
         total_tools = sum(len(e.get("tool_calls", [])) for e in events)
         handoffs = sum(1 for e in events if e.get("handoff"))
-        avg_e2e = sum(e.get("e2e_ms", 0) for e in events) / max(total_turns, 1)
+        
+        # Helper to derive TTFT from timestamps or use explicit value
+        def get_ttft(e: dict) -> float | None:
+            # Prefer explicit ttft_ms if available
+            if e.get("ttft_ms") is not None:
+                return e["ttft_ms"]
+            # Derive from timestamps: (agent_first_output - user_end) * 1000
+            user_end = e.get("user_end_ts")
+            agent_first = e.get("agent_first_output_ts")
+            if user_end is not None and agent_first is not None:
+                return (agent_first - user_end) * 1000
+            return None
+        
+        # Latency metrics
+        e2e_times = [e.get("e2e_ms", 0) for e in events if e.get("e2e_ms")]
+        ttft_times = [t for t in (get_ttft(e) for e in events) if t is not None]
+        tool_times = [
+            tc.get("duration_ms", 0)
+            for e in events
+            for tc in e.get("tool_calls", [])
+            if tc.get("duration_ms")
+        ]
+        
+        # Token counts
+        input_tokens = sum(e.get("input_tokens", 0) or 0 for e in events)
+        output_tokens = sum(e.get("response_tokens", 0) or 0 for e in events)
+        
+        avg_e2e = sum(e2e_times) / max(len(e2e_times), 1)
+        avg_ttft = sum(ttft_times) / max(len(ttft_times), 1) if ttft_times else None
+        avg_tool = sum(tool_times) / max(len(tool_times), 1) if tool_times else None
         
         print(f"  {C.CYAN}Summary:{C.RESET}")
         print(f"    Turns:     {total_turns}")
         print(f"    Tools:     {total_tools}")
         print(f"    Handoffs:  {handoffs}")
-        print(f"    Avg E2E:   {avg_e2e/1000:.1f}s")
+        print()
+        
+        print(f"  {C.CYAN}Latency:{C.RESET}")
+        print(f"    Avg E2E:   {avg_e2e/1000:.2f}s")
+        if avg_ttft is not None:
+            # Check if TTFT ≈ E2E (indicates first-token time not captured)
+            if abs(avg_ttft - avg_e2e) < 100:  # Within 100ms = same
+                print(f"    Avg TTFT:  {avg_ttft/1000:.2f}s {C.DIM}(≈E2E, first-token not captured){C.RESET}")
+            else:
+                print(f"    Avg TTFT:  {avg_ttft/1000:.2f}s")
+        else:
+            print(f"    Avg TTFT:  {C.DIM}(timestamps missing){C.RESET}")
+        if avg_tool is not None:
+            print(f"    Avg Tool:  {avg_tool:.0f}ms")
+        print()
+        
+        print(f"  {C.CYAN}Tokens:{C.RESET}")
+        print(f"    Input:     {input_tokens:,}")
+        print(f"    Output:    {output_tokens:,}")
         print()
         
         print(f"  {C.CYAN}Turns:{C.RESET}")
@@ -425,7 +477,19 @@ def view_result(event_file: Path):
             agent = e.get("agent_name", "?")
             user = e.get("user_text", "")[:50]
             response = e.get("response_text", "")[:50]
-            print(f"    {C.BOLD}{i}.{C.RESET} [{agent}]")
+            e2e = e.get("e2e_ms", 0)
+            ttft = get_ttft(e)
+            in_tok = e.get("input_tokens") or 0
+            out_tok = e.get("response_tokens") or 0
+            
+            # Build timing/token string
+            timing_parts = [f"E2E: {e2e/1000:.2f}s"]
+            if ttft is not None and abs(ttft - e2e) >= 100:  # Only show TTFT if different from E2E
+                timing_parts.append(f"TTFT: {ttft/1000:.2f}s")
+            timing_parts.append(f"tokens: {in_tok}→{out_tok}")
+            timing_str = " | ".join(timing_parts)
+            
+            print(f"    {C.BOLD}{i}.{C.RESET} [{agent}] {C.DIM}({timing_str}){C.RESET}")
             print(f"       {C.DIM}User: {user}...{C.RESET}")
             print(f"       {C.DIM}Response: {response}...{C.RESET}")
     

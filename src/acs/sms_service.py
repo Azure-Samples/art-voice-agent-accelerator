@@ -33,6 +33,13 @@ class SmsService:
         """Initialize the SMS service with Azure configuration."""
         self.connection_string = os.getenv("AZURE_COMMUNICATION_SMS_CONNECTION_STRING")
         self.from_phone_number = os.getenv("AZURE_SMS_FROM_PHONE_NUMBER")
+        # Pre-create the SMS client once (avoid per-call overhead)
+        self._sms_client: SmsClient | None = None
+        if AZURE_SMS_AVAILABLE and self.connection_string:
+            try:
+                self._sms_client = SmsClient.from_connection_string(self.connection_string)
+            except Exception as exc:
+                logger.warning("Failed to pre-create SmsClient: %s", exc)
 
     def is_configured(self) -> bool:
         """Check if SMS service is properly configured."""
@@ -69,17 +76,22 @@ class SmsService:
             if isinstance(to_phone_numbers, str):
                 to_phone_numbers = [to_phone_numbers]
 
-            # Create SMS client
-            sms_client = SmsClient.from_connection_string(self.connection_string)
+            # Use pre-created SMS client (falls back to creating one if needed)
+            client = self._sms_client
+            if client is None:
+                client = SmsClient.from_connection_string(self.connection_string)
 
-            # Send SMS
-            sms_responses = sms_client.send(
-                from_=self.from_phone_number,
-                to=to_phone_numbers,
-                message=message,
-                enable_delivery_report=enable_delivery_report,
-                tag=tag or "ARTAgent SMS",
-            )
+            # Offload blocking SDK call to thread pool
+            def _blocking_send():
+                return client.send(
+                    from_=self.from_phone_number,
+                    to=to_phone_numbers,
+                    message=message,
+                    enable_delivery_report=enable_delivery_report,
+                    tag=tag or "ARTAgent SMS",
+                )
+
+            sms_responses = await asyncio.to_thread(_blocking_send)
 
             # Process responses
             sent_messages = []

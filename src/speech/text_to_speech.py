@@ -476,7 +476,8 @@ class SpeechSynthesizer:
     """
 
     # Limit concurrent server-side TTS synth requests to avoid SDK/service hiccups
-    _synth_semaphore = asyncio.Semaphore(4)
+    # Instance-level to isolate pool instances from each other
+    # (class-level would artificially limit global concurrency across all instances)
 
     def __init__(
         self,
@@ -605,6 +606,9 @@ class SpeechSynthesizer:
         self.enable_tracing = enable_tracing
         self.call_connection_id = call_connection_id or "unknown"
         self._token_manager: SpeechTokenManager | None = None
+
+        # Instance-level semaphore (not class-level) to avoid cross-instance contention
+        self._synth_semaphore = asyncio.Semaphore(4)
 
         # Initialize tracing components (matching speech_recognizer pattern)
         self.tracer = None
@@ -826,7 +830,7 @@ class SpeechSynthesizer:
             should be cached at the instance level to avoid repeated auth calls.
         """
         if self.key:
-            logger.info("Creating SpeechConfig with API key authentication")
+            logger.debug("Creating SpeechConfig with API key authentication")
             speech_config = speechsdk.SpeechConfig(subscription=self.key, region=self.region)
         else:
             logger.debug("Creating SpeechConfig with Azure AD credentials")
@@ -841,7 +845,11 @@ class SpeechSynthesizer:
 
             try:
                 token_manager = get_speech_token_manager()
-                token_manager.apply_to_config(speech_config, force_refresh=True)
+                # Use cached token (auto-refreshes near expiry via _needs_refresh).
+                # force_refresh=True would cause a network call on EVERY synthesis,
+                # adding 50-200ms per TTS chunk. 401 errors are handled by the
+                # caller's retry loop via refresh_authentication().
+                token_manager.apply_to_config(speech_config, force_refresh=False)
                 self._token_manager = token_manager
                 logger.debug("Successfully applied Azure AD token to SpeechConfig")
             except Exception as e:
@@ -1033,8 +1041,7 @@ class SpeechSynthesizer:
 
         # 3. Create the speaker synthesizer according to playback mode
         try:
-            self._ensure_auth_token()
-            speech_config = self.cfg
+            speech_config = self._create_speech_config()
             headless = _is_headless()
 
             if self.playback == "always":
@@ -1365,7 +1372,6 @@ class SpeechSynthesizer:
     ) -> bytes:
         """Internal method to perform synthesis with tracing events"""
         voice = voice or self.voice
-        self._ensure_auth_token()
         try:
             # Add event for synthesis start
             if self._session_span:
@@ -1374,8 +1380,10 @@ class SpeechSynthesizer:
                     {"text_length": len(text), "voice": voice},
                 )
 
-            # Create speech config for memory synthesis
-            speech_config = self.cfg
+            # Create fresh speech config per synthesis call (prevents race conditions
+            # when pooled instances serve concurrent sessions).
+            # Token freshness handled inside _create_speech_config via cached token manager.
+            speech_config = self._create_speech_config()
             speech_config.speech_synthesis_language = self.language
             speech_config.speech_synthesis_voice_name = voice
             speech_config.set_speech_synthesis_output_format(
@@ -1449,7 +1457,7 @@ class SpeechSynthesizer:
                             )
 
                         # Retry synthesis with refreshed config
-                        speech_config = self.cfg
+                        speech_config = self._create_speech_config()
                         speech_config.speech_synthesis_language = self.language
                         speech_config.speech_synthesis_voice_name = voice
                         speech_config.set_speech_synthesis_output_format(
@@ -1569,7 +1577,6 @@ class SpeechSynthesizer:
     ) -> list[str]:
         """Internal method to perform frame synthesis with tracing events"""
         voice = voice or self.voice
-        self._ensure_auth_token()
         try:
             # Add event for synthesis start
             if self._session_span:
@@ -1591,9 +1598,9 @@ class SpeechSynthesizer:
             if not sdk_format:
                 raise ValueError("sample_rate must be 16000 or 24000")
 
-            # 1) Configure Speech SDK using class attributes with fresh auth
+            # 1) Configure Speech SDK with fresh config per call (prevents race conditions)
             logger.debug("Creating speech config for TTS synthesis")
-            speech_config = self.cfg
+            speech_config = self._create_speech_config()
             speech_config.speech_synthesis_language = self.language
             speech_config.speech_synthesis_voice_name = voice
             speech_config.set_speech_synthesis_output_format(sdk_format)
@@ -1821,9 +1828,7 @@ class SpeechSynthesizer:
         try:
             # Synthesize minimal audio - a single period with minimal text
             # This establishes the WebSocket connection and caches auth
-            self._ensure_auth_token()
-
-            speech_config = self.cfg
+            speech_config = self._create_speech_config()
             speech_config.speech_synthesis_language = self.language
             speech_config.speech_synthesis_voice_name = self.voice
             speech_config.set_speech_synthesis_output_format(
@@ -1912,9 +1917,9 @@ class SpeechSynthesizer:
             if not rate_to_apply:
                 rate_to_apply = None
 
-        self._ensure_auth_token()
-
-        speech_config = self.cfg
+        # Token freshness handled inside _create_speech_config via cached token manager.
+        # 401 errors are retried below via refresh_authentication().
+        speech_config = self._create_speech_config()
         speech_config.speech_synthesis_voice_name = voice
         speech_config.set_speech_synthesis_output_format(
             {
@@ -1950,7 +1955,7 @@ class SpeechSynthesizer:
         last_error_details = ""
 
         for attempt in range(max_attempts):
-            synthesizer = speechsdk.SpeechSynthesizer(speech_config=self.cfg, audio_config=None)
+            synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=None)
 
             result = synthesizer.speak_ssml_async(ssml).get()
             last_result = result

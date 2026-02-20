@@ -147,9 +147,10 @@ class VoiceSessionContext:
         event_loop: Cached event loop for thread-safe scheduling
 
     Thread Safety:
-        The cancel_event and boolean flags are safe to access from
-        multiple threads. Other attributes should only be accessed
-        from the main event loop.
+        The cancel_event uses call_soon_threadsafe for cross-thread
+        signaling. Boolean flags use simple assignment which is
+        thread-safe in CPython due to the GIL. Other attributes
+        should only be accessed from the main event loop.
     """
 
     # ─── Identity ───
@@ -253,18 +254,27 @@ class VoiceSessionContext:
         """
         Signal cancellation of current TTS/response.
 
-        Thread-safe - can be called from any thread.
+        Thread-safe - can be called from any thread (e.g., Speech SDK callbacks).
+        Uses call_soon_threadsafe to safely signal the asyncio.Event from
+        non-event-loop threads.
         """
-        self.cancel_event.set()
+        if self.event_loop and self.event_loop.is_running():
+            self.event_loop.call_soon_threadsafe(self.cancel_event.set)
+        else:
+            # Fallback: direct call if no event loop (e.g., during tests)
+            self.cancel_event.set()
         self.tts_cancel_requested = True
 
     def clear_cancel(self) -> None:
         """
         Reset cancellation state after handling.
 
-        Thread-safe - can be called from any thread.
+        Thread-safe - uses call_soon_threadsafe for the asyncio.Event.
         """
-        self.cancel_event.clear()
+        if self.event_loop and self.event_loop.is_running():
+            self.event_loop.call_soon_threadsafe(self.cancel_event.clear)
+        else:
+            self.cancel_event.clear()
         self.tts_cancel_requested = False
 
     async def wait_for_cancel(self, timeout: float | None = None) -> bool:
