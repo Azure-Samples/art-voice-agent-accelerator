@@ -4869,6 +4869,7 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
               recording={recording}
               callActive={callActive}
               isCallDisabled={isCallDisabled}
+              scenarioSwitching={scenarioSwitching}
               onResetSession={handleResetSession}
               onMicToggle={handleMicToggle}
               micMuted={micMuted}
