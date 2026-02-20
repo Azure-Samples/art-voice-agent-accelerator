@@ -265,6 +265,10 @@ class CascadeOrchestratorAdapter:
     _cancel_event: asyncio.Event = field(default_factory=asyncio.Event, init=False)
     _last_user_message: str | None = field(default=None, init=False)
 
+    # Scenario switch flag — prevents sync_from_memo_manager from overwriting
+    # _active_agent with stale MemoManager data after an explicit scenario switch
+    _scenario_switch_pending: bool = field(default=False, init=False)
+
     # Session context - preserves MemoManager reference for turn duration
     _current_memo_manager: MemoManager | None = field(default=None, init=False)
     _session_vars: dict[str, Any] = field(default_factory=dict, init=False)
@@ -807,6 +811,10 @@ class CascadeOrchestratorAdapter:
             self._active_agent,
             scenario_name or "(unknown)",
         )
+
+        # Mark scenario switch pending so sync_from_memo_manager doesn't
+        # overwrite _active_agent with stale data from a previous MemoManager snapshot
+        self._scenario_switch_pending = True
 
     # ─────────────────────────────────────────────────────────────────
     # History Management (Consolidated)
@@ -2451,6 +2459,11 @@ class CascadeOrchestratorAdapter:
         state changes (e.g., handoffs set by tools), ensuring
         session context continuity.
 
+        If a scenario switch is pending (set by update_scenario), the adapter's
+        _active_agent takes precedence over MemoManager's stale value. The
+        correct active_agent is written TO the MemoManager so downstream code
+        and subsequent turns see the updated value.
+
         Args:
             cm: MemoManager instance
         """
@@ -2465,9 +2478,20 @@ class CascadeOrchestratorAdapter:
                 self._active_agent = target
                 sync_state_to_memo(cm, active_agent=self._active_agent, clear_pending_handoff=True)
 
-        # Apply synced state
-        if state.active_agent:
+        # If a scenario switch is pending, the adapter's _active_agent is
+        # authoritative — write it to MemoManager instead of reading from it.
+        if self._scenario_switch_pending:
+            logger.info(
+                "Scenario switch pending — writing active_agent to MemoManager | active=%s memo_active=%s",
+                self._active_agent,
+                state.active_agent,
+            )
+            sync_state_to_memo(cm, active_agent=self._active_agent)
+            self._scenario_switch_pending = False
+        elif state.active_agent:
+            # Normal path: MemoManager is authoritative
             self._active_agent = state.active_agent
+
         if state.visited_agents:
             self._visited_agents = state.visited_agents
         if state.system_vars:

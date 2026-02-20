@@ -65,6 +65,11 @@ from azure.ai.voicelive.models import (
 )
 from azure.core.credentials import AzureKeyCredential, TokenCredential
 from azure.identity.aio import DefaultAzureCredential
+
+# Module-level cached credential to avoid re-probing the credential chain per session.
+# DefaultAzureCredential is thread-safe and reusable across connections.
+_CACHED_CREDENTIAL: DefaultAzureCredential | None = None
+_CREDENTIAL_LOCK = asyncio.Lock()
 from fastapi import WebSocket
 from fastapi.websockets import WebSocketState
 from opentelemetry import trace
@@ -912,138 +917,160 @@ class VoiceLiveSDKHandler:
                     session_id=self.session_id,
                     ws=True,
                 )
-                with tracer.start_as_current_span(
-                    "voicelive.connect",
-                    kind=SpanKind.SERVER,
-                    attributes=conn_attrs,
-                ) as conn_span:
-                    self._credential = self._build_credential(self._settings)
-                    self._connection_cm = connect(
-                        endpoint=self._settings.azure_voicelive_endpoint,
-                        credential=self._credential,
-                        model=self._settings.azure_voicelive_model,
-                        connection_options=connection_options,
-                    )
-                    self._connection = await self._connection_cm.__aenter__()
-                    conn_span.set_attribute("voicelive.model", self._settings.azure_voicelive_model)
-
                 # ─────────────────────────────────────────────────────────────
-                # Agent Loading - Prefer unified agents from app.state
+                # PARALLEL PHASE: WebSocket connect + agent/scenario resolution
+                # These are independent and can run concurrently to cut startup time.
                 # ─────────────────────────────────────────────────────────────
-                agents = None
-                orchestrator_config = None
-                
-                # Resolve scenario from multiple sources (priority order):
-                # 1. websocket.state.scenario (set by browser endpoint)
-                # 2. MemoManager corememory (set by media_handler or call setup)
-                # 3. Session-scoped scenario (from ScenarioBuilder)
-                scenario_name = getattr(self.websocket.state, "scenario", None)
-                if not scenario_name:
-                    memo_mgr = getattr(self.websocket.state, "cm", None)
-                    if memo_mgr and hasattr(memo_mgr, "get_value_from_corememory"):
-                        # Use centralized naming utility for consistent key lookup
-                        from apps.artagent.backend.src.orchestration.naming import get_scenario_from_corememory
-                        scenario_name = get_scenario_from_corememory(memo_mgr)
-                        if scenario_name:
-                            logger.debug(
-                                "[VoiceLiveSDK] Resolved scenario from MemoManager | scenario=%s session=%s",
-                                scenario_name,
-                                self.session_id,
-                            )
 
-                # Try to get unified agents from app.state (set in main.py)
-                app_state = getattr(self.websocket, "app", None)
-                if app_state:
-                    app_state = getattr(app_state, "state", None)
-
-                if app_state and hasattr(app_state, "unified_agents") and app_state.unified_agents:
-                    # Use unified agents directly (no adapter needed)
-                    agents = app_state.unified_agents
-                    orchestrator_config = resolve_orchestrator_config(
-                        session_id=self.session_id,
-                        scenario_name=scenario_name,
-                    )
-                    span.set_attribute("voicelive.agent_source", "unified")
+                async def _connect_voicelive():
+                    """Establish VoiceLive WebSocket connection."""
+                    t0 = time.perf_counter()
+                    with tracer.start_as_current_span(
+                        "voicelive.connect",
+                        kind=SpanKind.SERVER,
+                        attributes=conn_attrs,
+                    ) as conn_span:
+                        self._credential = await self._build_credential(self._settings)
+                        self._connection_cm = connect(
+                            endpoint=self._settings.azure_voicelive_endpoint,
+                            credential=self._credential,
+                            model=self._settings.azure_voicelive_model,
+                            connection_options=connection_options,
+                        )
+                        self._connection = await self._connection_cm.__aenter__()
+                        conn_span.set_attribute("voicelive.model", self._settings.azure_voicelive_model)
+                    elapsed = (time.perf_counter() - t0) * 1000
                     logger.info(
-                        "Using unified agents for VoiceLive | count=%d start_agent=%s scenario=%s session_id=%s",
-                        len(agents),
-                        orchestrator_config.start_agent if orchestrator_config else "default",
-                        scenario_name or getattr(orchestrator_config, "scenario_name", None) or "(none)",
-                        self.session_id or "(none)",
-                    )
-                else:
-                    # Fallback to auto-discovery of unified agents
-                    logger.info(
-                        "No unified agents in app.state - discovering from agents directory",
-                    )
-                    agents = discover_agents()
-                    orchestrator_config = resolve_orchestrator_config(
-                        session_id=self.session_id,
-                        scenario_name=scenario_name,
-                    )
-                    span.set_attribute("voicelive.agent_source", "discovered")
-                    logger.info(
-                        "Discovered unified agents | count=%d start_agent=%s scenario=%s session_id=%s",
-                        len(agents),
-                        orchestrator_config.start_agent if orchestrator_config else "default",
-                        scenario_name or getattr(orchestrator_config, "scenario_name", None) or "(none)",
-                        self.session_id or "(none)",
+                        "[VoiceLive Startup] connect_ms=%.1f | session=%s",
+                        elapsed, self.session_id,
                     )
 
-                span.set_attribute("voicelive.agents_count", len(agents))
+                async def _resolve_agents_and_scenario():
+                    """Resolve agents, scenario, session agent, and user profile."""
+                    t0 = time.perf_counter()
+                    agents = None
+                    orchestrator_config = None
 
-                # Merge scenario agents if scenario is active
-                if orchestrator_config and orchestrator_config.has_scenario:
-                    if orchestrator_config.agents:
-                        # Scenario agents take precedence (already UnifiedAgent)
-                        merged_agents = dict(agents)
-                        merged_agents.update(orchestrator_config.agents)
-                        agents = merged_agents
-                    span.set_attribute(
-                        "voicelive.scenario", orchestrator_config.scenario_name or ""
-                    )
-                    logger.info(
-                        "Loaded scenario configuration | scenario=%s start_agent=%s",
-                        orchestrator_config.scenario_name,
-                        orchestrator_config.start_agent,
-                    )
+                    # Resolve scenario from multiple sources (priority order):
+                    # 1. websocket.state.scenario (set by browser endpoint)
+                    # 2. MemoManager corememory (set by media_handler or call setup)
+                    # 3. Session-scoped scenario (from ScenarioBuilder)
+                    scenario_name = getattr(self.websocket.state, "scenario", None)
+                    if not scenario_name:
+                        memo_mgr = getattr(self.websocket.state, "cm", None)
+                        if memo_mgr and hasattr(memo_mgr, "get_value_from_corememory"):
+                            from apps.artagent.backend.src.orchestration.naming import get_scenario_from_corememory
+                            scenario_name = get_scenario_from_corememory(memo_mgr)
+                            if scenario_name:
+                                logger.debug(
+                                    "[VoiceLiveSDK] Resolved scenario from MemoManager | scenario=%s session=%s",
+                                    scenario_name,
+                                    self.session_id,
+                                )
 
-                # ─────────────────────────────────────────────────────────────
-                # Session Agent Check (Agent Builder) - Priority 1
-                # If a session agent exists, inject it into agents and use as start
-                # ─────────────────────────────────────────────────────────────
-                session_agent = get_session_agent(self.session_id)
-                if session_agent:
-                    # Session agent is already UnifiedAgent - inject directly
-                    agents = dict(agents)  # Make mutable copy
-                    agents[session_agent.name] = session_agent
-                    span.set_attribute("voicelive.session_agent", session_agent.name)
+                    # Try to get unified agents from app.state (set in main.py)
+                    app_state = getattr(self.websocket, "app", None)
+                    if app_state:
+                        app_state = getattr(app_state, "state", None)
+
+                    if app_state and hasattr(app_state, "unified_agents") and app_state.unified_agents:
+                        agents = app_state.unified_agents
+                        orchestrator_config = resolve_orchestrator_config(
+                            session_id=self.session_id,
+                            scenario_name=scenario_name,
+                        )
+                        logger.info(
+                            "Using unified agents for VoiceLive | count=%d start_agent=%s scenario=%s session_id=%s",
+                            len(agents),
+                            orchestrator_config.start_agent if orchestrator_config else "default",
+                            scenario_name or getattr(orchestrator_config, "scenario_name", None) or "(none)",
+                            self.session_id or "(none)",
+                        )
+                        agent_source = "unified"
+                    else:
+                        logger.info(
+                            "No unified agents in app.state - discovering from agents directory",
+                        )
+                        agents = discover_agents()
+                        orchestrator_config = resolve_orchestrator_config(
+                            session_id=self.session_id,
+                            scenario_name=scenario_name,
+                        )
+                        logger.info(
+                            "Discovered unified agents | count=%d start_agent=%s scenario=%s session_id=%s",
+                            len(agents),
+                            orchestrator_config.start_agent if orchestrator_config else "default",
+                            scenario_name or getattr(orchestrator_config, "scenario_name", None) or "(none)",
+                            self.session_id or "(none)",
+                        )
+                        agent_source = "discovered"
+
+                    # Merge scenario agents if scenario is active
+                    if orchestrator_config and orchestrator_config.has_scenario:
+                        if orchestrator_config.agents:
+                            merged_agents = dict(agents)
+                            merged_agents.update(orchestrator_config.agents)
+                            agents = merged_agents
+                        logger.info(
+                            "Loaded scenario configuration | scenario=%s start_agent=%s",
+                            orchestrator_config.scenario_name,
+                            orchestrator_config.start_agent,
+                        )
+
+                    # Session Agent Check (Agent Builder) - Priority 1
+                    session_agent = get_session_agent(self.session_id)
+                    if session_agent:
+                        agents = dict(agents)
+                        agents[session_agent.name] = session_agent
+                        logger.info(
+                            "Session agent found (Agent Builder) | name=%s voice=%s session_id=%s",
+                            session_agent.name,
+                            session_agent.voice.name if session_agent.voice else "default",
+                            self.session_id,
+                        )
+
+                    # Determine effective start agent
+                    effective_start_agent = DEFAULT_START_AGENT
+                    if session_agent:
+                        effective_start_agent = session_agent.name
+                    elif orchestrator_config and orchestrator_config.start_agent:
+                        effective_start_agent = orchestrator_config.start_agent
+                    elif hasattr(self._settings, "start_agent") and self._settings.start_agent:
+                        effective_start_agent = self._settings.start_agent
+
+                    # Load user profile (fast in-memory lookup)
+                    user_profile = None
+                    if hasattr(self, "_user_email") and self._user_email:
+                        user_profile = await load_user_profile_by_email(self._user_email)
+
+                    elapsed = (time.perf_counter() - t0) * 1000
                     logger.info(
-                        "Session agent found (Agent Builder) | name=%s voice=%s session_id=%s",
-                        session_agent.name,
-                        session_agent.voice.name if session_agent.voice else "default",
+                        "[VoiceLive Startup] resolve_agents_ms=%.1f | agents=%d scenario=%s session=%s",
+                        elapsed, len(agents),
+                        getattr(orchestrator_config, "scenario_name", None) or "(none)",
                         self.session_id,
                     )
+                    return agents, orchestrator_config, session_agent, effective_start_agent, user_profile, agent_source, app_state
 
-                # Determine effective start agent
-                # Priority: 1. Session agent, 2. Scenario start_agent, 3. Settings default
-                effective_start_agent = DEFAULT_START_AGENT
+                # Run WebSocket connect and agent resolution in parallel
+                _connect_task = asyncio.create_task(_connect_voicelive())
+                _resolve_task = asyncio.create_task(_resolve_agents_and_scenario())
+                await asyncio.gather(_connect_task, _resolve_task)
+
+                agents, orchestrator_config, session_agent, effective_start_agent, user_profile, agent_source, app_state = _resolve_task.result()
+
+                # Set span attributes from resolved values
+                span.set_attribute("voicelive.agent_source", agent_source)
+                span.set_attribute("voicelive.agents_count", len(agents))
+                if orchestrator_config and orchestrator_config.has_scenario:
+                    span.set_attribute("voicelive.scenario", orchestrator_config.scenario_name or "")
                 if session_agent:
-                    effective_start_agent = session_agent.name
-                elif orchestrator_config and orchestrator_config.start_agent:
-                    effective_start_agent = orchestrator_config.start_agent
-                elif hasattr(self._settings, "start_agent") and self._settings.start_agent:
-                    effective_start_agent = self._settings.start_agent
-
-                user_profile = None
-                if hasattr(self, "_user_email") and self._user_email:
-                    logger.info("Loading user profile for session | email=%s", self._user_email)
-                    user_profile = await load_user_profile_by_email(self._user_email)
-                    if user_profile:
-                        span.set_attribute("voicelive.user_profile_loaded", True)
-                        span.set_attribute(
-                            "voicelive.client_id", user_profile.get("client_id", "unknown")
-                        )
+                    span.set_attribute("voicelive.session_agent", session_agent.name)
+                if user_profile:
+                    span.set_attribute("voicelive.user_profile_loaded", True)
+                    span.set_attribute(
+                        "voicelive.client_id", user_profile.get("client_id", "unknown")
+                    )
 
                 # Determine handoff map - prefer from app.state or orchestrator config,
                 # fallback to dynamically building from current agents
@@ -1257,14 +1284,9 @@ class VoiceLiveSDKHandler:
                     self.session_id,
                 )
 
-            # Close credential - always attempt in finally block
-            credential = self._credential
+            # Credential is now module-level cached — do NOT close it per session.
+            # Just clear the local reference.
             self._credential = None
-            if isinstance(credential, DefaultAzureCredential):
-                try:
-                    await credential.close()
-                except Exception:
-                    logger.debug("Failed to close DefaultAzureCredential", exc_info=True)
 
             # Clear messenger reference to break circular refs
             self._messenger = None
@@ -2126,10 +2148,17 @@ class VoiceLiveSDKHandler:
         return True
 
     @staticmethod
-    def _build_credential(settings) -> AzureKeyCredential | TokenCredential:
+    async def _build_credential(settings) -> AzureKeyCredential | TokenCredential:
         if settings.has_api_key_auth:
             return AzureKeyCredential(settings.azure_voicelive_api_key)
-        return DefaultAzureCredential()
+        global _CACHED_CREDENTIAL
+        if _CACHED_CREDENTIAL is None:
+            async with _CREDENTIAL_LOCK:
+                # Double-check after acquiring lock
+                if _CACHED_CREDENTIAL is None:
+                    _CACHED_CREDENTIAL = DefaultAzureCredential()
+                    logger.info("Created shared DefaultAzureCredential (cached for process lifetime)")
+        return _CACHED_CREDENTIAL
 
     # =========================================================================
     # Turn-Level Latency Tracking Methods

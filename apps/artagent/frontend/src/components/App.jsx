@@ -271,6 +271,17 @@ function RealTimeVoiceApp() {
   const [scenarioSwitching, setScenarioSwitching] = useState(null);
   const scenarioButtonRef = useRef(null);
 
+  // Brief confirmation shown after a scenario switch completes
+  // { name: string, startAgent: string|null } or null
+  const [scenarioConfirmed, setScenarioConfirmed] = useState(null);
+  const scenarioConfirmedTimerRef = useRef(null);
+  const showScenarioConfirmation = useCallback((name, startAgent) => {
+    if (scenarioConfirmedTimerRef.current) clearTimeout(scenarioConfirmedTimerRef.current);
+    setScenarioConfirmed({ name, startAgent });
+    scenarioConfirmedTimerRef.current = setTimeout(() => setScenarioConfirmed(null), 3500);
+  }, []);
+  useEffect(() => () => { if (scenarioConfirmedTimerRef.current) clearTimeout(scenarioConfirmedTimerRef.current); }, []);
+
   // ── Derived scenario state from sessionScenarioConfig (single source of truth) ──
   // The backend `/session/{sid}/scenarios` endpoint is canonical. All scenario
   // state is derived from its response stored in `sessionScenarioConfig`.
@@ -535,7 +546,7 @@ function RealTimeVoiceApp() {
   // immediately to avoid clobbering the newer state.
   const pollUntilScenarioPropagated = useCallback(async (
     expectedScenarioName,
-    { maxAttempts = 10, intervalMs = 500 } = {},
+    { maxAttempts = 3, intervalMs = 500 } = {},
   ) => {
     const nameLower = expectedScenarioName?.toLowerCase();
     if (!nameLower || !sessionId) return null;
@@ -719,7 +730,8 @@ function RealTimeVoiceApp() {
         scenarioVersionRef.current += 1;
         await pollUntilScenarioPropagated(scenarioName);
       }
-      setScenarioSwitching(null);
+showScenarioConfirmation(scenarioName, currentAgentRef.current);
+        setScenarioSwitching(null);
     } catch (err) {
       // Network error — only rollback if still current
       if (scenarioVersionRef.current === activationVersion) {
@@ -729,7 +741,7 @@ function RealTimeVoiceApp() {
       appendLog(`Failed to activate scenario: ${err.message}`);
       setScenarioSwitching(null);
     }
-  }, [sessionId, applyScenarioOptimistically, pollUntilScenarioPropagated, appendLog]);
+  }, [sessionId, applyScenarioOptimistically, pollUntilScenarioPropagated, showScenarioConfirmation, appendLog]);
 
   // Fetch session core memory for performance analysis
   const fetchSessionCoreMemory = useCallback(async (targetSessionId = sessionId) => {
@@ -4070,6 +4082,46 @@ function RealTimeVoiceApp() {
           backdropFilter: 'blur(24px)',
           WebkitBackdropFilter: 'blur(24px)',
         }}>
+          {/* Floating scenario-confirmed bubble — above the button cluster */}
+          {scenarioConfirmed && (
+            <div
+              key={scenarioConfirmed.name + (scenarioConfirmed.startAgent || '')}
+              style={{
+                position: 'absolute',
+                bottom: 'calc(100% + 10px)',
+                left: 0,
+                zIndex: 1,
+                pointerEvents: 'none',
+                animation: 'voiceapp-scenario-flash 3.5s ease forwards',
+              }}
+            >
+              <div style={{
+                padding: '8px 14px',
+                borderRadius: '12px',
+                background: 'linear-gradient(135deg, rgba(16,185,129,0.95), rgba(5,150,105,0.92))',
+                boxShadow: '0 8px 28px rgba(16,185,129,0.35), 0 0 0 1px rgba(16,185,129,0.15)',
+                backdropFilter: 'blur(12px)',
+                color: '#fff',
+                fontSize: '12px',
+                fontWeight: 600,
+                lineHeight: 1.4,
+                whiteSpace: 'nowrap',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+              }}>
+                <span style={{ fontSize: '14px' }}>✓</span>
+                <div>
+                  <div>{scenarioConfirmed.name}</div>
+                  {scenarioConfirmed.startAgent && (
+                    <div style={{ fontSize: '10px', fontWeight: 500, opacity: 0.85 }}>
+                      → {scenarioConfirmed.startAgent}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
           {/* Scenario Selector Button */}
           <div style={{
             paddingBottom: '8px',
@@ -4228,6 +4280,7 @@ function RealTimeVoiceApp() {
                             scenarioVersionRef.current += 1;
                             await pollUntilScenarioPropagated(template.name);
                             appendLog(`${icon} Switched to ${label} for session ${sessionId}`);
+                            showScenarioConfirmation(label, currentAgentRef.current);
                             
                             if (callActive) {
                               // ACS mode: restart the call with new scenario
@@ -4397,6 +4450,7 @@ function RealTimeVoiceApp() {
                             scenarioVersionRef.current += 1;
                             await pollUntilScenarioPropagated(scenario.name);
                             appendLog(`${scenarioIcon} Switched to Custom Scenario: ${scenario.name}`);
+                            showScenarioConfirmation(scenario.name, currentAgentRef.current);
                             
                             if (callActive) {
                               appendLog(`🔄 Restarting call with custom scenario...`);

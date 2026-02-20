@@ -264,6 +264,10 @@ class LiveOrchestrator:
         # Flag to prevent SESSION_UPDATED from cancelling handoff-triggered responses
         self._handoff_response_pending: bool = False
 
+        # Scenario switch flag — prevents _sync_from_memo_manager from overwriting
+        # self.active with stale MemoManager data after an explicit scenario switch
+        self._scenario_switch_pending: bool = False
+
         # Track pending tool outputs to batch them before calling response.create()
         # When model makes multiple tool calls, we queue results and trigger ONE response
         self._pending_tool_outputs: list[tuple[str, str]] = []  # [(call_id, output_json), ...]
@@ -379,7 +383,16 @@ class LiveOrchestrator:
 
         # Apply synced state - but NOT visited_agents for VoiceLive
         # VoiceLive conversation history is per-connection, so we always treat as first visit
-        if state.active_agent:
+        if self._scenario_switch_pending:
+            # Scenario switch is authoritative — write adapter's active agent to MemoManager
+            logger.info(
+                "[LiveOrchestrator] Scenario switch pending — writing active to MemoManager | active=%s memo_active=%s",
+                self.active,
+                state.active_agent,
+            )
+            sync_state_to_memo(self._memo_manager, active_agent=self.active)
+            self._scenario_switch_pending = False
+        elif state.active_agent:
             self.active = state.active_agent
             logger.debug("[LiveOrchestrator] Synced active_agent: %s", self.active)
 
@@ -579,6 +592,10 @@ class LiveOrchestrator:
             self.active,
             scenario_name or "(unknown)",
         )
+
+        # Mark scenario switch pending so _sync_from_memo_manager doesn't
+        # overwrite self.active with stale data from a previous MemoManager snapshot
+        self._scenario_switch_pending = True
 
         # CRITICAL: Trigger a session update to apply the new agent's instructions
         # This ensures VoiceLive uses the correct system prompt for the new agent
@@ -980,12 +997,24 @@ class LiveOrchestrator:
             start_span.set_attribute("voicelive.start_agent", self.active)
             start_span.set_attribute("voicelive.agent_count", len(self.agents))
             logger.info("[Orchestrator] Starting with agent: %s", self.active)
+            orch_start_ts = time.perf_counter()
             self._system_vars = dict(system_vars or {})
             
             # Initialize MCP servers for the active agent (non-blocking)
+            t0 = time.perf_counter()
             await self._init_mcp_for_agent(self.active)
+            mcp_ms = (time.perf_counter() - t0) * 1000
             
+            t0 = time.perf_counter()
             await self._switch_to(self.active, self._system_vars)
+            switch_ms = (time.perf_counter() - t0) * 1000
+            
+            total_ms = (time.perf_counter() - orch_start_ts) * 1000
+            logger.info(
+                "[VoiceLive Startup] orchestrator.start total_ms=%.1f | mcp_init_ms=%.1f switch_to_ms=%.1f | agent=%s",
+                total_ms, mcp_ms, switch_ms, self.active,
+            )
+            start_span.set_attribute("voicelive.orch_start_ms", round(total_ms, 2))
             start_span.set_status(trace.StatusCode.OK)
 
     async def _init_mcp_for_agent(self, agent_name: str) -> None:
@@ -1481,6 +1510,7 @@ class LiveOrchestrator:
                     session_id = (
                         getattr(self.messenger, "session_id", None) if self.messenger else None
                     )
+                    t_apply = time.perf_counter()
                     await agent.apply_voicelive_session(
                         self.conn,
                         system_vars=system_vars,
@@ -1488,11 +1518,23 @@ class LiveOrchestrator:
                         session_id=session_id,
                         call_connection_id=self.call_connection_id,
                     )
+                    apply_ms = (time.perf_counter() - t_apply) * 1000
+                    logger.info(
+                        "[VoiceLive Startup] apply_session_ms=%.1f | agent=%s",
+                        apply_ms, agent_name,
+                    )
 
                 # CRITICAL: Inject conversation history as text items for context retention
                 # VoiceLive audio models can "forget" context - explicit text items help
                 # This must happen AFTER session update but BEFORE first response
+                t_hist = time.perf_counter()
                 await self._inject_conversation_history()
+                hist_ms = (time.perf_counter() - t_hist) * 1000
+                if hist_ms > 5:
+                    logger.info(
+                        "[VoiceLive Startup] inject_history_ms=%.1f | items=%d",
+                        hist_ms, len(self._user_message_history),
+                    )
 
                 # Schedule greeting fallback if we have a pending greeting
                 # This applies to both handoffs and normal agent switches

@@ -21,6 +21,7 @@ Storage Structure:
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -49,6 +50,11 @@ _scenario_update_callback: Callable[[str, ScenarioConfig], bool] | None = None
 
 # Redis manager reference (set by main.py startup)
 _redis_manager: Any = None
+
+# Time-based cooldown for Redis reads — avoids hammering Redis when rapid
+# successive reads hit _ensure_session_loaded (e.g., frontend polling).
+_session_load_times: dict[str, float] = {}
+_REDIS_LOAD_COOLDOWN_S: float = 2.0
 
 
 def set_redis_manager(redis_mgr: Any) -> None:
@@ -241,19 +247,25 @@ def _load_scenario_from_redis(session_id: str) -> ScenarioConfig | None:
     return next(iter(scenarios.values()), None)
 
 
-def _ensure_session_loaded(session_id: str) -> None:
+def _ensure_session_loaded(session_id: str, *, force: bool = False) -> None:
     """
     Ensure all scenarios for a session are merged from Redis into memory.
 
-    Always merges Redis state into memory regardless of whether the session
-    already has in-memory entries.  This prevents scenarios created on other
-    workers (or before a restart) from being silently lost when only a subset
-    exists in the current worker's memory.
+    Skips the Redis round-trip when the session was loaded within the last
+    ``_REDIS_LOAD_COOLDOWN_S`` seconds (default 2 s) unless *force* is True.
+    This prevents hammering Redis during rapid successive reads (e.g.,
+    frontend polling or repeated GET /scenarios calls).
 
     Merge strategy: Redis data is the base, in-memory data overrides
     (in-memory is considered more recent).
     """
+    if not force and session_id in _session_scenarios:
+        last_load = _session_load_times.get(session_id, 0)
+        if (time.monotonic() - last_load) < _REDIS_LOAD_COOLDOWN_S:
+            return
+
     loaded = _load_scenarios_from_redis(session_id)
+    _session_load_times[session_id] = time.monotonic()
     # _load_scenarios_from_redis normally updates _session_scenarios as a
     # side effect.  But if it returned data without updating the dict
     # (e.g., Redis unavailable, or the function was mocked), merge the
@@ -439,6 +451,7 @@ def _persist_scenario_to_redis(session_id: str, scenario: ScenarioConfig) -> Non
             loop = asyncio.get_running_loop()
             task = loop.create_task(_persist_async(memo, session_id, scenario.name))
             task.add_done_callback(_log_persistence_result)
+            _session_load_times[session_id] = time.monotonic()
         except RuntimeError:
             logger.debug("No event loop, skipping async Redis persistence")
         
@@ -498,12 +511,17 @@ def _clear_scenario_from_redis(session_id: str) -> None:
 
 def _activate_scenario_core(session_id: str, scenario_name: str) -> tuple[str, ScenarioConfig] | None:
     """Lookup, set active in-memory, notify callback. Returns (key, scenario) or None."""
-    _ensure_session_loaded(session_id)
+    # Check in-memory first to avoid a Redis round-trip when the scenario
+    # is already cached (common case for single-worker and rapid switches).
     session_scenarios = _session_scenarios.get(session_id, {})
-
     actual_key, scenario = find_scenario_by_name(session_scenarios, scenario_name)
     if not scenario:
-        return None
+        # Fall back to Redis — scenario may have been created on another worker
+        _ensure_session_loaded(session_id, force=True)
+        session_scenarios = _session_scenarios.get(session_id, {})
+        actual_key, scenario = find_scenario_by_name(session_scenarios, scenario_name)
+        if not scenario:
+            return None
 
     _active_scenario[session_id] = actual_key
 
@@ -536,10 +554,13 @@ def set_active_scenario(session_id: str, scenario_name: str) -> bool:
             from src.stateful.state_managment import MemoManager
             memo = MemoManager.from_redis(session_id, _redis_manager)
             memo.set_corememory(SCENARIO_KEY_ACTIVE, actual_key)
+            if scenario.start_agent:
+                memo.set_corememory("active_agent", scenario.start_agent)
             import asyncio
             try:
                 loop = asyncio.get_running_loop()
                 loop.create_task(memo.persist_to_redis_async(_redis_manager))
+                _session_load_times[session_id] = time.monotonic()
             except RuntimeError:
                 pass
         except Exception as e:
@@ -575,6 +596,9 @@ async def set_active_scenario_async(session_id: str, scenario_name: str) -> bool
             if scenario.start_agent:
                 memo.set_corememory("active_agent", scenario.start_agent)
             await memo.persist_to_redis_async(_redis_manager)
+            # Mark session as fresh — the in-memory state IS Redis state now,
+            # so subsequent reads within the cooldown window can skip HGETALL.
+            _session_load_times[session_id] = time.monotonic()
         except Exception as e:
             logger.warning("Failed to persist active scenario to Redis: %s", e)
 
@@ -732,6 +756,8 @@ async def _persist_scenario_to_redis_async(session_id: str, scenario: ScenarioCo
         # /create returning 200 while the data never reaches Redis — and a
         # subsequent /active on another worker would 404.
         await memo.persist_to_redis_async(_redis_manager, raise_on_failure=True)
+        # Mark session as fresh so reads within the cooldown skip HGETALL.
+        _session_load_times[session_id] = time.monotonic()
         
         logger.debug(
             "All scenarios persisted to Redis (async) | session=%s count=%d active=%s",

@@ -1050,7 +1050,7 @@ async def set_active_scenario_endpoint(
     if not success:
         # Retry once after forcing a fresh Redis reload — the scenario may
         # exist in Redis but not in this worker's memory cache.
-        _ensure_session_loaded(session_id)
+        _ensure_session_loaded(session_id, force=True)
         for candidate_name in activation_candidates:
             success = await set_active_scenario_async(session_id, candidate_name)
             if success:
