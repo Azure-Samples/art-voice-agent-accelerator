@@ -156,3 +156,41 @@ resource "azurerm_container_app" "backend" {
     "azd-service-name" = var.backend_config.azd_service_name
   })
 }
+
+# ============================================================================
+# STICKY SESSIONS
+# ============================================================================
+
+resource "azapi_update_resource" "frontend_sticky_sessions" {
+  type        = "Microsoft.App/containerApps@2024-03-01"
+  resource_id = azurerm_container_app.frontend.id
+
+  body = {
+    properties = {
+      configuration = {
+        ingress = {
+          stickySessions = {
+            affinity = "sticky"
+          }
+        }
+      }
+    }
+  }
+}
+
+resource "azapi_update_resource" "backend_sticky_sessions" {
+  type        = "Microsoft.App/containerApps@2024-03-01"
+  resource_id = azurerm_container_app.backend.id
+
+  body = {
+    properties = {
+      configuration = {
+        ingress = {
+          stickySessions = {
+            affinity = "sticky"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1406,6 +1406,9 @@ export const ensureVoiceAppKeyframes = () => {
       box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
     }
   }
+  @keyframes voiceapp-spin {
+    to { transform: rotate(360deg); }
+  }
   .demo-form-overlay {
     scrollbar-width: none;
     -ms-overflow-style: none;

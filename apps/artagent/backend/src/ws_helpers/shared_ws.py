@@ -212,10 +212,33 @@ async def send_agent_inventory(
 
     agents = getattr(app_state, "unified_agents", {}) or {}
     summaries = getattr(app_state, "agent_summaries", None) or build_agent_summaries(agents)
-    start_agent = getattr(app_state, "start_agent", None)
-    scenario = getattr(app_state, "scenario", None)
-    scenario_name = getattr(scenario, "name", None) if scenario else None
     handoff_map = getattr(app_state, "handoff_map", {}) or {}
+
+    # Session-aware: check for session-specific scenario first, fall back to global
+    start_agent = None
+    scenario_name = None
+    if session_id:
+        try:
+            from apps.artagent.backend.src.orchestration.session_scenarios import (
+                get_active_scenario_name,
+                get_session_scenario,
+            )
+
+            active_name = get_active_scenario_name(session_id)
+            if active_name:
+                session_scenario = get_session_scenario(session_id, active_name)
+                if session_scenario:
+                    start_agent = session_scenario.start_agent
+                    scenario_name = session_scenario.name
+        except Exception:  # noqa: BLE001
+            pass  # Fall through to global defaults
+
+    # Fall back to global app_state if no session-specific scenario
+    if not start_agent:
+        start_agent = getattr(app_state, "start_agent", None)
+    if not scenario_name:
+        scenario = getattr(app_state, "scenario", None)
+        scenario_name = getattr(scenario, "name", None) if scenario else None
 
     payload = {
         "type": "agent_inventory",

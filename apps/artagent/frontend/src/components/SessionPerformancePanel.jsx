@@ -216,10 +216,12 @@ const SessionPerformancePanel = ({
     const activeScenarioName = performanceData?.scenario || activeScenario;
     if (!activeScenarioName) return [];
     
-    // Find matching scenario (could be custom or standard)
+    // Find matching scenario (could be custom or standard, case-insensitive)
     const scenario = scenarioConfig.scenarios.find(s => {
+      const normalizedName = s.name?.toLowerCase();
       const customName = `custom_${s.name?.replace(/\s+/g, '_').toLowerCase()}`;
-      return s.name === activeScenarioName || customName === activeScenarioName;
+      const targetLower = activeScenarioName.toLowerCase();
+      return normalizedName === targetLower || customName === activeScenarioName || s.name === activeScenarioName;
     });
     
     return scenario?.handoffs || [];

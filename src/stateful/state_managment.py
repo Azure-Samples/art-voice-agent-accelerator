@@ -407,46 +407,49 @@ class MemoManager:
         )
 
     async def persist_to_redis_async(
-        self, redis_mgr: AzureRedisManager, ttl_seconds: int | None = None
-    ) -> None:
+        self, redis_mgr: AzureRedisManager, ttl_seconds: int | None = None,
+        *, raise_on_failure: bool = False,
+    ) -> bool:
         """
         Asynchronously persist session state to Redis without blocking.
 
         Stores the current session state to Redis using async operations,
         preventing blocking of the event loop. Handles cancellation gracefully
-        and logs errors without re-raising to avoid crashing callers.
+        and logs errors without re-raising to avoid crashing callers (unless
+        ``raise_on_failure`` is True).
 
         Args:
             redis_mgr (AzureRedisManager): Redis connection manager for persistence
             ttl_seconds (Optional[int]): Time-to-live in seconds for session data.
                 If None, data persists indefinitely.
+            raise_on_failure (bool): When True, raise on write failure instead of
+                silently returning False. Use this in code paths where the caller
+                **must** know whether persistence succeeded (e.g. scenario creation).
+
+        Returns:
+            bool: True if persistence succeeded, False otherwise.
 
         Raises:
             asyncio.CancelledError: Re-raised to allow proper cleanup during
                 task cancellation.
-
-        Example:
-            ```python
-            # Basic async persistence
-            await manager.persist_to_redis_async(redis_mgr)
-
-            # With automatic cleanup after 2 hours
-            await manager.persist_to_redis_async(redis_mgr, ttl_seconds=7200)
-            ```
+            RuntimeError: Raised when the Redis write returns a failure
+                indicator **and** ``raise_on_failure`` is True.
 
         Error Handling:
-            - Cancellation errors are re-raised for proper task cleanup
-            - Other exceptions are logged but not re-raised to prevent
-              crashing the calling code
+            - Cancellation errors are always re-raised for proper task cleanup
+            - When ``raise_on_failure`` is False (default), other exceptions are
+              logged but not re-raised to prevent crashing the calling code
             - Successful operations log session statistics
-
-        Note:
-            Preferred method for persistence in async contexts such as
-            WebSocket handlers and background tasks.
         """
         try:
             key = self.build_redis_key(self.session_id)
-            await redis_mgr.store_session_data_async(key, self.to_redis_dict())
+            success = await redis_mgr.store_session_data_async(key, self.to_redis_dict())
+            if not success:
+                msg = f"Redis write returned failure for session {self.session_id}"
+                logger.error(msg)
+                if raise_on_failure:
+                    raise RuntimeError(msg)
+                return False
             if ttl_seconds:
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(None, redis_mgr.redis_client.expire, key, ttl_seconds)
@@ -454,13 +457,17 @@ class MemoManager:
                 f"Persisted session {self.session_id} async – "
                 f"histories per agent: {[f'{a}: {len(h)}' for a, h in self.histories.items()]}, ctx_keys={list(self.context.keys())}"
             )
+            return True
         except asyncio.CancelledError:
             logger.debug(f"persist_to_redis_async cancelled for session {self.session_id}")
             # Re-raise cancellation to allow proper cleanup
             raise
         except Exception as e:
             logger.error(f"Error persisting session {self.session_id} to Redis: {e}")
+            if raise_on_failure:
+                raise
             # Don't re-raise non-cancellation errors to avoid crashing the caller
+            return False
 
     async def persist_background(
         self,

@@ -213,6 +213,7 @@ _GET_VAR_RE = re.compile(r"([a-zA-Z0-9_.]+)\.get\(['\"]([a-zA-Z0-9_.]+)['\"]\)")
 from apps.artagent.backend.src.orchestration.naming import (
     normalize_agent_name as _normalize_agent_name,
     normalize_agent_names as _normalize_agent_names,
+    normalize_scenario_name as _normalize_scenario_name,
 )
 
 
@@ -648,6 +649,10 @@ async def create_dynamic_scenario(
     """
     start = time.time()
 
+    normalized_scenario_name = _normalize_scenario_name(config.name)
+    if not normalized_scenario_name:
+        raise HTTPException(status_code=400, detail="Scenario name is required")
+
     normalized_agents = _normalize_agent_names(config.agents)
     normalized_start_agent = _normalize_agent_name(config.start_agent)
 
@@ -709,7 +714,7 @@ async def create_dynamic_scenario(
 
     # Create the scenario
     scenario = ScenarioConfig(
-        name=config.name,
+        name=normalized_scenario_name,
         description=config.description,
         icon=config.icon,
         agents=normalized_agents,
@@ -722,23 +727,38 @@ async def create_dynamic_scenario(
     )
 
     # Store in session (in-memory cache + Redis persistence)
-    # Use async version to ensure persistence completes before returning
-    await set_session_scenario_async(session_id, scenario)
+    # Use async version to ensure persistence completes before returning.
+    # If Redis write fails, _persist_scenario_to_redis_async raises so
+    # clients get 500 instead of a misleading 200.
+    try:
+        await set_session_scenario_async(session_id, scenario)
+    except Exception as e:
+        logger.error(
+            "Scenario created in memory but Redis persistence failed | session=%s name=%s error=%s",
+            session_id, normalized_scenario_name, e,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Scenario '{normalized_scenario_name}' was configured in memory but could not be "
+                "persisted to Redis. It may not survive across requests. Please retry."
+            ),
+        )
 
     logger.info(
         "Dynamic scenario created | session=%s name=%s agents=%d handoffs=%d",
         session_id,
-        config.name,
+        normalized_scenario_name,
         len(config.agents),
         len(config.handoffs),
     )
 
     return SessionScenarioResponse(
         session_id=session_id,
-        scenario_name=config.name,
+        scenario_name=normalized_scenario_name,
         status="created",
         config={
-            "name": config.name,
+            "name": normalized_scenario_name,
             "description": config.description,
             "icon": config.icon,
             "agents": normalized_agents,
@@ -839,6 +859,10 @@ async def update_session_scenario(
 
     Creates a new scenario if one doesn't exist.
     """
+    normalized_scenario_name = _normalize_scenario_name(config.name)
+    if not normalized_scenario_name:
+        raise HTTPException(status_code=400, detail="Scenario name is required")
+
     normalized_agents = _normalize_agent_names(config.agents)
     normalized_start_agent = _normalize_agent_name(config.start_agent)
 
@@ -903,7 +927,7 @@ async def update_session_scenario(
 
     # Create the updated scenario
     scenario = ScenarioConfig(
-        name=config.name,
+        name=normalized_scenario_name,
         description=config.description,
         icon=config.icon,
         agents=normalized_agents,
@@ -921,17 +945,17 @@ async def update_session_scenario(
     logger.info(
         "Dynamic scenario updated | session=%s name=%s agents=%d handoffs=%d",
         session_id,
-        config.name,
+        normalized_scenario_name,
         len(config.agents),
         len(config.handoffs),
     )
 
     return SessionScenarioResponse(
         session_id=session_id,
-        scenario_name=config.name,
+        scenario_name=normalized_scenario_name,
         status="updated" if existing else "created",
         config={
-            "name": config.name,
+            "name": normalized_scenario_name,
             "description": config.description,
             "icon": config.icon,
             "agents": normalized_agents,
@@ -995,32 +1019,62 @@ async def set_active_scenario_endpoint(
     scenario_name: str,
     request: Request,
 ) -> dict[str, Any]:
-    """Set the active scenario for a session."""
+    """Set the active scenario for a session.
+    
+    Uses awaited Redis persistence so the caller can rely on the response
+    being fully committed — no stale reads on subsequent GETs.
+    """
     from apps.artagent.backend.src.orchestration.session_scenarios import (
-        set_active_scenario,
+        set_active_scenario_async,
         get_session_scenario,
+        _ensure_session_loaded,
     )
     
-    success = set_active_scenario(session_id, scenario_name)
+    normalized_scenario_name = _normalize_scenario_name(scenario_name)
+    if not normalized_scenario_name:
+        raise HTTPException(status_code=400, detail="scenario_name is required")
+
+    activation_candidates = [normalized_scenario_name]
+    if normalized_scenario_name.startswith("custom_"):
+        activation_candidates.append(normalized_scenario_name[len("custom_"):])
+    else:
+        activation_candidates.append(f"custom_{normalized_scenario_name}")
+
+    success = False
+    for candidate_name in activation_candidates:
+        success = await set_active_scenario_async(session_id, candidate_name)
+        if success:
+            normalized_scenario_name = candidate_name
+            break
     
+    if not success:
+        # Retry once after forcing a fresh Redis reload — the scenario may
+        # exist in Redis but not in this worker's memory cache.
+        _ensure_session_loaded(session_id)
+        for candidate_name in activation_candidates:
+            success = await set_active_scenario_async(session_id, candidate_name)
+            if success:
+                normalized_scenario_name = candidate_name
+                break
+
     if not success:
         raise HTTPException(
             status_code=404,
-            detail=f"Scenario '{scenario_name}' not found for session '{session_id}'",
+            detail=f"Scenario '{scenario_name}' not found for session '{session_id}'.",
         )
     
     # Get the scenario to return its start_agent
-    scenario = get_session_scenario(session_id, scenario_name)
+    scenario = get_session_scenario(session_id, normalized_scenario_name)
     
-    logger.info("Active scenario set | session=%s scenario=%s", session_id, scenario_name)
+    logger.info("Active scenario set | session=%s scenario=%s", session_id, normalized_scenario_name)
     
     return {
         "status": "success",
-        "message": f"Active scenario set to '{scenario_name}'",
+        "message": f"Active scenario set to '{normalized_scenario_name}'",
         "session_id": session_id,
-        "scenario_name": scenario_name,
+        "scenario_name": normalized_scenario_name,
         "scenario": {
-            "name": scenario.name if scenario else scenario_name,
+            "name": scenario.name if scenario else normalized_scenario_name,
             "start_agent": scenario.start_agent if scenario else None,
             "agents": scenario.agents if scenario else [],
         },
@@ -1109,41 +1163,22 @@ async def list_scenarios_for_session(
     session_scenarios = list_session_scenarios_by_session(session_id)
     active_name = get_active_scenario_name(session_id)
     
-    # Build session scenarios list
-    session_scenario_list = [
-        {
-            "name": scenario.name,
-            "description": scenario.description,
-            "icon": scenario.icon,
-            "agents": scenario.agents,
-            "start_agent": scenario.start_agent,
-            "handoffs": [
-                {
-                    "from_agent": h.from_agent,
-                    "to_agent": h.to_agent,
-                    "tool": h.tool,
-                    "type": h.type,
-                    "share_context": h.share_context,
-                    "handoff_condition": h.handoff_condition,
-                    "context_vars": h.context_vars or {},
-                }
-                for h in scenario.handoffs
-            ],
-            "handoff_type": scenario.handoff_type,
-            "global_template_vars": scenario.global_template_vars,
-            "is_active": scenario.name == active_name,
-            "is_custom": True,
-        }
-        for scenario in session_scenarios.values()
-    ]
+    # Normalize active_name for case-insensitive comparison
+    active_name_lower = (active_name or "").lower()
     
-    # Build built-in scenarios list
+    # Resolve active scenario's start_agent and icon for the frontend
+    active_start_agent = None
+    active_scenario_icon = None
+
+    # Build built-in scenarios list FIRST so we know which names are builtins
     builtin_scenario_names = list_scenarios()
+    builtin_name_set = {n.lower() for n in builtin_scenario_names}
     builtin_scenario_list = []
     for name in builtin_scenario_names:
         scenario = load_scenario(name)
         if scenario:
-            builtin_scenario_list.append({
+            is_active = scenario.name.lower() == active_name_lower
+            entry = {
                 "name": scenario.name,
                 "description": scenario.description,
                 "icon": scenario.icon,
@@ -1163,15 +1198,58 @@ async def list_scenarios_for_session(
                 ],
                 "handoff_type": scenario.handoff_type,
                 "global_template_vars": scenario.global_template_vars,
-                "is_active": scenario.name == active_name,
+                "is_active": is_active,
                 "is_custom": False,
-            })
+            }
+            builtin_scenario_list.append(entry)
+            if is_active:
+                active_start_agent = scenario.start_agent
+                active_scenario_icon = scenario.icon
+
+    # Build session scenarios list (only truly custom, exclude applied builtins)
+    session_scenario_list = []
+    for scenario in session_scenarios.values():
+        # Skip scenarios that originated from applying a builtin template.
+        # They're already represented in the builtins list above.
+        if scenario.name.lower() in builtin_name_set:
+            continue
+        is_active = scenario.name.lower() == active_name_lower
+        entry = {
+            "name": scenario.name,
+            "description": scenario.description,
+            "icon": scenario.icon,
+            "agents": scenario.agents,
+            "start_agent": scenario.start_agent,
+            "handoffs": [
+                {
+                    "from_agent": h.from_agent,
+                    "to_agent": h.to_agent,
+                    "tool": h.tool,
+                    "type": h.type,
+                    "share_context": h.share_context,
+                    "handoff_condition": h.handoff_condition,
+                    "context_vars": h.context_vars or {},
+                }
+                for h in scenario.handoffs
+            ],
+            "handoff_type": scenario.handoff_type,
+            "global_template_vars": scenario.global_template_vars,
+            "is_active": is_active,
+            "is_custom": True,
+        }
+        session_scenario_list.append(entry)
+        if is_active:
+            # Custom scenario takes precedence for active_start_agent
+            active_start_agent = scenario.start_agent
+            active_scenario_icon = scenario.icon
 
     return {
         "status": "success",
         "session_id": session_id,
         "total": len(session_scenario_list) + len(builtin_scenario_list),
         "active_scenario": active_name,
+        "active_start_agent": active_start_agent,
+        "active_scenario_icon": active_scenario_icon,
         # Combine all scenarios - builtin first as templates, then custom
         "scenarios": builtin_scenario_list + session_scenario_list,
         # Keep separate arrays for backwards compatibility

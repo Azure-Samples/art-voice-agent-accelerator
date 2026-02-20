@@ -2424,11 +2424,17 @@ export default function ScenarioBuilder({
             // Add session-custom scenarios first (marked as custom)
             // Use custom_scenarios array (backend separates builtin vs custom)
             const customScenarios = sessionData.custom_scenarios || [];
+            // Get builtin template names to filter them out of custom list
+            const builtinNames = new Set(
+              (sessionData.builtin_scenarios || []).map(s => s.name?.toLowerCase())
+            );
             if (customScenarios.length > 0) {
               const seenNames = new Set();
               const uniqueScenarios = customScenarios.filter((scenario) => {
                 const normalizedName = scenario.name?.toLowerCase();
                 if (!normalizedName || seenNames.has(normalizedName)) return false;
+                // Exclude scenarios that match builtin template names
+                if (builtinNames.has(normalizedName)) return false;
                 seenNames.add(normalizedName);
                 return true;
               });

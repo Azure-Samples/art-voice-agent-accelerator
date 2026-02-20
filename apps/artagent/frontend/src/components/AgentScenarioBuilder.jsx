@@ -108,6 +108,10 @@ export default function AgentScenarioBuilder({
   onScenarioUpdated,
   existingScenarioConfig = null,
   scenarioEditMode = false,
+  // Shared scenario state (single source of truth from App.jsx)
+  sharedScenarioConfig = null,
+  onRefreshScenarios = null,
+  onActivateScenario = null,
   // Initial mode
   initialMode = 'agents',
 }) {
@@ -312,6 +316,9 @@ export default function AgentScenarioBuilder({
             editMode={scenarioEditMode}
             onEditAgent={handleEditAgentFromScenario}
             onCreateAgent={handleCreateAgentFromScenario}
+            sharedScenarioConfig={sharedScenarioConfig}
+            onRefreshScenarios={onRefreshScenarios}
+            onActivateScenario={onActivateScenario}
           />
         )}
       </Box>

@@ -255,6 +255,47 @@ resource "azurerm_container_app" "backend" {
 }
 
 # ============================================================================
+# STICKY SESSIONS
+# ============================================================================
+# The azurerm provider does not support sticky sessions natively.
+# Use azapi_update_resource to enable session affinity so that requests
+# from the same client are routed to the same replica.
+
+resource "azapi_update_resource" "frontend_sticky_sessions" {
+  type        = "Microsoft.App/containerApps@2024-03-01"
+  resource_id = azurerm_container_app.frontend.id
+
+  body = {
+    properties = {
+      configuration = {
+        ingress = {
+          stickySessions = {
+            affinity = "sticky"
+          }
+        }
+      }
+    }
+  }
+}
+
+resource "azapi_update_resource" "backend_sticky_sessions" {
+  type        = "Microsoft.App/containerApps@2024-03-01"
+  resource_id = azurerm_container_app.backend.id
+
+  body = {
+    properties = {
+      configuration = {
+        ingress = {
+          stickySessions = {
+            affinity = "sticky"
+          }
+        }
+      }
+    }
+  }
+}
+
+# ============================================================================
 # ROLE ASSIGNMENTS: Monitoring Metrics Publisher for system-assigned identities
 # ============================================================================
 
