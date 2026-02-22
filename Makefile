@@ -4,8 +4,12 @@
 # Each target is documented for clarity and maintainability
 ############################################################
 
-# Ensure uv is in PATH (installed via curl -LsSf https://astral.sh/uv/install.sh | sh)
+# Resolve uv from PATH first (works in GitHub Actions via setup-uv),
+# then fall back to the default local install location.
+UV_BIN ?= $(shell command -v uv 2>/dev/null)
+ifeq ($(strip $(UV_BIN)),)
 UV_BIN := $(HOME)/.local/bin/uv
+endif
 export PATH := $(HOME)/.local/bin:$(PATH)
 
 # Python interpreter to use (via uv)
