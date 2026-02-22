@@ -189,6 +189,19 @@ eval:
 check_and_fix_code_quality: fix_code_quality check_code_quality
 check_and_fix_test_quality: run_unit_tests
 
+# Fast deterministic validation used by GitHub Copilot coding-agent setup
+ci-fast:
+	@echo "⚡ Running ci-fast validation"
+	@echo "- Python bytecode compile check"
+	@for d in apps/artagent/backend src tests/evaluation utils; do \
+		echo "  • $$d"; \
+		$(UV_BIN) run python -m compileall -q "$$d"; \
+	done
+	@echo "- Dependency import smoke check"
+	$(UV_BIN) run python -c "import fastapi, yaml, pydantic, aiohttp; print('imports: ok')"
+	@echo "- Scenario orchestration YAML parse check"
+	$(UV_BIN) run python -c "from pathlib import Path; import yaml; files=list(Path('apps/artagent/backend/registries/scenariostore').rglob('orchestration.yaml')); [yaml.safe_load(p.read_text(encoding='utf-8')) for p in files]; print(f'orchestration yamls: {len(files)} parsed')"
+
 
 # ANSI color codes for pretty output
 RED = \033[0;31m
