@@ -182,13 +182,9 @@ def get_client():
     if _client_instance is None:
         endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
         if not endpoint:
-            # Log all env vars that start with AZURE_ for debugging
-            azure_vars = {
-                k: v[:50] + "..." if len(v) > 50 else v
-                for k, v in os.environ.items()
-                if k.startswith("AZURE_")
-            }
-            logger.error("AZURE_OPENAI_ENDPOINT not available. Azure env vars: %s", azure_vars)
+            # Log only env var NAMES (never values) to avoid leaking secrets
+            azure_var_names = [k for k in os.environ if k.startswith("AZURE_")]
+            logger.error("AZURE_OPENAI_ENDPOINT not available. Defined AZURE_* vars: %s", azure_var_names)
             raise ValueError(
                 "AZURE_OPENAI_ENDPOINT must be provided via environment variable. "
                 "Ensure Azure App Configuration has loaded or set the variable directly."

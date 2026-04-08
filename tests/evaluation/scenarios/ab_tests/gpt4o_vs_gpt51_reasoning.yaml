@@ -1,0 +1,150 @@
+# yaml-language-server: $schema=../scenario.schema.json
+comparison_name: gpt4o_vs_gpt51_reasoning
+scenario_template: banking
+scenario_name: GPT-4o vs GPT 5.1 Reasoning Effort Comparison
+description: Compare GPT-4o (baseline) vs GPT 5.1 with Responses API - no reasoning vs low reasoning
+
+# Threshold configuration
+# Different models may have varying performance characteristics
+thresholds:
+  min_tool_precision: 0.30    # All should call appropriate tools
+  min_tool_recall: 0.30       # Reasonable recall for tool invocation
+  min_grounded_ratio: 0.15    # Reasoning models may add explanatory content
+  max_latency_p95_ms: 20000   # Reasoning models are slower
+
+# Azure AI Foundry export configuration
+foundry_export:
+  enabled: true
+  output_filename: foundry_eval.jsonl
+  include_metadata: true
+  context_source: evidence
+  ground_truth_field: turns.expectations.tools_called
+  evaluators:
+    - id: builtin.relevance
+      init_params:
+        deployment_name: gpt-4o
+      data_mapping:
+        query: "${data.query}"
+        response: "${data.response}"
+        context: "${data.context}"
+    - id: builtin.coherence
+      init_params:
+        deployment_name: gpt-4o
+      data_mapping:
+        query: "${data.query}"
+        response: "${data.response}"
+
+variants:
+  - variant_id: gpt4o_baseline
+    # GPT-4o with Chat API (baseline)
+    agent_overrides:
+      - agent: BankingConcierge
+        model_override:
+          deployment_id: gpt-4o
+          endpoint_preference: chat
+          temperature: 0.6
+          max_tokens: 800
+      - agent: CardRecommendation
+        model_override:
+          deployment_id: gpt-4o
+          endpoint_preference: chat
+          temperature: 0.6
+          max_tokens: 800
+      - agent: InvestmentAdvisor
+        model_override:
+          deployment_id: gpt-4o
+          endpoint_preference: chat
+          temperature: 0.6
+          max_tokens: 800
+
+  - variant_id: gpt51_no_reasoning
+    # GPT 5.1 with Responses API, no reasoning effort (fastest)
+    agent_overrides:
+      - agent: BankingConcierge
+        model_override:
+          deployment_id: gpt-5.1
+          endpoint_preference: responses
+          max_completion_tokens: 2000
+          reasoning_effort: none  # Explicitly disable reasoning
+      - agent: CardRecommendation
+        model_override:
+          deployment_id: gpt-5.1
+          endpoint_preference: responses
+          max_completion_tokens: 2000
+          reasoning_effort: none
+      - agent: InvestmentAdvisor
+        model_override:
+          deployment_id: gpt-5.1
+          endpoint_preference: responses
+          max_completion_tokens: 2000
+          reasoning_effort: none
+
+  - variant_id: gpt51_low_reasoning
+    # GPT 5.1 with Responses API, low reasoning effort
+    # Low reasoning uses ~200-500 reasoning tokens before generating output
+    agent_overrides:
+      - agent: BankingConcierge
+        model_override:
+          deployment_id: gpt-5.1
+          endpoint_preference: responses
+          max_completion_tokens: 2500  # Extra buffer for reasoning tokens
+          reasoning_effort: low
+      - agent: CardRecommendation
+        model_override:
+          deployment_id: gpt-5.1
+          endpoint_preference: responses
+          max_completion_tokens: 2500
+          reasoning_effort: low
+      - agent: InvestmentAdvisor
+        model_override:
+          deployment_id: gpt-5.1
+          endpoint_preference: responses
+          max_completion_tokens: 2500
+          reasoning_effort: low
+
+# Test conversation - banking scenario with tool calls and handoffs
+turns:
+  - turn_id: turn_1
+    user_input: "Hi, I need help with my account. My name is John Smith and my last four of my SSN is 5678."
+    expectations:
+      tools_called:
+        - verify_client_identity
+      # Profile lookup may follow successful verification
+
+  - turn_id: turn_2
+    user_input: "I'm interested in getting a new credit card with travel rewards."
+    expectations:
+      tools_called:
+        - handoff_to_agent
+      # Expects handoff to CardRecommendation
+
+  - turn_id: turn_3
+    user_input: "What cards do you recommend for someone who travels internationally often?"
+    expectations:
+      tools_called: []  # Flexible - depends on handoff completion
+      tools_optional:
+        - search_card_products
+        - handoff_to_agent
+
+  - turn_id: turn_4
+    user_input: "Actually, I also want to ask about my 401k options. Can you help with that?"
+    expectations:
+      tools_called: []  # Flexible
+      tools_optional:
+        - handoff_to_agent  # May handoff to InvestmentAdvisor
+
+  - turn_id: turn_5
+    user_input: "Thanks, that's all I needed. Please take me back to the main menu."
+    expectations:
+      tools_called: []
+      tools_optional:
+        - handoff_to_agent
+
+comparison_metrics:
+  - latency_p95_ms      # No-reasoning should be significantly faster
+  - tool_precision      # Both should be similar
+  - tool_recall         # Both should be similar
+  - tool_efficiency     # Compare redundant calls
+  - grounded_span_ratio # Quality of responses
+  - cost_per_turn       # Low reasoning costs more (reasoning tokens)
+  - ttft_ms             # Time to first token - key difference

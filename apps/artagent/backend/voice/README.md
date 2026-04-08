@@ -140,7 +140,7 @@ context.cancel_event.clear()
 
 ## Audio Format Reference
 
-### Browser (WebRTC)
+### Browser (Websocket)
 - Sample Rate: **48 kHz**
 - Format: PCM16 mono
 - Chunk Size: **9,600 bytes** (100ms)

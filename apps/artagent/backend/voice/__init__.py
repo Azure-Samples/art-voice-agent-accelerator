@@ -3,10 +3,10 @@ Voice Channels - Speech Orchestration Layer
 ============================================
 
 Protocol-agnostic voice processing handlers that sit between transport layers
-(ACS, WebRTC, VoiceLive) and AI orchestrators.
+(ACS, Websocket, VoiceLive) and AI orchestrators.
 
 Architecture:
-    Transport Layer (ACS/WebRTC/VoiceLive SDK)
+    Transport Layer (ACS/Websocket/VoiceLive SDK)
            │
            ▼
     Voice Channels (this module)
@@ -68,6 +68,7 @@ from .shared import (
 from .speech_cascade.orchestrator import (
     CascadeConfig,
     CascadeOrchestratorAdapter,
+    CascadeSessionScope,
     create_cascade_orchestrator_func,
     get_cascade_orchestrator,
 )

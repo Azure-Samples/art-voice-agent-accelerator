@@ -19,7 +19,7 @@ async def test_generate_response_respects_responses_config():
     fake_client.responses.create = MagicMock(
         return_value=SimpleNamespace(
             id="resp_1",
-            model="gpt-5",
+            model="o4-mini",
             output_text="ok",
             usage=SimpleNamespace(prompt_tokens=1, completion_tokens=2, total_tokens=3),
         )
@@ -29,8 +29,9 @@ async def test_generate_response_respects_responses_config():
     fake_client.chat.completions.create = MagicMock()
     manager.openai_client = fake_client
 
+    # Use o4-mini which is a reasoning model that supports reasoning_effort
     model_config = ModelConfig(
-        deployment_id="gpt-5",
+        deployment_id="o4-mini",
         endpoint_preference="responses",
         temperature=0.2,
         top_p=0.8,
@@ -52,7 +53,7 @@ async def test_generate_response_respects_responses_config():
     assert response.endpoint_used == "responses"
     fake_client.responses.create.assert_called_once()
     called = fake_client.responses.create.call_args.kwargs
-    assert called["model"] == "gpt-5"
+    assert called["model"] == "o4-mini"
     assert called["temperature"] == 0.2
     assert called["top_p"] == 0.8
     assert called["min_p"] == 0.1

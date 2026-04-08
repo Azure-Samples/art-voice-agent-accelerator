@@ -185,6 +185,7 @@ class AgentInfo(BaseModel):
 
     name: str
     description: str
+    original_name: str | None = None  # Original unmodified agent name for matching (before any display modifications)
     greeting: str | None = None
     return_greeting: str | None = None
     tools: list[str] = []  # Keep for backward compatibility
@@ -207,6 +208,13 @@ _JINJA_VAR_RE = re.compile(
     r"\{\{\s*([a-zA-Z0-9_.]+)(?:\s*\|[^}]*)?\s*\}\}"
 )
 _GET_VAR_RE = re.compile(r"([a-zA-Z0-9_.]+)\.get\(['\"]([a-zA-Z0-9_.]+)['\"]\)")
+
+# Import centralized naming utilities
+from apps.artagent.backend.src.orchestration.naming import (
+    normalize_agent_name as _normalize_agent_name,
+    normalize_agent_names as _normalize_agent_names,
+    normalize_scenario_name as _normalize_scenario_name,
+)
 
 
 def extract_prompt_vars(prompt_template: str | None) -> list[str]:
@@ -473,17 +481,23 @@ async def list_available_agents(session_id: str | None = None) -> dict[str, Any]
 
     # Get dynamic session agents - use optimized function if filtering by session
     session_agents_added = 0
+    session_agent_names = set()  # Track names of session agents for replacement logic
+    
     if session_id:
         # Efficient: only get agents for this specific session
         session_agents_dict = list_session_agents_by_session(session_id)
+        
+        # First pass: collect session agent names
+        session_agent_names = {agent.name for agent in session_agents_dict.values()}
+        
+        # Remove base agents that will be overridden by session agents
+        # Session agents with same name REPLACE base agents, not duplicate them
+        agents_list = [a for a in agents_list if a.name not in session_agent_names]
+        
         for agent_name, agent in session_agents_dict.items():
-            # Check if this session agent already exists in static registry
-            existing_names = {a.name for a in agents_list}
+            # Session agent replaces base agent - use original name (no suffix)
             display_name = agent.name
-
-            # If duplicate name, suffix with (session)
-            if display_name in existing_names:
-                display_name = f"{agent.name} (session)"
+            original_name = agent.name  # Store original name before any modification for frontend matching
 
             tool_names = agent.tool_names if hasattr(agent, "tool_names") else []
             prompt_template = getattr(agent, "prompt_template", None)
@@ -493,6 +507,7 @@ async def list_available_agents(session_id: str | None = None) -> dict[str, Any]
             agents_list.append(
                 AgentInfo(
                     name=display_name,
+                    original_name=original_name,
                     description=agent.description or f"Dynamic agent for session {session_id[:8]}",
                     greeting=agent.greeting,
                     return_greeting=getattr(agent, "return_greeting", None),
@@ -514,6 +529,7 @@ async def list_available_agents(session_id: str | None = None) -> dict[str, Any]
             session_agents_added += 1
     else:
         # No filter: get all session agents across all sessions
+        # In this global view, we show session overrides separately with session context
         # list_session_agents() returns {"{session_id}:{agent_name}": agent}
         all_session_agents = list_session_agents()
         for composite_key, agent in all_session_agents.items():
@@ -521,13 +537,14 @@ async def list_available_agents(session_id: str | None = None) -> dict[str, Any]
             parts = composite_key.split(":", 1)
             agent_session_id = parts[0] if len(parts) > 1 else composite_key
             
-            # Check if this session agent already exists in static registry
+            # Check if this session agent overrides a base agent
             existing_names = {a.name for a in agents_list}
             agent_name = agent.name
+            original_name = agent.name  # Store original name before any modification for frontend matching
 
-            # If duplicate name, suffix with session ID
+            # In global view (no session filter), suffix with session ID to show it's an override
             if agent_name in existing_names:
-                agent_name = f"{agent.name} (session)"
+                agent_name = f"{agent.name} [{agent_session_id[:8]}]"
 
             tool_names = agent.tool_names if hasattr(agent, "tool_names") else []
             prompt_template = getattr(agent, "prompt_template", None)
@@ -537,6 +554,7 @@ async def list_available_agents(session_id: str | None = None) -> dict[str, Any]
             agents_list.append(
                 AgentInfo(
                     name=agent_name,
+                    original_name=original_name,
                     description=agent.description or f"Dynamic agent for session {agent_session_id[:8]}",
                     greeting=agent.greeting,
                     return_greeting=getattr(agent, "return_greeting", None),
@@ -631,29 +649,38 @@ async def create_dynamic_scenario(
     """
     start = time.time()
 
+    normalized_scenario_name = _normalize_scenario_name(config.name)
+    if not normalized_scenario_name:
+        raise HTTPException(status_code=400, detail="Scenario name is required")
+
+    normalized_agents = _normalize_agent_names(config.agents)
+    normalized_start_agent = _normalize_agent_name(config.start_agent)
+
     # Validate agents exist (include both template agents and session-scoped custom agents)
     agents_registry = discover_agents()
     session_agents = list_session_agents_by_session(session_id)
-    all_valid_agents = set(agents_registry.keys()) | set(session_agents.keys())
-    if config.agents:
-        invalid_agents = [a for a in config.agents if a not in all_valid_agents]
+    # Build set of valid agent keys (lowercase for case-insensitive matching)
+    # Registry now stores with original casing, so we lowercase for comparison
+    all_valid_keys = {k.lower() for k in agents_registry.keys()} | {k.lower() for k in session_agents.keys()}
+    if normalized_agents:
+        invalid_agents = [a for a in normalized_agents if a.lower() not in all_valid_keys]
         if invalid_agents:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid agents: {invalid_agents}. Available: {list(all_valid_agents)}",
+                detail=f"Invalid agents: {invalid_agents}. Available: {list(agents_registry.keys())}",
             )
 
     # Validate start_agent
-    if config.start_agent:
-        if config.agents and config.start_agent not in config.agents:
+    if normalized_start_agent:
+        if normalized_agents and normalized_start_agent not in normalized_agents:
             raise HTTPException(
                 status_code=400,
-                detail=f"start_agent '{config.start_agent}' must be in agents list",
+                detail=f"start_agent '{normalized_start_agent}' must be in agents list",
             )
-        if not config.agents and config.start_agent not in all_valid_agents:
+        if not normalized_agents and normalized_start_agent.lower() not in all_valid_keys:
             raise HTTPException(
                 status_code=400,
-                detail=f"start_agent '{config.start_agent}' not found in registry or session agents",
+                detail=f"start_agent '{normalized_start_agent}' not found in registry or session agents",
             )
 
     # Build agent_defaults
@@ -671,10 +698,12 @@ async def create_dynamic_scenario(
     # Build handoff configs
     handoffs: list[HandoffConfig] = []
     for h in config.handoffs:
+        normalized_from = _normalize_agent_name(h.from_agent)
+        normalized_to = _normalize_agent_name(h.to_agent)
         handoffs.append(
             HandoffConfig(
-                from_agent=h.from_agent,
-                to_agent=h.to_agent,
+                from_agent=normalized_from,
+                to_agent=normalized_to,
                 tool=h.tool,
                 type=h.type,
                 share_context=h.share_context,
@@ -685,40 +714,55 @@ async def create_dynamic_scenario(
 
     # Create the scenario
     scenario = ScenarioConfig(
-        name=config.name,
+        name=normalized_scenario_name,
         description=config.description,
         icon=config.icon,
-        agents=config.agents,
+        agents=normalized_agents,
         agent_defaults=agent_defaults,
         global_template_vars=config.global_template_vars,
         tools=config.tools,
-        start_agent=config.start_agent,
+        start_agent=normalized_start_agent,
         handoff_type=config.handoff_type,
         handoffs=handoffs,
     )
 
     # Store in session (in-memory cache + Redis persistence)
-    # Use async version to ensure persistence completes before returning
-    await set_session_scenario_async(session_id, scenario)
+    # Use async version to ensure persistence completes before returning.
+    # If Redis write fails, _persist_scenario_to_redis_async raises so
+    # clients get 500 instead of a misleading 200.
+    try:
+        await set_session_scenario_async(session_id, scenario)
+    except Exception as e:
+        logger.error(
+            "Scenario created in memory but Redis persistence failed | session=%s name=%s error=%s",
+            session_id, normalized_scenario_name, e,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Scenario '{normalized_scenario_name}' was configured in memory but could not be "
+                "persisted to Redis. It may not survive across requests. Please retry."
+            ),
+        )
 
     logger.info(
         "Dynamic scenario created | session=%s name=%s agents=%d handoffs=%d",
         session_id,
-        config.name,
+        normalized_scenario_name,
         len(config.agents),
         len(config.handoffs),
     )
 
     return SessionScenarioResponse(
         session_id=session_id,
-        scenario_name=config.name,
+        scenario_name=normalized_scenario_name,
         status="created",
         config={
-            "name": config.name,
+            "name": normalized_scenario_name,
             "description": config.description,
             "icon": config.icon,
-            "agents": config.agents,
-            "start_agent": config.start_agent,
+            "agents": normalized_agents,
+            "start_agent": normalized_start_agent,
             "handoff_type": config.handoff_type,
             "handoffs": [
                 {
@@ -815,29 +859,38 @@ async def update_session_scenario(
 
     Creates a new scenario if one doesn't exist.
     """
+    normalized_scenario_name = _normalize_scenario_name(config.name)
+    if not normalized_scenario_name:
+        raise HTTPException(status_code=400, detail="Scenario name is required")
+
+    normalized_agents = _normalize_agent_names(config.agents)
+    normalized_start_agent = _normalize_agent_name(config.start_agent)
+
     # Validate agents exist (include both template agents and session-scoped custom agents)
     agents_registry = discover_agents()
     session_agents = list_session_agents_by_session(session_id)
-    all_valid_agents = set(agents_registry.keys()) | set(session_agents.keys())
-    if config.agents:
-        invalid_agents = [a for a in config.agents if a not in all_valid_agents]
+    # Build set of valid agent keys (lowercase for case-insensitive matching)
+    # Registry now stores with original casing, so we lowercase for comparison
+    all_valid_keys = {k.lower() for k in agents_registry.keys()} | {k.lower() for k in session_agents.keys()}
+    if normalized_agents:
+        invalid_agents = [a for a in normalized_agents if a.lower() not in all_valid_keys]
         if invalid_agents:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid agents: {invalid_agents}. Available: {list(all_valid_agents)}",
+                detail=f"Invalid agents: {invalid_agents}. Available: {list(agents_registry.keys())}",
             )
 
     # Validate start_agent
-    if config.start_agent:
-        if config.agents and config.start_agent not in config.agents:
+    if normalized_start_agent:
+        if normalized_agents and normalized_start_agent not in normalized_agents:
             raise HTTPException(
                 status_code=400,
-                detail=f"start_agent '{config.start_agent}' must be in agents list",
+                detail=f"start_agent '{normalized_start_agent}' must be in agents list",
             )
-        if not config.agents and config.start_agent not in all_valid_agents:
+        if not normalized_agents and normalized_start_agent.lower() not in all_valid_keys:
             raise HTTPException(
                 status_code=400,
-                detail=f"start_agent '{config.start_agent}' not found in registry or session agents",
+                detail=f"start_agent '{normalized_start_agent}' not found in registry or session agents",
             )
 
     existing = get_session_scenario(session_id)
@@ -858,10 +911,12 @@ async def update_session_scenario(
     # Build handoff configs
     handoffs: list[HandoffConfig] = []
     for h in config.handoffs:
+        normalized_from = _normalize_agent_name(h.from_agent)
+        normalized_to = _normalize_agent_name(h.to_agent)
         handoffs.append(
             HandoffConfig(
-                from_agent=h.from_agent,
-                to_agent=h.to_agent,
+                from_agent=normalized_from,
+                to_agent=normalized_to,
                 tool=h.tool,
                 type=h.type,
                 share_context=h.share_context,
@@ -872,14 +927,14 @@ async def update_session_scenario(
 
     # Create the updated scenario
     scenario = ScenarioConfig(
-        name=config.name,
+        name=normalized_scenario_name,
         description=config.description,
         icon=config.icon,
-        agents=config.agents,
+        agents=normalized_agents,
         agent_defaults=agent_defaults,
         global_template_vars=config.global_template_vars,
         tools=config.tools,
-        start_agent=config.start_agent,
+        start_agent=normalized_start_agent,
         handoff_type=config.handoff_type,
         handoffs=handoffs,
     )
@@ -890,21 +945,21 @@ async def update_session_scenario(
     logger.info(
         "Dynamic scenario updated | session=%s name=%s agents=%d handoffs=%d",
         session_id,
-        config.name,
+        normalized_scenario_name,
         len(config.agents),
         len(config.handoffs),
     )
 
     return SessionScenarioResponse(
         session_id=session_id,
-        scenario_name=config.name,
+        scenario_name=normalized_scenario_name,
         status="updated" if existing else "created",
         config={
-            "name": config.name,
+            "name": normalized_scenario_name,
             "description": config.description,
             "icon": config.icon,
-            "agents": config.agents,
-            "start_agent": config.start_agent,
+            "agents": normalized_agents,
+            "start_agent": normalized_start_agent,
             "handoff_type": config.handoff_type,
             "handoffs": [
                 {
@@ -964,24 +1019,65 @@ async def set_active_scenario_endpoint(
     scenario_name: str,
     request: Request,
 ) -> dict[str, Any]:
-    """Set the active scenario for a session."""
-    from apps.artagent.backend.src.orchestration.session_scenarios import set_active_scenario
+    """Set the active scenario for a session.
     
-    success = set_active_scenario(session_id, scenario_name)
+    Uses awaited Redis persistence so the caller can rely on the response
+    being fully committed — no stale reads on subsequent GETs.
+    """
+    from apps.artagent.backend.src.orchestration.session_scenarios import (
+        set_active_scenario_async,
+        get_session_scenario,
+        _ensure_session_loaded,
+    )
     
+    normalized_scenario_name = _normalize_scenario_name(scenario_name)
+    if not normalized_scenario_name:
+        raise HTTPException(status_code=400, detail="scenario_name is required")
+
+    activation_candidates = [normalized_scenario_name]
+    if normalized_scenario_name.startswith("custom_"):
+        activation_candidates.append(normalized_scenario_name[len("custom_"):])
+    else:
+        activation_candidates.append(f"custom_{normalized_scenario_name}")
+
+    success = False
+    for candidate_name in activation_candidates:
+        success = await set_active_scenario_async(session_id, candidate_name)
+        if success:
+            normalized_scenario_name = candidate_name
+            break
+    
+    if not success:
+        # Retry once after forcing a fresh Redis reload — the scenario may
+        # exist in Redis but not in this worker's memory cache.
+        _ensure_session_loaded(session_id, force=True)
+        for candidate_name in activation_candidates:
+            success = await set_active_scenario_async(session_id, candidate_name)
+            if success:
+                normalized_scenario_name = candidate_name
+                break
+
     if not success:
         raise HTTPException(
             status_code=404,
-            detail=f"Scenario '{scenario_name}' not found for session '{session_id}'",
+            detail=f"Scenario '{scenario_name}' not found for session '{session_id}'.",
         )
     
-    logger.info("Active scenario set | session=%s scenario=%s", session_id, scenario_name)
+    # Get the scenario to return its start_agent
+    scenario = get_session_scenario(session_id, normalized_scenario_name)
+    
+    logger.info("Active scenario set | session=%s scenario=%s", session_id, normalized_scenario_name)
     
     return {
         "status": "success",
-        "message": f"Active scenario set to '{scenario_name}'",
+        "message": f"Active scenario set to '{normalized_scenario_name}'",
         "session_id": session_id,
-        "scenario_name": scenario_name,
+        "scenario_name": normalized_scenario_name,
+        "scenario": {
+            "name": scenario.name if scenario else normalized_scenario_name,
+            "start_agent": scenario.start_agent if scenario else None,
+            "agents": scenario.agents if scenario else [],
+        },
     }
 
 
@@ -1046,26 +1142,43 @@ async def apply_template_to_session(
 @router.get(
     "/session/{session_id}/scenarios",
     summary="List Session Scenarios",
-    description="List all custom scenarios for a specific session.",
+    description="List all scenarios for a session: both session-custom scenarios and built-in scenario templates.",
     tags=["Scenario Builder"],
 )
 async def list_scenarios_for_session(
     session_id: str,
     request: Request,
 ) -> dict[str, Any]:
-    """List all custom scenarios for a specific session."""
+    """
+    List all scenarios available for a session.
+    
+    Returns both:
+    - Session-custom scenarios (created via Scenario Builder)
+    - Built-in scenario templates (from the scenarios directory)
+    
+    The active_scenario field indicates which scenario is currently selected.
+    """
     from apps.artagent.backend.src.orchestration.session_scenarios import get_active_scenario_name
     
-    scenarios = list_session_scenarios_by_session(session_id)
+    session_scenarios = list_session_scenarios_by_session(session_id)
     active_name = get_active_scenario_name(session_id)
+    
+    # Normalize active_name for case-insensitive comparison
+    active_name_lower = (active_name or "").lower()
+    
+    # Resolve active scenario's start_agent and icon for the frontend
+    active_start_agent = None
+    active_scenario_icon = None
 
-    return {
-        "status": "success",
-        "session_id": session_id,
-        "total": len(scenarios),
-        "active_scenario": active_name,
-        "scenarios": [
-            {
+    # Build built-in scenarios list FIRST so we know which names are builtins
+    builtin_scenario_names = list_scenarios()
+    builtin_name_set = {n.lower() for n in builtin_scenario_names}
+    builtin_scenario_list = []
+    for name in builtin_scenario_names:
+        scenario = load_scenario(name)
+        if scenario:
+            is_active = scenario.name.lower() == active_name_lower
+            entry = {
                 "name": scenario.name,
                 "description": scenario.description,
                 "icon": scenario.icon,
@@ -1085,10 +1198,63 @@ async def list_scenarios_for_session(
                 ],
                 "handoff_type": scenario.handoff_type,
                 "global_template_vars": scenario.global_template_vars,
-                "is_active": scenario.name == active_name,
+                "is_active": is_active,
+                "is_custom": False,
             }
-            for scenario in scenarios.values()
-        ],
+            builtin_scenario_list.append(entry)
+            if is_active:
+                active_start_agent = scenario.start_agent
+                active_scenario_icon = scenario.icon
+
+    # Build session scenarios list (only truly custom, exclude applied builtins)
+    session_scenario_list = []
+    for scenario in session_scenarios.values():
+        # Skip scenarios that originated from applying a builtin template.
+        # They're already represented in the builtins list above.
+        if scenario.name.lower() in builtin_name_set:
+            continue
+        is_active = scenario.name.lower() == active_name_lower
+        entry = {
+            "name": scenario.name,
+            "description": scenario.description,
+            "icon": scenario.icon,
+            "agents": scenario.agents,
+            "start_agent": scenario.start_agent,
+            "handoffs": [
+                {
+                    "from_agent": h.from_agent,
+                    "to_agent": h.to_agent,
+                    "tool": h.tool,
+                    "type": h.type,
+                    "share_context": h.share_context,
+                    "handoff_condition": h.handoff_condition,
+                    "context_vars": h.context_vars or {},
+                }
+                for h in scenario.handoffs
+            ],
+            "handoff_type": scenario.handoff_type,
+            "global_template_vars": scenario.global_template_vars,
+            "is_active": is_active,
+            "is_custom": True,
+        }
+        session_scenario_list.append(entry)
+        if is_active:
+            # Custom scenario takes precedence for active_start_agent
+            active_start_agent = scenario.start_agent
+            active_scenario_icon = scenario.icon
+
+    return {
+        "status": "success",
+        "session_id": session_id,
+        "total": len(session_scenario_list) + len(builtin_scenario_list),
+        "active_scenario": active_name,
+        "active_start_agent": active_start_agent,
+        "active_scenario_icon": active_scenario_icon,
+        # Combine all scenarios - builtin first as templates, then custom
+        "scenarios": builtin_scenario_list + session_scenario_list,
+        # Keep separate arrays for backwards compatibility
+        "custom_scenarios": session_scenario_list,
+        "builtin_scenarios": builtin_scenario_list,
     }
 
 

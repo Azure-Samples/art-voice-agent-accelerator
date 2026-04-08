@@ -573,10 +573,10 @@ def get_scenario_agents(
             if override.description is not None:
                 agent.description = override.description
 
-            if override.voice_name is not None and hasattr(agent, "voice"):
-                agent.voice["name"] = override.voice_name
-            if override.voice_rate is not None and hasattr(agent, "voice"):
-                agent.voice["rate"] = override.voice_rate
+            if override.voice_name is not None and hasattr(agent, "voice") and agent.voice:
+                agent.voice.name = override.voice_name
+            if override.voice_rate is not None and hasattr(agent, "voice") and agent.voice:
+                agent.voice.rate = override.voice_rate
 
             merged.update(override.template_vars)
 

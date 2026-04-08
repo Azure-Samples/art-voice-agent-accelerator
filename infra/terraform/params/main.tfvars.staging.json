@@ -22,6 +22,12 @@
       "capacity": 300
     },
     {
+      "name": "gpt-4o-mini",
+      "version": "2024-07-18",
+      "sku_name": "DataZoneStandard",
+      "capacity": 300
+    },
+    {
       "name": "gpt-4.1-mini",
       "version": "2025-04-14",
       "sku_name": "DataZoneStandard",

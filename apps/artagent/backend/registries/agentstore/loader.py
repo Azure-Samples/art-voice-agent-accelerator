@@ -25,6 +25,7 @@ from apps.artagent.backend.registries.agentstore.base import (
     UnifiedAgent,
     VoiceConfig,
 )
+from apps.artagent.backend.src.orchestration.naming import find_agent_by_name
 from utils.ml_logging import get_logger
 
 logger = get_logger("agents.loader")
@@ -197,6 +198,7 @@ def load_agent(
         session=session_raw,
         prompt_template=prompt_template,
         tool_names=raw.get("tools", []),
+        mcp_servers=raw.get("mcp_servers", []),
         template_vars=template_vars,
         metadata=raw.get("metadata", {}),
         source_dir=agent_dir,
@@ -234,6 +236,8 @@ def discover_agents(agents_dir: Path = AGENTS_DIR) -> dict[str, UnifiedAgent]:
         if agent_file.exists():
             try:
                 config = load_agent(agent_file, defaults)
+                # Store with original name (preserving casing)
+                # Use find_agent_by_name() for case-insensitive lookups
                 agents[config.name] = config
                 logger.debug("Loaded agent: %s from %s", config.name, item.name)
             except Exception as e:
@@ -280,6 +284,7 @@ def build_agent_summaries(agents: dict[str, UnifiedAgent]) -> list[dict[str, Any
                 "return_greeting": bool(agent.return_greeting),
                 "tool_count": len(tools),
                 "tools_preview": tools[:5],
+                "mcp_servers": list(agent.mcp_servers or []),
                 "handoff_trigger": agent.handoff.trigger if agent.handoff else None,
                 "model": getattr(agent.model, "deployment_id", None),
                 "voice": getattr(agent.voice, "name", None),
@@ -289,9 +294,10 @@ def build_agent_summaries(agents: dict[str, UnifiedAgent]) -> list[dict[str, Any
 
 
 def get_agent(name: str, agents_dir: Path = AGENTS_DIR) -> UnifiedAgent | None:
-    """Load a single agent by name."""
+    """Load a single agent by name (case-insensitive)."""
     agents = discover_agents(agents_dir)
-    return agents.get(name)
+    _, agent = find_agent_by_name(agents, name)
+    return agent
 
 
 def list_agent_names(agents_dir: Path = AGENTS_DIR) -> list[str]:

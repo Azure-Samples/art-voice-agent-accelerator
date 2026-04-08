@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 def build_startup_dashboard(
     app: FastAPI,
     startup_results: list[tuple[str, float]],
+    deferred_steps: list[str] | None = None,
 ) -> str:
     """
     Build a clean, developer-friendly startup summary.
@@ -25,6 +26,7 @@ def build_startup_dashboard(
     - Environment and configuration
     - Key endpoints for testing
     - Any warnings or issues
+    - Deferred tasks running in background
     """
     from apps.artagent.backend.config import (
         ACS_CONNECTION_STRING,
@@ -83,6 +85,12 @@ def build_startup_dashboard(
     if len(step_summary) > 55:
         step_summary = step_summary[:52] + "..."
     lines.append(f"    ({step_summary})")
+
+    # Show deferred steps if any
+    if deferred_steps:
+        deferred_str = ", ".join(deferred_steps)
+        lines.append(f"    Deferred: {deferred_str} (running in background)")
+
     lines.append("")
 
     # Key endpoints (most useful for developers)
@@ -93,6 +101,7 @@ def build_startup_dashboard(
     if ENABLE_DOCS and REDOC_URL:
         lines.append(f"    ReDoc:       {base_url}{REDOC_URL}")
     lines.append(f"    Health:      {base_url}/api/v1/health")
+    lines.append(f"    Ready:       {base_url}/api/v1/ready")
     lines.append("")
 
     # Show loaded agents

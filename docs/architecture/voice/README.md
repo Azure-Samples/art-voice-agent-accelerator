@@ -1,371 +1,479 @@
 # Voice Processing Architecture
 
-The voice module handles all real-time voice interactions including Speech-to-Text (STT), Language Model orchestration, and Text-to-Speech (TTS) for both web browsers and telephone calls.
+This guide explains how voice interactions work in the ART Voice Agent Accelerator.
 
-## Overview
+---
 
-The voice system supports two transport types:
-- **Browser**: WebRTC audio at 48kHz for web applications
-- **ACS (Azure Communication Services)**: Telephony audio at 16kHz for phone calls
+## Three Patterns on the Managed Services Spectrum
 
-## Directory Structure
+There are **three distinct patterns** for building voice AI applications. The spectrum ranges from **full control** (you manage each component) to **fully managed** (the platform handles audio end-to-end):
 
-```
-voice/
-├── handler.py                  Main VoiceHandler (recommended)
-├── tts/                        Text-to-Speech module
-│   └── playback.py             TTS audio playback
-├── speech_cascade/             Speech processing pipeline
-│   ├── handler.py              3-thread speech handler (STT, Turn, Barge-in)
-│   ├── orchestrator.py         LLM routing and turn management
-│   ├── tts_processor.py        Text utilities (markdown cleanup, sentence detection)
-│   └── metrics.py              Telemetry and metrics
-├── shared/                     Shared utilities
-│   ├── context.py              Session context for dependency injection
-│   └── config_resolver.py     Orchestrator configuration
-└── messaging/                  WebSocket helpers
-    ├── transcripts.py          Transcript message formatting
-    └── barge_in.py             Interrupt handling
-```
+=== "Cascade"
 
-## Key Components
+    **:material-tune-vertical: Maximum Control**
+    
+    You independently configure and tune each layer of the voice pipeline with full flexibility over models, regions, and deployment options.
+    
+    | Component | Options |
+    |-----------|---------|
+    | **Speech-to-Text** | Azure Speech, Whisper (via Azure OpenAI), or custom fine-tuned STT models |
+    | **Language Model** | Foundry Models, swap models without code changes |
+    | **Text-to-Speech** | [Azure Neural Voices](https://learn.microsoft.com/azure/ai-services/speech-service/language-support?tabs=tts), Custom Neural Voice, or fine-tuned TTS models |
+    | **Telephony** | Azure Communication Services |
+    | **Deployment** | Cloud, hybrid, or on-premises via [Speech containers](https://learn.microsoft.com/azure/ai-services/speech-service/speech-container-overview) |
+    
+    **Best for:**
+    
+    - **Custom voice personas** — Train [Custom Neural Voice](https://learn.microsoft.com/azure/ai-services/speech-service/custom-neural-voice) with your brand voice
+    - **Domain-specific recognition** — [Fine-tune STT](https://learn.microsoft.com/azure/ai-services/speech-service/how-to-custom-speech-create-project) with industry vocabulary
+    - **Data residency** — Deploy Speech containers on-premises for air-gapped environments
+    - **Model flexibility** — Use Whisper for multilingual STT, GPT-4o for reasoning
+    - **Per-component debugging** — Isolate issues in STT, LLM, or TTS independently
 
-### VoiceHandler
+=== "VoiceLive"
 
-The main entry point for voice interactions. Manages the complete lifecycle of a voice session.
+    **:material-auto-fix: Managed Pipeline with Full Customization**
 
-**Location:** `apps/artagent/backend/voice/handler.py`
+    Azure-managed voice pipeline with **extensive model and voice options**. See [VoiceLive language support](https://learn.microsoft.com/azure/ai-services/speech-service/voice-live-language-support) for current availability.
 
-```python
-from apps.artagent.backend.voice import VoiceHandler, VoiceSessionContext
+    | Component | Options |
+    |-----------|---------|
+    | **Speech-to-Text** | [Azure Speech](https://learn.microsoft.com/azure/ai-services/speech-service/voice-live-language-support?tabs=speechinput): multilingual model (15 locales), single language, or up to 10 defined languages; phrase lists; [Custom Speech](https://learn.microsoft.com/azure/ai-services/speech-service/custom-speech-overview) models |
+    | **Language Model** | [Foundry Models](https://learn.microsoft.com/azure/ai-services/speech-service/voice-live-quickstart?tabs=foundry-new%2Clinux%2Ckeyless&pivots=programming-language-python), or [bring your own model](https://learn.microsoft.com/azure/ai-services/speech-service/how-to-bring-your-own-model) |
+    | **Text-to-Speech** | [Azure Neural Voices](https://learn.microsoft.com/azure/ai-services/speech-service/language-support?tabs=tts), HD voices with temperature control, [Custom Neural Voice](https://learn.microsoft.com/azure/ai-services/speech-service/custom-neural-voice), custom lexicon |
+    | **Telephony** | Azure Communication Services |
+    | **Audio Features** | Noise suppression, echo cancellation, advanced end-of-turn detection, interruption handling |
 
-# Create session context
-context = VoiceSessionContext(
-    session_id=session_id,
-    websocket=ws,
-    transport=TransportType.BROWSER,  # or TransportType.ACS
-    cancel_event=asyncio.Event(),
-    current_agent=agent
-)
+    !!! warning "Managed ≠ Locked-In"
+        VoiceLive is Azure-managed, but you retain **full control over STT and TTS customization**. You can configure phrase lists, custom speech models, custom lexicons, and custom neural voices—the pipeline optimization is managed, not the models themselves.
 
-# Create and start handler
-handler = await VoiceHandler.create(config, app_state)
-await handler.start()
+    **Best for:**
 
-# Cleanup when done
-await handler.stop()
-```
+    - **Managed infrastructure** — Azure handles the pipeline optimization
+    - **Domain-specific accuracy** — Phrase lists + Custom Speech for industry vocabulary
+    - **Brand voice** — Custom Neural Voice or HD voices with temperature control
+    - **Production audio quality** — Built-in noise suppression and echo cancellation
+    - **Custom LLM** — [Bring your own model](https://learn.microsoft.com/azure/ai-services/speech-service/how-to-bring-your-own-model) for specialized reasoning or fine-tuned models
 
-### Text-to-Speech (TTS)
+=== "Direct Realtime"
 
-Converts text responses into audio and streams them to the user.
+    **:material-cloud: Fully Managed**
+    
+    Everything handled by a single API—you only define tools.
+    
+    | Component | Service |
+    |-----------|---------|
+    | Audio + STT + LLM + TTS | OpenAI Realtime API |
+    | Telephony | Optional (ACS or browser-only) |
+    
+    **Best for:** Rapid prototyping, browser-based demos, scenarios where you don't need STT/TTS customization.
 
-**Location:** `apps/artagent/backend/voice/tts/playback.py`
+---
 
-```python
-from apps.artagent.backend.voice.tts import TTSPlayback
+### Comparison
 
-# Create TTS instance
-tts = TTSPlayback(context, app_state)
+| | Cascade | VoiceLive | Direct Realtime |
+|---|:---:|:---:|:---:|
+| **Control Level** | Full | Managed | Minimal |
+| **STT Options** | [Azure Speech](https://learn.microsoft.com/azure/ai-services/speech-service/speech-to-text), [Whisper](https://learn.microsoft.com/azure/ai-services/openai/whisper-quickstart), [Custom Speech](https://learn.microsoft.com/azure/ai-services/speech-service/custom-speech-overview) | Azure Speech (multilingual: 15 locales, or up to 10 defined), Custom Speech | OpenAI built-in only |
+| **TTS Options** | [Azure Neural Voices](https://learn.microsoft.com/azure/ai-services/speech-service/language-support?tabs=tts), [Custom Neural Voice](https://learn.microsoft.com/azure/ai-services/speech-service/custom-neural-voice) | Azure Neural Voices, HD voices, Custom Neural Voice | OpenAI voices only |
+| **LLM Options** | [Any Azure OpenAI model](https://learn.microsoft.com/azure/ai-services/openai/concepts/models) | Foundry Models or [bring your own](https://learn.microsoft.com/azure/ai-services/speech-service/how-to-bring-your-own-model) | GPT-4o Realtime only |
+| **Phrase Lists** | :white_check_mark: [Supported](https://learn.microsoft.com/azure/ai-services/speech-service/improve-accuracy-phrase-list) | :white_check_mark: Supported | :material-close: Not supported |
+| **Custom Lexicon** | :white_check_mark: [Supported](https://learn.microsoft.com/azure/ai-services/speech-service/speech-synthesis-markup-pronunciation) | :white_check_mark: Supported | :material-close: Not supported |
+| **Audio Quality** | Manual configuration | Noise suppression, echo cancellation | Basic |
+| **Component Swapping** | :white_check_mark: Full control | :material-alert: STT/TTS configurable, pipeline managed | :material-close: Managed pipeline |
+| **On-Premises Deployment** | :white_check_mark: [Speech containers](https://learn.microsoft.com/azure/ai-services/speech-service/speech-container-overview) + local SLMs/LLMs | :material-close: Cloud only | :material-close: Cloud only |
+| **Latency** | Varies by configuration | Optimized pipeline | Optimized pipeline |
+| **Debugging** | Per-component isolation | End-to-end tracing | End-to-end tracing |
+| **ACS Telephony** | :white_check_mark: Supported | :white_check_mark: Supported | Optional |
+| **In This Accelerator** | :white_check_mark: Implemented | :white_check_mark: Implemented | :material-close: Not implemented |
 
-# Speak to user (automatically routes to browser or ACS)
-await tts.speak("Hello! How can I help you?")
-```
+!!! note "Latency depends on many factors"
+    Actual latency varies based on network conditions, model deployment region, utterance length, and configuration. Run your own benchmarks for production planning.
 
-**Key Features:**
-- Automatic transport routing (browser vs telephony)
-- Voice customization per agent
-- Cancellation support for barge-in
-- Streaming for low latency
+!!! info "Why not Direct Realtime?"
+    Direct Realtime *can* integrate with ACS for telephony, but offers no fine-tuning capabilities—no custom voices, no phrase lists, no per-component observability. This accelerator focuses on **Cascade** and **VoiceLive** because they provide the enterprise controls needed for production deployments.
 
-### Speech Cascade
+---
 
-Processes user speech through a multi-threaded pipeline:
+### What This Accelerator Showcases
 
-1. **STT Thread**: Converts audio to text using Azure Speech Services
-2. **Turn Thread**: Routes conversation turns to appropriate LLM/agent
-3. **Barge-in Thread**: Handles user interruptions during agent responses
+Both implemented patterns use **Azure Communication Services (ACS)** for telephony:
 
-**Location:** `apps/artagent/backend/voice/speech_cascade/`
+- **Phone numbers & PSTN** — Real phone calls, not just browser demos
+- **Media streaming** — Secure WebSocket bridge between calls and your backend  
+- **Shared infrastructure** — Same agent registry, tools, handoffs, and session management across both modes
 
-The cascade orchestrator manages this flow and coordinates between threads.
+---
 
-### VoiceSessionContext
+## Shared Components
 
-A shared context object that holds all session state, enabling clean dependency injection.
+Both Cascade and VoiceLive share the **same core infrastructure**, making it easy to switch between them or run both in parallel:
 
-```python
-from apps.artagent.backend.voice.shared import VoiceSessionContext, TransportType
-
-context = VoiceSessionContext(
-    session_id="unique-session-id",
-    websocket=websocket_connection,
-    transport=TransportType.BROWSER,
-    cancel_event=asyncio.Event(),
-    current_agent=agent_instance
-)
-```
-
-## Audio Specifications
-
-### Browser Transport (48kHz)
-- **Sample Rate**: 48,000 Hz
-- **Format**: PCM16 mono
-- **Chunk Size**: 9,600 bytes (100ms per chunk)
-- **Encoding**: Base64-encoded JSON over WebSocket
-
-### ACS Telephony Transport (16kHz)
-- **Sample Rate**: 16,000 Hz
-- **Format**: PCM16 mono
-- **Chunk Size**: 1,280 bytes (40ms per chunk)
-- **Pacing**: 40ms delay between chunks
-- **Encoding**: Base64-encoded ACS AudioData messages
-
-## Common Usage Patterns
-
-### Starting a Voice Session
-
-```python
-from apps.artagent.backend.voice import VoiceHandler, VoiceSessionContext, TransportType
-
-# 1. Create session context with all needed state
-context = VoiceSessionContext(
-    session_id=f"session-{uuid.uuid4()}",
-    websocket=websocket,
-    transport=TransportType.BROWSER,
-    cancel_event=asyncio.Event(),
-    current_agent=initial_agent
-)
-
-# 2. Initialize voice handler
-handler = await VoiceHandler.create(agent_config, app_state)
-await handler.start()
-
-# Handler automatically manages STT, orchestration, and TTS
+```mermaid
+flowchart TB
+    subgraph Shared[Shared Infrastructure]
+        Agents[Agent Registry]
+        Tools[Tool Registry]
+        Scenarios[Scenario Store]
+        Handoff[HandoffService]
+        Greeting[GreetingService]
+        Session[Session Management]
+    end
+    
+    subgraph Cascade[Cascade Mode]
+        CH[Cascade Handler]
+        CO[CascadeOrchestrator]
+    end
+    
+    subgraph VoiceLive[VoiceLive Mode]
+        VH[VoiceLive Handler]
+        VO[LiveOrchestrator]
+    end
+    
+    CH --> Shared
+    CO --> Shared
+    VH --> Shared
+    VO --> Shared
+    
+    style Shared fill:#E6FFE6,stroke:#107C10
+    style Cascade fill:#E6F3FF,stroke:#0078D4
+    style VoiceLive fill:#FFF4CE,stroke:#FFB900
 ```
 
-### Playing Audio to User
+| Shared Component | Purpose |
+|------------------|---------|
+| **Agent Registry** | YAML-defined agents with prompts, tools, voice settings |
+| **Tool Registry** | Business logic tools (auth, fraud, account lookup) |
+| **Scenario Store** | Industry scenarios with handoff graphs |
+| **HandoffService** | Unified agent switching logic |
+| **GreetingService** | Template-based greeting resolution |
+| **Session Management** | Redis-backed call state |
 
-```python
-from apps.artagent.backend.voice.tts import TTSPlayback
+This shared architecture means your **agents, tools, and business logic work identically** in both modes—only the voice pipeline differs.
 
-# Create TTS instance
-tts = TTSPlayback(context, app_state)
+---
 
-# Simple speak (uses agent's default voice)
-await tts.speak("Your account balance is $1,234.56")
+## Enterprise Considerations
 
-# Custom voice override
-await tts.speak(
-    "Welcome to our bank!",
-    voice_name="en-US-JennyNeural",
-    style="friendly"
-)
+Both Cascade and VoiceLive are **well-suited for enterprise deployment** because they offer granular control over the voice pipeline and support custom business logic:
+
+### Cascade: Maximum Control
+
+**Choose Cascade when you need control over:**
+
+| Capability | Options |
+|------------|---------|
+| **STT models** | Azure Speech, Whisper (via Azure OpenAI), or [custom fine-tuned STT](https://learn.microsoft.com/azure/ai-services/speech-service/how-to-custom-speech-create-project) |
+| **TTS models** | [Azure Neural Voices](https://learn.microsoft.com/azure/ai-services/speech-service/language-support?tabs=tts), [Custom Neural Voice](https://learn.microsoft.com/azure/ai-services/speech-service/custom-neural-voice), or fine-tuned voices |
+| **LLM selection** | GPT-4, GPT-4o, GPT-4o-mini, or other Azure OpenAI models |
+| **Regional deployment** | Deploy each service in specific Azure regions for data residency |
+| **On-premises** | [Speech containers](https://learn.microsoft.com/azure/ai-services/speech-service/speech-container-overview) for air-gapped or hybrid environments |
+
+**Custom model examples:**
+
+```yaml
+# Use Whisper for multilingual STT
+stt:
+  type: whisper
+  deployment_id: whisper-large
+  
+# Use Custom Neural Voice for brand persona
+tts:
+  type: custom
+  endpoint: https://eastus.customvoice.api.speech.microsoft.com
+  voice_id: contoso-brand-voice
 ```
 
-### Processing Text for TTS
+> 📖 **Learn more:** [Speech containers](https://learn.microsoft.com/azure/ai-services/speech-service/speech-container-overview), [Custom Speech fine-tuning](https://learn.microsoft.com/azure/ai-services/speech-service/how-to-custom-speech-create-project), [Custom Neural Voice](https://learn.microsoft.com/azure/ai-services/speech-service/custom-neural-voice)
 
-Some LLM responses contain markdown or formatting that needs cleaning:
+### VoiceLive: Azure-Managed with Full Customization
 
-```python
-from apps.artagent.backend.voice.speech_cascade.tts_processor import TTSTextProcessor
+**VoiceLive provides STT/TTS customization** within a managed pipeline. Based on [Microsoft's VoiceLive language support](https://learn.microsoft.com/azure/ai-services/speech-service/voice-live-language-support):
 
-# Remove markdown formatting
-clean_text = TTSTextProcessor.sanitize_tts_text(
-    "**Bold text** and _italic text_"
-)
-# Result: "Bold text and italic text"
+**Speech Input (STT) Language Options:**
 
-# Split streaming text into complete sentences
-sentences, buffer = TTSTextProcessor.process_streaming_text(
-    llm_chunk,
-    previous_buffer
-)
+| Option | Description |
+|--------|-------------|
+| **Automatic Multilingual** | Default model supporting 15 locales: zh-CN, en-AU, en-CA, en-IN, en-GB, en-US, fr-CA, fr-FR, de-DE, hi-IN, it-IT, ja-JP, ko-KR, es-MX, es-ES |
+| **Single Language** | Configure one specific language for optimal accuracy |
+| **Multiple Languages** | Up to 10 defined languages for broader coverage |
+| **Phrase List** | Just-in-time vocabulary hints (product names, acronyms) |
+| **Custom Speech** | Fine-tuned STT models trained on your domain data |
+
+**Speech Output (TTS) Customization:**
+
+| Option | Description |
+|--------|-------------|
+| **Azure Neural Voices** | [All supported voices](https://learn.microsoft.com/azure/ai-services/speech-service/language-support?tabs=tts) via `azure-standard` type (monolingual, multilingual, HD) |
+| **Custom Lexicon** | Pronunciation customization for terms |
+| **Custom Neural Voice** | Brand voice trained on your audio via `azure-custom` type |
+| **Custom Avatar** | Photorealistic video avatar (optional) |
+
+**Example configuration with custom models:**
+
+```json
+// STT with phrase list and custom speech
+{
+  "session": {
+    "input_audio_transcription": {
+      "model": "azure-speech",
+      "phrase_list": ["Neo QLED TV", "AutoQuote Explorer"],
+      "custom_speech": {
+        "zh-CN": "847cb03d-7f22-4b11-xxx"  // Custom model ID
+      }
+    }
+  }
+}
+
+// TTS with Azure neural voice and custom lexicon
+{
+  "voice": {
+    "name": "en-US-Ava:DragonHDLatestNeural",
+    "type": "azure-standard",
+    "temperature": 0.8,
+    "custom_lexicon_url": "<lexicon-url>"
+  }
+}
+
+// TTS with Custom Neural Voice
+{
+  "voice": {
+    "name": "en-US-CustomNeural",
+    "type": "azure-custom",
+    "endpoint_id": "your-endpoint-id"
+  }
+}
 ```
 
-## Best Practices
+> 📖 **Learn more:** [VoiceLive customization](https://learn.microsoft.com/azure/ai-services/speech-service/voice-live-how-to-customize), [Custom Speech](https://learn.microsoft.com/azure/ai-services/speech-service/custom-speech-overview), [Custom Neural Voice](https://learn.microsoft.com/azure/ai-services/speech-service/custom-neural-voice)
 
-### DO ✅
+!!! tip "When to use custom STT/TTS models"
+    Both Cascade and VoiceLive support the **same custom model options**. Consider fine-tuning when you need:
+    
+    - **Domain-specific vocabulary** — Medical terminology, legal jargon, financial products
+    - **Locale-specific accents** — Regional dialects, non-native speakers, industry slang
+    - **Brand voice consistency** — Custom Neural Voice trained on your brand persona
+    - **Improved recognition accuracy** — Proper nouns, product names, acronyms unique to your business
+    
+    **Choose based on:**
+    
+    - **Cascade** — You need to swap LLM models, run on-premises, or debug each component independently
+    - **VoiceLive** — You want lowest latency and managed infrastructure (same STT/TTS customization, simpler ops)
 
-1. **Use VoiceSessionContext** for passing session state
 
-    ```python
-    # Good - clean dependency injection
-    context = VoiceSessionContext(session_id=id, websocket=ws, ...)
-    tts = TTSPlayback(context, app_state)
-    ```
+**Bottom line:** Both Cascade and VoiceLive support extensive STT/TTS customization (Custom Speech, Custom Neural Voice, phrase lists, custom lexicon). VoiceLive adds HD voices and built-in audio quality features. Choose **Cascade** when you need on-premises deployment, component swapping, or per-component debugging. Choose **VoiceLive** for simpler operations and production audio quality features.
 
-2. **Let TTS auto-route transports**
+---
 
-    ```python
-    # Good - automatically handles browser vs ACS
-    await tts.speak(text)
-    ```
+## Voice Call Lifecycle
 
-3. **Handle cancellation for barge-in**
+Both modes share the same high-level call lifecycle:
 
-    ```python
-    # Good - supports user interruptions
-    context.cancel_event.set()  # Stops current TTS
-    ```
+```mermaid
+sequenceDiagram
+    actor Caller
+    participant ACS
+    participant Handler as Voice Handler
+    participant Agent
 
-### DON'T ❌
-
-1. **Don't manually manage transports**
-
-    ```python
-    # Bad - unnecessary complexity
-    if transport == "browser":
-        await tts.play_to_browser(text)
-    else:
-        await tts.play_to_acs(text)
-    ```
-
-2. **Don't confuse TTS playback with text processing**
-
-    ```python
-    # Bad - tts_processor is not for audio playback
-    from voice.speech_cascade.tts_processor import TTSTextProcessor
-    # This class only handles text utilities, not audio
-    ```
-
-3. **Don't forget to clean up handlers**
-
-    ```python
-    # Bad - can cause resource leaks
-    handler = await VoiceHandler.create(config, app_state)
-    # ... use handler ...
-    # Missing: await handler.stop()
-    ```
-
-## Telemetry
-
-The voice system emits OpenTelemetry spans for monitoring:
-
-```
-tts.synthesize
-├── attributes: voice, style, rate, sample_rate, text_length
-└── duration: synthesis time
-
-tts.stream.browser | tts.stream.acs
-├── attributes: transport, audio_bytes, chunks_sent
-└── duration: streaming time
-
-cascade.process_turn
-├── invoke_agent {agent_name}
-└── tts.synthesize + tts.stream
+    Caller->>ACS: Dial
+    ACS->>Handler: CallConnected
+    Handler->>Agent: Load Agent
+    Agent-->>Handler: Greeting
+    Handler-->>ACS: TTS Audio
+    ACS-->>Caller: Hello!
+    
+    rect rgb(230, 243, 255)
+        Note over Caller,Agent: Conversation Turn
+        Caller->>ACS: Check my balance
+        ACS->>Handler: Audio Stream
+        Handler->>Handler: STT
+        Handler->>Agent: Transcript
+        Agent-->>Handler: Response
+        Handler-->>ACS: TTS Audio
+        ACS-->>Caller: Your balance is...
+    end
+    
+    Caller->>ACS: Hangup
+    ACS->>Handler: CallDisconnected
 ```
 
-Custom metrics tracked:
-- `tts.synthesis.duration_ms` - TTS generation time
-- `tts.stream.duration_ms` - Audio streaming time
-- `tts.stream.chunks_sent` - Number of audio chunks
-- `tts.stream.audio_bytes` - Total audio size
+---
 
-## Troubleshooting
+## Mode Comparison
 
-### Audio sounds slow or distorted (ACS only)
+| Capability | Cascade | VoiceLive | Direct Realtime |
+|------------|---------|-----------|-----------------|
+| **Telephony (PSTN)** | ✅ ACS | ✅ ACS | Optional (ACS) |
+| **STT Provider** | [Azure Speech](https://learn.microsoft.com/azure/ai-services/speech-service/speech-to-text) / [Whisper](https://learn.microsoft.com/azure/ai-services/openai/whisper-quickstart) | [Azure Speech](https://learn.microsoft.com/azure/ai-services/speech-service/voice-live-language-support?tabs=speechinput) (multilingual: 15 locales, or up to 10 defined) | OpenAI Realtime |
+| **Custom Speech (STT)** | ✅ [Supported](https://learn.microsoft.com/azure/ai-services/speech-service/custom-speech-overview) | ✅ Supported | ❌ Not supported |
+| **LLM Provider** | [Azure OpenAI](https://learn.microsoft.com/azure/ai-services/openai/concepts/models) (any model) | [Foundry Models](https://learn.microsoft.com/azure/ai-services/speech-service/voice-live) or bring your own | GPT-4o Realtime |
+| **TTS Provider** | [Azure Neural Voices](https://learn.microsoft.com/azure/ai-services/speech-service/language-support?tabs=tts) | [Azure Neural Voices](https://learn.microsoft.com/azure/ai-services/speech-service/language-support?tabs=tts) + HD + Custom | OpenAI voices |
+| **Voice Selection** | [Azure Neural Voices](https://learn.microsoft.com/azure/ai-services/speech-service/language-support?tabs=tts) | Azure Neural Voices | OpenAI voices |
+| **HD Voices** | ❌ Not supported | ✅ With temperature control | ❌ Not supported |
+| **Custom Neural Voice** | ✅ [Supported](https://learn.microsoft.com/azure/ai-services/speech-service/custom-neural-voice) | ✅ Supported | ❌ Not supported |
+| **Phrase Lists** | ✅ [Supported](https://learn.microsoft.com/azure/ai-services/speech-service/improve-accuracy-phrase-list) | ✅ Supported | ❌ Not supported |
+| **Custom Lexicon** | ✅ [Supported](https://learn.microsoft.com/azure/ai-services/speech-service/speech-synthesis-markup-pronunciation) | ✅ Supported | ❌ Not supported |
+| **Audio Quality** | Manual configuration | ✅ Noise suppression, echo cancellation | Basic |
+| **Barge-in** | Client-side VAD | Advanced end-of-turn detection | Server-side VAD |
+| **Latency** | Varies by configuration | Optimized pipeline | Optimized pipeline |
+| **Debugging** | Per-component isolation | End-to-end tracing | End-to-end tracing |
+| **In This Accelerator** | ✅ Implemented | ✅ Implemented | ❌ Not implemented |
 
-**Check**: Verify chunk size is 1,280 bytes (not 640)
+---
 
-```python
-# In logs, look for:
-# chunk_size=1280 (correct)
-# NOT chunk_size=640 (incorrect)
+## Cascade Architecture
+
+Cascade orchestrates **three Azure services** with a three-thread design for low latency:
+
+```mermaid
+flowchart TB
+    subgraph T1[Thread 1: Speech SDK]
+        direction TB
+        A[/Audio In/] --> B[Continuous Recognition]
+        B --> C{Partial?}
+        C -->|Yes| D[Barge-in Signal]
+        C -->|No| E[Final Transcript]
+    end
+    
+    subgraph Q[Speech Queue]
+        F[(Events)]
+    end
+    
+    subgraph T2[Thread 2: Route Turn]
+        direction TB
+        G[Process Turn] --> H[LLM Call]
+        H --> I[TTS Response]
+    end
+    
+    subgraph T3[Thread 3: Main Loop]
+        J[Task Cancellation]
+        K[WebSocket]
+    end
+    
+    D -.->|interrupt| J
+    E --> F
+    F --> G
+    
+    style T1 fill:#E6F3FF,stroke:#0078D4
+    style T2 fill:#E6FFE6,stroke:#107C10
+    style T3 fill:#FFF4CE,stroke:#FFB900
+    style Q fill:#F3F2F1,stroke:#605E5C
 ```
 
-**Location**: `apps/artagent/backend/voice/tts/playback.py:490`
+**How it works:**
 
-### No audio playing
+1. **Thread 1** — Azure Speech SDK streams audio, emits partials (for barge-in) and finals
+2. **Thread 2** — Processes complete utterances through Azure OpenAI, streams TTS per sentence
+3. **Thread 3** — Handles WebSocket lifecycle and task cancellation
 
-1. Check WebSocket connection is active
-2. Verify TTS synthesis succeeded (check logs for "Synthesis complete")
-3. Confirm transport type matches endpoint (browser vs ACS)
-4. Check for cancellation events interrupting playback
+**Key files:** `voice/speech_cascade/handler.py`, `voice/speech_cascade/orchestrator.py`
 
-### High latency
+---
 
-Typical TTS latencies:
-- Synthesis: 100-500ms (depends on text length)
-- First chunk: +50-100ms (encoding + network)
-- Total TTFB: 150-600ms
+## VoiceLive Architecture
 
-If higher, check:
-- Azure region proximity
-- Network connectivity
-- TTS pool health: `/api/v1/tts/health`
+VoiceLive uses the **Azure VoiceLive SDK** — a single WebSocket connection to Azure that handles audio in, speech recognition, LLM, and audio out:
 
-## Testing
+```mermaid
+flowchart LR
+    subgraph Client[ACS / Browser]
+        Audio[Audio Stream]
+    end
 
-### Prerequisites
+    subgraph Handler[VoiceLive Handler]
+        WS[WebSocket Bridge]
+        Events[Event Router]
+    end
 
-Install test dependencies first:
+    subgraph VoiceLiveAPI[Azure VoiceLive]
+        VAD[Server VAD]
+        STT[Transcription]
+        LLM[Azure OpenAI]
+        TTS[Voice Output]
+    end
 
-```bash
-# Using uv (recommended)
-uv sync --extra dev
+    subgraph Orchestrator[LiveOrchestrator]
+        Tools[Tool Execution]
+        Handoff[Agent Switching]
+    end
 
-# Or using pip
-pip install -e ".[dev]"
+    Audio <--> WS
+    WS <--> VoiceLiveAPI
+    VoiceLiveAPI --> Events
+    Events --> Tools
+    Tools --> Handoff
+
+    style Client fill:#F3F2F1,stroke:#605E5C
+    style Handler fill:#E6F3FF,stroke:#0078D4
+    style VoiceLiveAPI fill:#FFF4CE,stroke:#FFB900
+    style Orchestrator fill:#E6FFE6,stroke:#107C10
 ```
 
-### Unit Tests
+**How it works:**
 
-Run the voice handler component tests:
+1. Audio streams to Azure VoiceLive over WebSocket
+2. Server-side VAD detects speech start/end automatically
+3. Transcription, LLM response, and TTS happen in one round-trip
+4. Handler routes events: tool calls → execute locally, audio deltas → stream to caller
 
-```bash
-# Test all voice handler components (context, TTS playback, agent voice resolution)
-pytest tests/test_voice_handler_components.py -v
+**Key files:** `voice/voicelive/handler.py`, `voice/voicelive/orchestrator.py`
 
-# Test voice handler compatibility layer
-pytest tests/test_voice_handler_compat.py -v
+---
 
-# Test cascade orchestrator functionality
-pytest tests/test_cascade_orchestrator_entry_points.py -v
-pytest tests/test_cascade_llm_processing.py -v
+## Handoff Flow
 
-# Run all voice-related tests
-pytest tests/ -k "voice or cascade" -v
+Both modes use the same **HandoffService** for agent switching:
+
+```mermaid
+sequenceDiagram
+    participant C as Concierge
+    participant HS as HandoffService
+    participant F as FraudAgent
+
+    C->>HS: handoff_fraud()
+    
+    rect rgb(230, 243, 255)
+        HS->>HS: resolve_handoff()
+        Note over HS: Find target agent,<br/>Build system_vars,<br/>Get greeting config
+    end
+    
+    HS-->>C: HandoffResolution
+    C->>F: switch_to()
+    F->>HS: select_greeting()
+    HS-->>F: I'm the Fraud specialist...
 ```
 
-**Optional: Run with coverage reporting** (requires `pytest-cov` from dev dependencies):
+**Handoff Types:**
 
-```bash
-pytest tests/test_voice_handler_components.py --cov=apps.artagent.backend.voice --cov-report=term-missing
-```
+- **Announced** — Target agent plays a greeting (default)
+- **Discrete** — Silent handoff, no greeting
 
-### Integration Testing
+---
 
-Test the full orchestrator pipeline interactively:
+## Key Files
 
-```bash
-# Run interactive orchestrator test (browser mode)
-./devops/scripts/misc/quick_test.sh
+| Component | Cascade | VoiceLive |
+|-----------|---------|-----------|
+| Handler | `voice/speech_cascade/handler.py` | `voice/voicelive/handler.py` |
+| Orchestrator | `voice/speech_cascade/orchestrator.py` | `voice/voicelive/orchestrator.py` |
+| Handoff | `voice/shared/handoff_service.py` | (same) |
+| Greeting | `voice/shared/greeting_service.py` | (same) |
 
-# Or run directly with Python
-python devops/scripts/misc/test_orchestrator.py --interactive
-```
+---
 
-This will test the complete flow: speech recognition → LLM orchestration → TTS playback.
+## Audio Formats
 
-### Manual Testing
+| Transport | Sample Rate | Chunk Size | Notes |
+|-----------|-------------|------------|-------|
+| Browser (WebRTC) | 48 kHz | 9,600 bytes | Base64 over WebSocket |
+| ACS Telephony | 16 kHz | 1,280 bytes | 40ms pacing |
 
-**Browser:**
-1. Start the backend server: `uvicorn apps.artagent.backend.main:app --reload`
-2. Open web UI at `http://localhost:8000`
-3. Start voice conversation
-4. Verify clear audio (not slow/choppy)
-5. Test barge-in by speaking during response
+---
 
-**ACS Telephony:**
-1. Make test call via `/api/v1/call/outbound`
-2. Verify natural audio playback
-3. Test interruptions (DTMF or speech)
-4. Check logs for correct chunk sizes (1,280 bytes for 16kHz)
+## See Also
 
-## Related Documentation
-
-- [Orchestration System](../orchestration/README.md) - How agents are selected and managed
-- [Speech Recognition](../speech/recognition.md) - STT implementation details
-- [Session Management](../data/README.md) - Session state and lifecycle
-- [Telemetry](../telemetry.md) - Monitoring and observability
+- [Voice Configuration Guide](configuration.md) - Agent YAML setup for voice
+- [Voice Debugging Guide](debugging.md) - Troubleshooting voice issues
+- [Orchestrators Reference](../orchestration/orchestrators.md) - Deep dive into both orchestrators

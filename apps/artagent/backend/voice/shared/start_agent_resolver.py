@@ -45,6 +45,8 @@ except ImportError:
     import logging
     logger = logging.getLogger("voice.shared.start_agent_resolver")
 
+from apps.artagent.backend.src.orchestration.naming import find_agent_by_name
+
 
 class StartAgentSource(str, Enum):
     """Source of the resolved start agent."""
@@ -191,16 +193,17 @@ def resolve_start_agent(
         session_id, scenario_name
     )
     if scenario_start:
-        agent = agents.get(scenario_start)
-        if agent:
+        # Use case-insensitive lookup
+        actual_key, agent = find_agent_by_name(agents, scenario_start)
+        if actual_key is not None:
             logger.info(
                 "Start agent resolved from scenario | session=%s scenario=%s agent=%s",
                 session_id,
                 resolved_scenario,
-                scenario_start,
+                actual_key,
             )
             return StartAgentResult(
-                agent_name=scenario_start,
+                agent_name=actual_key,
                 agent=agent,
                 source=StartAgentSource(source_str),
                 scenario_name=resolved_scenario,
@@ -216,14 +219,14 @@ def resolve_start_agent(
     if app_state:
         default_start = getattr(app_state, "start_agent", None)
         if default_start:
-            agent = agents.get(default_start)
-            if agent:
+            actual_key, agent = find_agent_by_name(agents, default_start)
+            if actual_key is not None:
                 logger.info(
                     "Start agent resolved from app state | agent=%s",
-                    default_start,
+                    actual_key,
                 )
                 return StartAgentResult(
-                    agent_name=default_start,
+                    agent_name=actual_key,
                     agent=agent,
                     source=StartAgentSource.APP_STATE,
                 )

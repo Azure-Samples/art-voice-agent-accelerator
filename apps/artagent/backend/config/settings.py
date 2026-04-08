@@ -33,6 +33,7 @@ sys.path.insert(0, str(root_dir))
 #   2. Container/cloud env vars take precedence if already set
 #   3. Azure App Configuration can layer additional config later
 
+
 def _load_dotenv_local():
     """
     Load .env.local file if it exists.
@@ -56,9 +57,9 @@ def _load_dotenv_local():
 
     # Priority order for .env files
     env_files = [
-        backend_dir / ".env.local",      # App-specific local overrides
-        project_root / ".env.local",     # Project-wide local overrides
-        project_root / ".env",           # Default project env (lowest priority)
+        backend_dir / ".env.local",  # App-specific local overrides
+        project_root / ".env.local",  # Project-wide local overrides
+        project_root / ".env",  # Default project env (lowest priority)
     ]
 
     for env_file in env_files:
@@ -197,6 +198,96 @@ AZURE_COSMOS_COLLECTION_NAME: str = os.getenv("AZURE_COSMOS_COLLECTION_NAME", ""
 
 
 # ==============================================================================
+# AZURE AI FOUNDRY (for evaluation)
+# ==============================================================================
+
+AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: str = os.getenv("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT", "")
+
+
+# ==============================================================================
+# MCP (MODEL CONTEXT PROTOCOL) SERVERS
+# ==============================================================================
+# Configuration for external MCP servers that provide tools to agents.
+# Each server is identified by name and configured via environment variables.
+#
+# Format:
+#   MCP_SERVER_<NAME>_URL - HTTP endpoint for the MCP server
+#   MCP_SERVER_<NAME>_TIMEOUT - Request timeout in seconds (default: 30)
+#   MCP_SERVER_<NAME>_TRANSPORT - Transport type: streamable-http, sse, stdio (default: streamable-http)
+#   MCP_SERVER_<NAME>_AUTH_ENABLED - Enable managed identity auth (default: false)
+#   MCP_SERVER_<NAME>_APP_ID - Entra ID app ID for token scope (required if auth enabled)
+#
+# Example:
+#   MCP_SERVER_CARDAPI_URL=https://cardapi-mcp-xxx.azurecontainerapps.io/mcp
+#   MCP_SERVER_CARDAPI_TIMEOUT=30
+#   MCP_SERVER_CARDAPI_AUTH_ENABLED=true
+#   MCP_SERVER_CARDAPI_APP_ID=api://cardapi-mcp-xxx-easyauth
+# ==============================================================================
+
+# Card Decline API MCP Server
+MCP_SERVER_CARDAPI_URL: str = os.getenv("MCP_SERVER_CARDAPI_URL", "")
+MCP_SERVER_CARDAPI_TIMEOUT: float = _env_float("MCP_SERVER_CARDAPI_TIMEOUT", 30.0)
+MCP_SERVER_CARDAPI_TRANSPORT: str = os.getenv("MCP_SERVER_CARDAPI_TRANSPORT", "streamable-http")
+MCP_SERVER_CARDAPI_AUTH_ENABLED: bool = _env_bool("MCP_SERVER_CARDAPI_AUTH_ENABLED", False)
+MCP_SERVER_CARDAPI_APP_ID: str = os.getenv("MCP_SERVER_CARDAPI_APP_ID", "")
+
+# Additional MCP servers can be configured similarly:
+# MCP_SERVER_KNOWLEDGE_URL: str = os.getenv("MCP_SERVER_KNOWLEDGE_URL", "")
+# MCP_SERVER_KNOWLEDGE_TIMEOUT: float = _env_float("MCP_SERVER_KNOWLEDGE_TIMEOUT", 30.0)
+
+# List of enabled MCP servers (comma-separated)
+MCP_ENABLED_SERVERS: list[str] = _env_list("MCP_ENABLED_SERVERS", "cardapi")
+
+# List of required MCP servers that must be healthy at startup
+# If a required server is unreachable, startup will fail
+MCP_REQUIRED_SERVERS: list[str] = _env_list("MCP_REQUIRED_SERVERS", "")
+
+# Default timeout for MCP server health checks and connections (seconds)
+MCP_SERVER_TIMEOUT: float = _env_float("MCP_SERVER_TIMEOUT", 5.0)
+
+
+def get_mcp_server_config(server_name: str) -> dict:
+    """
+    Get MCP server configuration by name.
+
+    Args:
+        server_name: Name of the MCP server (case-insensitive)
+
+    Returns:
+        Dict with url, timeout, transport, auth_enabled, app_id keys, or empty dict if not configured
+    """
+    name_upper = server_name.upper()
+    url = os.getenv(f"MCP_SERVER_{name_upper}_URL", "")
+    
+    if not url:
+        return {}
+
+    return {
+        "name": server_name.lower(),
+        "url": url,
+        "timeout": _env_float(f"MCP_SERVER_{name_upper}_TIMEOUT", 30.0),
+        "transport": os.getenv(f"MCP_SERVER_{name_upper}_TRANSPORT", "streamable-http"),
+        "auth_enabled": _env_bool(f"MCP_SERVER_{name_upper}_AUTH_ENABLED", False),
+        "app_id": os.getenv(f"MCP_SERVER_{name_upper}_APP_ID", ""),
+    }
+
+
+def get_enabled_mcp_servers() -> list[dict]:
+    """
+    Get configurations for all enabled MCP servers.
+
+    Returns:
+        List of server config dicts for servers that are both enabled and configured
+    """
+    servers = []
+    for server_name in MCP_ENABLED_SERVERS:
+        config = get_mcp_server_config(server_name)
+        if config:
+            servers.append(config)
+    return servers
+
+
+# ==============================================================================
 # VOICE & TTS SETTINGS
 # ==============================================================================
 # NOTE: Per-agent voice settings are now defined in each agent's agent.yaml.
@@ -252,6 +343,10 @@ MAX_CONCURRENT_SESSIONS: int = _env_int("MAX_CONCURRENT_SESSIONS", 1000)
 ENABLE_SESSION_PERSISTENCE: bool = _env_bool("ENABLE_SESSION_PERSISTENCE", True)
 SESSION_STATE_TTL: int = _env_int("SESSION_STATE_TTL", 86400)
 
+# Session inactivity timeout (set to 0 or negative to disable)
+SESSION_INACTIVITY_TIMEOUT_S: float = _env_float("SESSION_INACTIVITY_TIMEOUT_S", 300.0)
+SESSION_INACTIVITY_CHECK_INTERVAL_S: float = _env_float("SESSION_INACTIVITY_CHECK_INTERVAL_S", 5.0)
+
 # Speech service pools
 POOL_SIZE_TTS: int = _env_int("POOL_SIZE_TTS", 50)
 POOL_SIZE_STT: int = _env_int("POOL_SIZE_STT", 50)
@@ -266,7 +361,9 @@ WARM_POOL_STT_SIZE: int = _env_int("WARM_POOL_STT_SIZE", 2)
 WARM_POOL_BACKGROUND_REFRESH: bool = _env_bool("WARM_POOL_BACKGROUND_REFRESH", True)
 WARM_POOL_REFRESH_INTERVAL: float = _env_float("WARM_POOL_REFRESH_INTERVAL", 30.0)
 WARM_POOL_SESSION_MAX_AGE: float = _env_float("WARM_POOL_SESSION_MAX_AGE", 1800.0)
-WARM_POOL_RESTART_ON_FAILURE: bool = _env_bool("WARM_POOL_RESTART_ON_FAILURE", False)  # Changed to False for graceful degradation
+WARM_POOL_RESTART_ON_FAILURE: bool = _env_bool(
+    "WARM_POOL_RESTART_ON_FAILURE", False
+)  # Changed to False for graceful degradation
 WARM_POOL_WARMUP_TIMEOUT: float = _env_float("WARM_POOL_WARMUP_TIMEOUT", 10.0)
 WARM_POOL_MAX_RETRIES: int = _env_int("WARM_POOL_MAX_RETRIES", 2)
 
@@ -285,8 +382,9 @@ ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development").lower()
 
 # Documentation (auto-detect based on environment)
 _enable_docs_raw = os.getenv("ENABLE_DOCS", "auto").lower()
+_PROD_ENVIRONMENTS = ("production", "prod", "staging", "uat")
 if _enable_docs_raw == "auto":
-    ENABLE_DOCS = ENVIRONMENT not in ("production", "prod", "staging", "uat")
+    ENABLE_DOCS = ENVIRONMENT not in _PROD_ENVIRONMENTS
 else:
     ENABLE_DOCS = _enable_docs_raw in ("true", "1", "yes", "on")
 
@@ -316,11 +414,12 @@ ENTRA_EXEMPT_PATHS: list[str] = [
     ACS_WEBSOCKET_PATH,
     "/health",
     "/readiness",
+    "/api/v1/health",
+    "/api/v1/readiness",
     "/docs",
     "/redoc",
     "/openapi.json",
     "/metrics",
-    "/v1/health",
 ]
 
 

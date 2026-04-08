@@ -7,7 +7,7 @@ import base64
 import json
 import time
 import uuid
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
 import numpy as np
@@ -65,6 +65,11 @@ from azure.ai.voicelive.models import (
 )
 from azure.core.credentials import AzureKeyCredential, TokenCredential
 from azure.identity.aio import DefaultAzureCredential
+
+# Module-level cached credential to avoid re-probing the credential chain per session.
+# DefaultAzureCredential is thread-safe and reusable across connections.
+_CACHED_CREDENTIAL: DefaultAzureCredential | None = None
+_CREDENTIAL_LOCK = asyncio.Lock()
 from fastapi import WebSocket
 from fastapi.websockets import WebSocketState
 from opentelemetry import trace
@@ -107,38 +112,8 @@ def _safe_primitive(value: Any) -> Any:
     return str(value)
 
 
-# Module-level set to track pending background tasks for cleanup
-# This prevents fire-and-forget tasks from causing memory leaks
-_pending_background_tasks: set[asyncio.Task] = set()
-
-
-def _background_task(coro: Awaitable[Any], *, label: str) -> asyncio.Task:
-    """Create a tracked background task that will be cleaned up on handler stop."""
-    task = asyncio.create_task(coro, name=f"voicelive-bg-{label}")
-    _pending_background_tasks.add(task)
-
-    def _cleanup_task(t: asyncio.Task) -> None:
-        _pending_background_tasks.discard(t)
-        try:
-            t.result()
-        except asyncio.CancelledError:
-            pass  # Expected during cleanup
-        except Exception:
-            logger.debug("Background task '%s' failed", label, exc_info=True)
-
-    task.add_done_callback(_cleanup_task)
-    return task
-
-
-def _cancel_all_background_tasks() -> int:
-    """Cancel all pending background tasks. Returns count of cancelled tasks."""
-    cancelled = 0
-    for task in list(_pending_background_tasks):
-        if not task.done():
-            task.cancel()
-            cancelled += 1
-    _pending_background_tasks.clear()
-    return cancelled
+# Type alias for background task function (used by _SessionMessenger)
+BackgroundTaskFn = Callable[[Awaitable[Any], str], asyncio.Task]
 
 
 def _serialize_session_config(session_obj: Any) -> dict[str, Any] | None:
@@ -177,16 +152,29 @@ def _serialize_session_config(session_obj: Any) -> dict[str, Any] | None:
 class _SessionMessenger:
     """Bridge VoiceLive events to the session-aware WebSocket manager."""
 
-    def __init__(self, websocket: WebSocket) -> None:
+    def __init__(
+        self, websocket: WebSocket, *, background_task_fn: BackgroundTaskFn
+    ) -> None:
         self._ws = websocket
+        self._background_task_fn = background_task_fn
         self._default_sender: str | None = None
         self._missing_session_warned = False
         self._active_turn_id: str | None = None
         self._pending_user_turn_id: str | None = None
         self._active_agent_name: str | None = None
         self._active_agent_label: str | None = None
+        self._turn_sequence: int = 0  # Track tool call boundaries within a turn
+        self._base_turn_id: str | None = None  # Original turn_id before tool calls
+        self._turn_id_advanced: bool = False  # Flag to prevent overwriting advanced turn_id
+        # Deduplication: track (turn_id, text_hash) of sent final messages
+        self._sent_messages: set[tuple[str, int]] = set()
 
     def _ensure_turn_id(self, candidate: str | None, *, allow_generate: bool = True) -> str | None:
+        # If turn_id was advanced (post-tool-call), preserve it and don't overwrite
+        # with the new response_id. This ensures post-tool responses appear as new
+        # messages in the frontend rather than overwriting pre-tool content.
+        if self._turn_id_advanced and self._active_turn_id:
+            return self._active_turn_id
         if candidate:
             self._active_turn_id = candidate
             return candidate
@@ -201,8 +189,51 @@ class _SessionMessenger:
     def _release_turn(self, turn_id: str | None) -> None:
         if turn_id and self._active_turn_id == turn_id:
             self._active_turn_id = None
+            self._turn_id_advanced = False
         elif turn_id is None:
             self._active_turn_id = None
+            self._turn_id_advanced = False
+
+    def advance_turn_for_tool(self) -> str | None:
+        """
+        Advance the turn_id after a tool call to create a new message segment.
+
+        This ensures post-tool assistant responses appear as new messages
+        rather than overwriting pre-tool content in the UI.
+
+        Returns:
+            The new turn_id to use for post-tool responses, or None if no turn active.
+        """
+        if not self._active_turn_id:
+            return None
+
+        # Store original turn_id as base if not already set
+        if not self._base_turn_id:
+            self._base_turn_id = self._active_turn_id
+
+        # Increment sequence and generate new turn_id
+        self._turn_sequence += 1
+        new_turn_id = f"{self._base_turn_id}_s{self._turn_sequence}"
+        self._active_turn_id = new_turn_id
+        
+        # Mark that turn_id was advanced so _ensure_turn_id won't overwrite it
+        self._turn_id_advanced = True
+
+        logger.debug(
+            "[TurnAdvance] Advanced turn_id: base=%s, seq=%d, new=%s",
+            self._base_turn_id,
+            self._turn_sequence,
+            new_turn_id,
+        )
+        return new_turn_id
+
+    def reset_turn_sequence(self) -> None:
+        """Reset turn sequence tracking for a new user turn."""
+        self._turn_sequence = 0
+        self._base_turn_id = None
+        self._turn_id_advanced = False
+        # Clear sent message deduplication cache for new turn
+        self._sent_messages.clear()
 
     def begin_user_turn(self, turn_id: str | None) -> str | None:
         """Initialise a user turn and emit a placeholder streaming message."""
@@ -212,6 +243,8 @@ class _SessionMessenger:
         if self._pending_user_turn_id == turn_id:
             return turn_id
         self._pending_user_turn_id = turn_id
+        # Reset turn sequence for new user turn - post-tool segments start fresh
+        self.reset_turn_sequence()
         if not self._can_emit():
             return turn_id
 
@@ -233,7 +266,7 @@ class _SessionMessenger:
             call_id=self._call_id,
         )
 
-        _background_task(
+        self._background_task_fn(
             send_session_envelope(
                 self._ws,
                 envelope,
@@ -285,7 +318,7 @@ class _SessionMessenger:
                 session_id=self._session_id,
                 call_id=self._call_id,
             )
-            _background_task(
+            self._background_task_fn(
                 send_session_envelope(
                     self._ws,
                     envelope,
@@ -336,7 +369,7 @@ class _SessionMessenger:
         if not text or not self._can_emit():
             return
 
-        _background_task(
+        self._background_task_fn(
             send_user_transcript(
                 self._ws,
                 text,
@@ -370,6 +403,19 @@ class _SessionMessenger:
             return
 
         message_text = text or ""
+        
+        # Deduplication: prevent sending the same message twice for the same turn_id
+        # This can happen when TRANSCRIPT_DONE fires multiple times or events race
+        msg_key = (turn_id, hash(message_text))
+        if msg_key in self._sent_messages:
+            logger.debug(
+                "[Dedup] Skipping duplicate message | turn_id=%s text_len=%d",
+                turn_id,
+                len(message_text),
+            )
+            return
+        self._sent_messages.add(msg_key)
+        
         sender_name = self._resolve_sender(sender)
         payload = {
             "type": "assistant",
@@ -394,7 +440,7 @@ class _SessionMessenger:
         if self._active_agent_name:
             envelope["sender"] = self._active_agent_name
 
-        _background_task(
+        self._background_task_fn(
             send_session_envelope(
                 self._ws,
                 envelope,
@@ -405,7 +451,9 @@ class _SessionMessenger:
             ),
             label="assistant_transcript_envelope",
         )
-        self._release_turn(turn_id)
+        # NOTE: Do NOT call _release_turn() here. The turn_id must remain active
+        # until advance_turn_for_tool() can use it. The turn will be naturally
+        # reset when begin_user_turn() is called for the next user turn.
 
     async def send_assistant_streaming(
         self,
@@ -440,7 +488,7 @@ class _SessionMessenger:
         payload["active_agent"] = self._active_agent_name
         payload["active_agent_label"] = self._active_agent_label
         payload["sender"] = self._active_agent_name
-        _background_task(
+        self._background_task_fn(
             send_session_envelope(
                 self._ws,
                 envelope,
@@ -492,7 +540,7 @@ class _SessionMessenger:
         if self._active_agent_name:
             envelope["sender"] = self._active_agent_name
 
-        _background_task(
+        self._background_task_fn(
             send_session_envelope(
                 self._ws,
                 envelope,
@@ -562,7 +610,7 @@ class _SessionMessenger:
             call_id=self._call_id,
         )
 
-        _background_task(
+        self._background_task_fn(
             send_session_envelope(
                 self._ws,
                 envelope,
@@ -607,7 +655,7 @@ class _SessionMessenger:
             call_id=self._call_id,
         )
 
-        _background_task(
+        self._background_task_fn(
             send_session_envelope(
                 self._ws,
                 envelope,
@@ -626,7 +674,7 @@ class _SessionMessenger:
         if not self._can_emit() or not call_id or not name:
             return
         try:
-            _background_task(
+            self._background_task_fn(
                 push_tool_start(
                     self._ws,
                     name,  # tool_name
@@ -659,7 +707,7 @@ class _SessionMessenger:
             if status == "error":
                 tool_result = {"success": False, "error": error or "Tool execution failed"}
 
-            _background_task(
+            self._background_task_fn(
                 push_tool_end(
                     self._ws,
                     name,  # tool_name
@@ -702,7 +750,14 @@ class VoiceLiveSDKHandler:
         self.websocket = websocket
         self.session_id = session_id
         self.call_connection_id = call_connection_id or session_id
-        self._messenger = _SessionMessenger(websocket)
+
+        # Track pending background tasks at instance level to avoid memory leaks
+        self._pending_background_tasks: set[asyncio.Task] = set()
+
+        # Pass background task function to messenger for tracked task creation
+        self._messenger = _SessionMessenger(
+            websocket, background_task_fn=self._background_task
+        )
         self._transport: VoiceLiveTransport = transport
         self._manual_commit_enabled = transport == "acs"
         self._user_email = user_email
@@ -742,6 +797,33 @@ class VoiceLiveSDKHandler:
     def _set_metadata(self, key: str, value: Any) -> None:
         if not _set_connection_metadata(self.websocket, key, value):
             setattr(self.websocket.state, key, value)
+
+    def _background_task(self, coro: Awaitable[Any], *, label: str) -> asyncio.Task:
+        """Create a tracked background task that will be cleaned up on handler stop."""
+        task = asyncio.create_task(coro, name=f"voicelive-bg-{label}")
+        self._pending_background_tasks.add(task)
+
+        def _cleanup_task(t: asyncio.Task) -> None:
+            self._pending_background_tasks.discard(t)
+            try:
+                t.result()
+            except asyncio.CancelledError:
+                pass  # Expected during cleanup
+            except Exception:
+                logger.debug("Background task '%s' failed", label, exc_info=True)
+
+        task.add_done_callback(_cleanup_task)
+        return task
+
+    def _cancel_all_background_tasks(self) -> int:
+        """Cancel all pending background tasks. Returns count of cancelled tasks."""
+        cancelled = 0
+        for task in list(self._pending_background_tasks):
+            if not task.done():
+                task.cancel()
+                cancelled += 1
+        self._pending_background_tasks.clear()
+        return cancelled
 
     def _get_metadata(self, key: str, default: Any = None) -> Any:
         """Read per-connection metadata from the websocket.state (or default)."""
@@ -835,136 +917,160 @@ class VoiceLiveSDKHandler:
                     session_id=self.session_id,
                     ws=True,
                 )
-                with tracer.start_as_current_span(
-                    "voicelive.connect",
-                    kind=SpanKind.SERVER,
-                    attributes=conn_attrs,
-                ) as conn_span:
-                    self._credential = self._build_credential(self._settings)
-                    self._connection_cm = connect(
-                        endpoint=self._settings.azure_voicelive_endpoint,
-                        credential=self._credential,
-                        model=self._settings.azure_voicelive_model,
-                        connection_options=connection_options,
-                    )
-                    self._connection = await self._connection_cm.__aenter__()
-                    conn_span.set_attribute("voicelive.model", self._settings.azure_voicelive_model)
-
                 # ─────────────────────────────────────────────────────────────
-                # Agent Loading - Prefer unified agents from app.state
+                # PARALLEL PHASE: WebSocket connect + agent/scenario resolution
+                # These are independent and can run concurrently to cut startup time.
                 # ─────────────────────────────────────────────────────────────
-                agents = None
-                orchestrator_config = None
-                
-                # Resolve scenario from multiple sources (priority order):
-                # 1. websocket.state.scenario (set by browser endpoint)
-                # 2. MemoManager corememory (set by media_handler or call setup)
-                # 3. Session-scoped scenario (from ScenarioBuilder)
-                scenario_name = getattr(self.websocket.state, "scenario", None)
-                if not scenario_name:
-                    memo_mgr = getattr(self.websocket.state, "cm", None)
-                    if memo_mgr and hasattr(memo_mgr, "get_value_from_corememory"):
-                        scenario_name = memo_mgr.get_value_from_corememory("scenario_name", None)
-                        if scenario_name:
-                            logger.debug(
-                                "[VoiceLiveSDK] Resolved scenario from MemoManager | scenario=%s session=%s",
-                                scenario_name,
-                                self.session_id,
-                            )
 
-                # Try to get unified agents from app.state (set in main.py)
-                app_state = getattr(self.websocket, "app", None)
-                if app_state:
-                    app_state = getattr(app_state, "state", None)
-
-                if app_state and hasattr(app_state, "unified_agents") and app_state.unified_agents:
-                    # Use unified agents directly (no adapter needed)
-                    agents = app_state.unified_agents
-                    orchestrator_config = resolve_orchestrator_config(
-                        session_id=self.session_id,
-                        scenario_name=scenario_name,
-                    )
-                    span.set_attribute("voicelive.agent_source", "unified")
+                async def _connect_voicelive():
+                    """Establish VoiceLive WebSocket connection."""
+                    t0 = time.perf_counter()
+                    with tracer.start_as_current_span(
+                        "voicelive.connect",
+                        kind=SpanKind.SERVER,
+                        attributes=conn_attrs,
+                    ) as conn_span:
+                        self._credential = await self._build_credential(self._settings)
+                        self._connection_cm = connect(
+                            endpoint=self._settings.azure_voicelive_endpoint,
+                            credential=self._credential,
+                            model=self._settings.azure_voicelive_model,
+                            connection_options=connection_options,
+                        )
+                        self._connection = await self._connection_cm.__aenter__()
+                        conn_span.set_attribute("voicelive.model", self._settings.azure_voicelive_model)
+                    elapsed = (time.perf_counter() - t0) * 1000
                     logger.info(
-                        "Using unified agents for VoiceLive | count=%d start_agent=%s scenario=%s session_id=%s",
-                        len(agents),
-                        orchestrator_config.start_agent if orchestrator_config else "default",
-                        scenario_name or getattr(orchestrator_config, "scenario_name", None) or "(none)",
-                        self.session_id or "(none)",
-                    )
-                else:
-                    # Fallback to auto-discovery of unified agents
-                    logger.info(
-                        "No unified agents in app.state - discovering from agents directory",
-                    )
-                    agents = discover_agents()
-                    orchestrator_config = resolve_orchestrator_config(
-                        session_id=self.session_id,
-                        scenario_name=scenario_name,
-                    )
-                    span.set_attribute("voicelive.agent_source", "discovered")
-                    logger.info(
-                        "Discovered unified agents | count=%d start_agent=%s scenario=%s session_id=%s",
-                        len(agents),
-                        orchestrator_config.start_agent if orchestrator_config else "default",
-                        scenario_name or getattr(orchestrator_config, "scenario_name", None) or "(none)",
-                        self.session_id or "(none)",
+                        "[VoiceLive Startup] connect_ms=%.1f | session=%s",
+                        elapsed, self.session_id,
                     )
 
-                span.set_attribute("voicelive.agents_count", len(agents))
+                async def _resolve_agents_and_scenario():
+                    """Resolve agents, scenario, session agent, and user profile."""
+                    t0 = time.perf_counter()
+                    agents = None
+                    orchestrator_config = None
 
-                # Merge scenario agents if scenario is active
-                if orchestrator_config and orchestrator_config.has_scenario:
-                    if orchestrator_config.agents:
-                        # Scenario agents take precedence (already UnifiedAgent)
-                        merged_agents = dict(agents)
-                        merged_agents.update(orchestrator_config.agents)
-                        agents = merged_agents
-                    span.set_attribute(
-                        "voicelive.scenario", orchestrator_config.scenario_name or ""
-                    )
-                    logger.info(
-                        "Loaded scenario configuration | scenario=%s start_agent=%s",
-                        orchestrator_config.scenario_name,
-                        orchestrator_config.start_agent,
-                    )
+                    # Resolve scenario from multiple sources (priority order):
+                    # 1. websocket.state.scenario (set by browser endpoint)
+                    # 2. MemoManager corememory (set by media_handler or call setup)
+                    # 3. Session-scoped scenario (from ScenarioBuilder)
+                    scenario_name = getattr(self.websocket.state, "scenario", None)
+                    if not scenario_name:
+                        memo_mgr = getattr(self.websocket.state, "cm", None)
+                        if memo_mgr and hasattr(memo_mgr, "get_value_from_corememory"):
+                            from apps.artagent.backend.src.orchestration.naming import get_scenario_from_corememory
+                            scenario_name = get_scenario_from_corememory(memo_mgr)
+                            if scenario_name:
+                                logger.debug(
+                                    "[VoiceLiveSDK] Resolved scenario from MemoManager | scenario=%s session=%s",
+                                    scenario_name,
+                                    self.session_id,
+                                )
 
-                # ─────────────────────────────────────────────────────────────
-                # Session Agent Check (Agent Builder) - Priority 1
-                # If a session agent exists, inject it into agents and use as start
-                # ─────────────────────────────────────────────────────────────
-                session_agent = get_session_agent(self.session_id)
-                if session_agent:
-                    # Session agent is already UnifiedAgent - inject directly
-                    agents = dict(agents)  # Make mutable copy
-                    agents[session_agent.name] = session_agent
-                    span.set_attribute("voicelive.session_agent", session_agent.name)
+                    # Try to get unified agents from app.state (set in main.py)
+                    app_state = getattr(self.websocket, "app", None)
+                    if app_state:
+                        app_state = getattr(app_state, "state", None)
+
+                    if app_state and hasattr(app_state, "unified_agents") and app_state.unified_agents:
+                        agents = app_state.unified_agents
+                        orchestrator_config = resolve_orchestrator_config(
+                            session_id=self.session_id,
+                            scenario_name=scenario_name,
+                        )
+                        logger.info(
+                            "Using unified agents for VoiceLive | count=%d start_agent=%s scenario=%s session_id=%s",
+                            len(agents),
+                            orchestrator_config.start_agent if orchestrator_config else "default",
+                            scenario_name or getattr(orchestrator_config, "scenario_name", None) or "(none)",
+                            self.session_id or "(none)",
+                        )
+                        agent_source = "unified"
+                    else:
+                        logger.info(
+                            "No unified agents in app.state - discovering from agents directory",
+                        )
+                        agents = discover_agents()
+                        orchestrator_config = resolve_orchestrator_config(
+                            session_id=self.session_id,
+                            scenario_name=scenario_name,
+                        )
+                        logger.info(
+                            "Discovered unified agents | count=%d start_agent=%s scenario=%s session_id=%s",
+                            len(agents),
+                            orchestrator_config.start_agent if orchestrator_config else "default",
+                            scenario_name or getattr(orchestrator_config, "scenario_name", None) or "(none)",
+                            self.session_id or "(none)",
+                        )
+                        agent_source = "discovered"
+
+                    # Merge scenario agents if scenario is active
+                    if orchestrator_config and orchestrator_config.has_scenario:
+                        if orchestrator_config.agents:
+                            merged_agents = dict(agents)
+                            merged_agents.update(orchestrator_config.agents)
+                            agents = merged_agents
+                        logger.info(
+                            "Loaded scenario configuration | scenario=%s start_agent=%s",
+                            orchestrator_config.scenario_name,
+                            orchestrator_config.start_agent,
+                        )
+
+                    # Session Agent Check (Agent Builder) - Priority 1
+                    session_agent = get_session_agent(self.session_id)
+                    if session_agent:
+                        agents = dict(agents)
+                        agents[session_agent.name] = session_agent
+                        logger.info(
+                            "Session agent found (Agent Builder) | name=%s voice=%s session_id=%s",
+                            session_agent.name,
+                            session_agent.voice.name if session_agent.voice else "default",
+                            self.session_id,
+                        )
+
+                    # Determine effective start agent
+                    effective_start_agent = DEFAULT_START_AGENT
+                    if session_agent:
+                        effective_start_agent = session_agent.name
+                    elif orchestrator_config and orchestrator_config.start_agent:
+                        effective_start_agent = orchestrator_config.start_agent
+                    elif hasattr(self._settings, "start_agent") and self._settings.start_agent:
+                        effective_start_agent = self._settings.start_agent
+
+                    # Load user profile (fast in-memory lookup)
+                    user_profile = None
+                    if hasattr(self, "_user_email") and self._user_email:
+                        user_profile = await load_user_profile_by_email(self._user_email)
+
+                    elapsed = (time.perf_counter() - t0) * 1000
                     logger.info(
-                        "Session agent found (Agent Builder) | name=%s voice=%s session_id=%s",
-                        session_agent.name,
-                        session_agent.voice.name if session_agent.voice else "default",
+                        "[VoiceLive Startup] resolve_agents_ms=%.1f | agents=%d scenario=%s session=%s",
+                        elapsed, len(agents),
+                        getattr(orchestrator_config, "scenario_name", None) or "(none)",
                         self.session_id,
                     )
+                    return agents, orchestrator_config, session_agent, effective_start_agent, user_profile, agent_source, app_state
 
-                # Determine effective start agent
-                # Priority: 1. Session agent, 2. Scenario start_agent, 3. Settings default
-                effective_start_agent = DEFAULT_START_AGENT
+                # Run WebSocket connect and agent resolution in parallel
+                _connect_task = asyncio.create_task(_connect_voicelive())
+                _resolve_task = asyncio.create_task(_resolve_agents_and_scenario())
+                await asyncio.gather(_connect_task, _resolve_task)
+
+                agents, orchestrator_config, session_agent, effective_start_agent, user_profile, agent_source, app_state = _resolve_task.result()
+
+                # Set span attributes from resolved values
+                span.set_attribute("voicelive.agent_source", agent_source)
+                span.set_attribute("voicelive.agents_count", len(agents))
+                if orchestrator_config and orchestrator_config.has_scenario:
+                    span.set_attribute("voicelive.scenario", orchestrator_config.scenario_name or "")
                 if session_agent:
-                    effective_start_agent = session_agent.name
-                elif orchestrator_config and orchestrator_config.start_agent:
-                    effective_start_agent = orchestrator_config.start_agent
-                elif hasattr(self._settings, "start_agent") and self._settings.start_agent:
-                    effective_start_agent = self._settings.start_agent
-
-                user_profile = None
-                if hasattr(self, "_user_email") and self._user_email:
-                    logger.info("Loading user profile for session | email=%s", self._user_email)
-                    user_profile = await load_user_profile_by_email(self._user_email)
-                    if user_profile:
-                        span.set_attribute("voicelive.user_profile_loaded", True)
-                        span.set_attribute(
-                            "voicelive.client_id", user_profile.get("client_id", "unknown")
-                        )
+                    span.set_attribute("voicelive.session_agent", session_agent.name)
+                if user_profile:
+                    span.set_attribute("voicelive.user_profile_loaded", True)
+                    span.set_attribute(
+                        "voicelive.client_id", user_profile.get("client_id", "unknown")
+                    )
 
                 # Determine handoff map - prefer from app.state or orchestrator config,
                 # fallback to dynamically building from current agents
@@ -1170,7 +1276,7 @@ class VoiceLiveSDKHandler:
                     self._orchestrator = None
 
             # Cancel all pending background tasks to prevent memory leaks
-            cancelled_count = _cancel_all_background_tasks()
+            cancelled_count = self._cancel_all_background_tasks()
             if cancelled_count > 0:
                 logger.debug(
                     "Cancelled %d background tasks on stop | session=%s",
@@ -1178,14 +1284,9 @@ class VoiceLiveSDKHandler:
                     self.session_id,
                 )
 
-            # Close credential - always attempt in finally block
-            credential = self._credential
+            # Credential is now module-level cached — do NOT close it per session.
+            # Just clear the local reference.
             self._credential = None
-            if isinstance(credential, DefaultAzureCredential):
-                try:
-                    await credential.close()
-                except Exception:
-                    logger.debug("Failed to close DefaultAzureCredential", exc_info=True)
 
             # Clear messenger reference to break circular refs
             self._messenger = None
@@ -1507,7 +1608,7 @@ class VoiceLiveSDKHandler:
                 session_id=session_id,
                 call_id=self.call_connection_id,
             )
-            _background_task(
+            self._background_task(
                 send_session_envelope(
                     self.websocket,
                     envelope,
@@ -1760,6 +1861,10 @@ class VoiceLiveSDKHandler:
             # Ask for a model response considering all history (audio + text)
             await self._connection.send(ClientEventResponseCreate())
 
+            # Echo user message back to frontend so it appears in the chat UI
+            if self._messenger:
+                await self._messenger.send_user_message(text)
+
             logger.info(
                 "Forwarded user text message (%s chars) | session=%s",
                 len(text),
@@ -1854,6 +1959,12 @@ class VoiceLiveSDKHandler:
             )
 
     def _resample_audio(self, audio_bytes: bytes) -> str:
+        """Resample audio from 24kHz to target rate with proper anti-aliasing.
+
+        Uses a windowed sinc interpolation which is significantly better than
+        linear interpolation for audio signals. This avoids aliasing artifacts
+        and preserves audio fidelity better than np.interp.
+        """
         try:
             source = np.frombuffer(audio_bytes, dtype=np.int16)
             source_rate = 24000
@@ -1861,10 +1972,65 @@ class VoiceLiveSDKHandler:
             if source_rate == target_rate:
                 return base64.b64encode(audio_bytes).decode("utf-8")
 
+            # Calculate resampling parameters
             ratio = target_rate / source_rate
             new_len = max(int(len(source) * ratio), 1)
-            new_idx = np.linspace(0, len(source) - 1, new_len)
-            resampled = np.interp(new_idx, np.arange(len(source)), source.astype(np.float32))
+
+            # Convert to float for processing
+            source_float = source.astype(np.float64)
+
+            # Apply simple anti-aliasing low-pass filter before downsampling
+            # For 24kHz -> 16kHz, we need to filter out frequencies above 8kHz
+            # Using a simple FIR filter with a Hann window
+            if ratio < 1.0:
+                # Downsampling: apply low-pass filter first
+                filter_len = 15  # Odd number for symmetric filter
+                n = np.arange(filter_len)
+                # Sinc filter with cutoff at ratio * Nyquist
+                cutoff = ratio * 0.9  # Slight margin to avoid aliasing
+                h = np.sinc(cutoff * (n - (filter_len - 1) / 2))
+                # Apply Hann window
+                window = 0.5 - 0.5 * np.cos(2 * np.pi * n / (filter_len - 1))
+                h = h * window
+                h = h / np.sum(h)  # Normalize
+
+                # Apply filter using convolution
+                source_float = np.convolve(source_float, h, mode="same")
+
+            # Use higher-quality sinc interpolation instead of linear
+            # Create output sample positions in terms of input indices
+            new_indices = np.linspace(0, len(source_float) - 1, new_len)
+
+            # Sinc interpolation with 4-point window (Lanczos-like)
+            # This is much better than linear but still fast
+            resampled = np.zeros(new_len, dtype=np.float64)
+            for i, idx in enumerate(new_indices):
+                # Get integer and fractional parts
+                idx_int = int(idx)
+                frac = idx - idx_int
+
+                # 4-point Hermite interpolation (cubic, smoother than linear)
+                if idx_int <= 0:
+                    resampled[i] = source_float[0]
+                elif idx_int >= len(source_float) - 2:
+                    resampled[i] = source_float[-1]
+                else:
+                    # Cubic Hermite spline interpolation
+                    p0 = source_float[max(0, idx_int - 1)]
+                    p1 = source_float[idx_int]
+                    p2 = source_float[min(len(source_float) - 1, idx_int + 1)]
+                    p3 = source_float[min(len(source_float) - 1, idx_int + 2)]
+
+                    # Catmull-Rom spline coefficients
+                    a = -0.5 * p0 + 1.5 * p1 - 1.5 * p2 + 0.5 * p3
+                    b = p0 - 2.5 * p1 + 2.0 * p2 - 0.5 * p3
+                    c = -0.5 * p0 + 0.5 * p2
+                    d = p1
+
+                    resampled[i] = a * frac**3 + b * frac**2 + c * frac + d
+
+            # Clip and convert back to int16
+            resampled = np.clip(resampled, -32768, 32767)
             resampled_int16 = resampled.astype(np.int16).tobytes()
             return base64.b64encode(resampled_int16).decode("utf-8")
         except Exception:
@@ -1982,10 +2148,17 @@ class VoiceLiveSDKHandler:
         return True
 
     @staticmethod
-    def _build_credential(settings) -> AzureKeyCredential | TokenCredential:
+    async def _build_credential(settings) -> AzureKeyCredential | TokenCredential:
         if settings.has_api_key_auth:
             return AzureKeyCredential(settings.azure_voicelive_api_key)
-        return DefaultAzureCredential()
+        global _CACHED_CREDENTIAL
+        if _CACHED_CREDENTIAL is None:
+            async with _CREDENTIAL_LOCK:
+                # Double-check after acquiring lock
+                if _CACHED_CREDENTIAL is None:
+                    _CACHED_CREDENTIAL = DefaultAzureCredential()
+                    logger.info("Created shared DefaultAzureCredential (cached for process lifetime)")
+        return _CACHED_CREDENTIAL
 
     # =========================================================================
     # Turn-Level Latency Tracking Methods

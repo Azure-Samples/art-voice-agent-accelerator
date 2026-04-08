@@ -30,6 +30,9 @@ import uuid
 from collections import deque
 from typing import TYPE_CHECKING, Dict, Optional, Tuple
 
+from apps.artagent.backend.src.orchestration.naming import (
+    get_scenario_from_corememory,
+)
 from apps.artagent.backend.src.orchestration.session_agents import (
     get_session_agent,
     register_adapter_update_callback,
@@ -44,6 +47,7 @@ from apps.artagent.backend.voice.shared.config_resolver import resolve_orchestra
 from src.stateful.state_managment import MemoManager
 from apps.artagent.backend.voice import (
     CascadeOrchestratorAdapter,
+    CascadeSessionScope,
     OrchestratorContext,
     get_cascade_orchestrator,
     make_assistant_streaming_envelope,
@@ -141,10 +145,8 @@ def _get_or_create_adapter(
     if session_id in _adapters:
         return _adapters[session_id]
 
-    # Get scenario from MemoManager if available
-    scenario_name = None
-    if memo_manager:
-        scenario_name = memo_manager.get_value_from_corememory("scenario_name", None)
+    # Get scenario from MemoManager using centralized utility
+    scenario_name = get_scenario_from_corememory(memo_manager)
 
     # Create adapter using app.state config
     adapter = get_cascade_orchestrator(
@@ -187,7 +189,7 @@ def cleanup_adapter(session_id: str) -> None:
         logger.debug("Cleaned up adapter for session: %s", session_id)
 
 
-def update_session_agent(session_id: str, agent: UnifiedAgent) -> bool:
+def update_session_agent(session_id: str, agent: UnifiedAgent, set_active: bool = False) -> bool:
     """
     Update or inject a dynamic agent into the session's orchestrator adapter.
 
@@ -198,6 +200,8 @@ def update_session_agent(session_id: str, agent: UnifiedAgent) -> bool:
     Args:
         session_id: The session to update
         agent: The UnifiedAgent with updated configuration
+        set_active: If True, also set this agent as the active agent. Default False
+                    to prevent unintended scenario state changes when creating new agents.
 
     Returns:
         True if adapter was found and updated, False if no active adapter exists
@@ -215,13 +219,16 @@ def update_session_agent(session_id: str, agent: UnifiedAgent) -> bool:
     # Use a special key for the session agent so it doesn't conflict with base agents
     adapter.agents[agent.name] = agent
 
-    # If this is meant to be the active agent, update the adapter's active agent
-    adapter._active_agent = agent.name
+    # Only update the active agent if explicitly requested
+    # This prevents creating a new agent from accidentally becoming the active agent
+    if set_active:
+        adapter._active_agent = agent.name
 
     logger.info(
-        "🔄 Session agent updated in adapter | session=%s agent=%s voice=%s model=%s",
+        "🔄 Session agent updated in adapter | session=%s agent=%s set_active=%s voice=%s model=%s",
         session_id,
         agent.name,
+        set_active,
         agent.voice.name if agent.voice else None,
         agent.model.deployment_id if agent.model else None,
     )
@@ -583,8 +590,13 @@ async def route_turn(
                 )
                 payload = envelope.setdefault("payload", {})
                 payload.setdefault("message", text)
-                payload["turn_id"] = run_id
-                payload["response_id"] = run_id
+                
+                # Use effective turn_id from CascadeSessionScope if available
+                # This ensures post-tool responses use advanced turn_id
+                session_scope = CascadeSessionScope.get_current()
+                effective_turn_id = session_scope.get_effective_turn_id() if session_scope else run_id
+                payload["turn_id"] = effective_turn_id
+                payload["response_id"] = effective_turn_id
                 payload["status"] = "streaming"
                 payload["sender"] = agent_name
                 payload["active_agent"] = agent_name
@@ -680,13 +692,20 @@ async def route_turn(
                     result.agent_name or adapter.current_agent or memo_agent or "Assistant"
                 )
                 final_label = _resolve_agent_label(final_agent)
+                
+                # Use effective turn_id from CascadeSessionScope to match streaming envelopes
+                # This ensures the final message updates the streaming message rather than
+                # creating a duplicate when turn_id was advanced for tool calls
+                session_scope = CascadeSessionScope.get_current()
+                effective_turn_id = session_scope.get_effective_turn_id() if session_scope else run_id
+                
                 payload = {
                     "type": "assistant",
                     "message": result.response_text,
                     "content": result.response_text,
                     "streaming": False,
-                    "turn_id": run_id,
-                    "response_id": run_id,
+                    "turn_id": effective_turn_id,
+                    "response_id": effective_turn_id,
                     "status": "error" if result.error else "completed",
                     "sender": final_agent,
                     "speaker": final_agent,
@@ -716,9 +735,10 @@ async def route_turn(
                         broadcast_only=is_acs,
                     )
                     logger.info(
-                        "Sent final assistant envelope | agent=%s text_len=%d turn_id=%s",
+                        "Sent final assistant envelope | agent=%s text_len=%d turn_id=%s (run_id=%s)",
                         final_agent,
                         len(result.response_text),
+                        effective_turn_id,
                         run_id,
                     )
                 except Exception:

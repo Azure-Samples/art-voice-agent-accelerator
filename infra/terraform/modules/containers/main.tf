@@ -119,6 +119,15 @@ resource "azurerm_container_app" "backend" {
       percentage      = 100
       latest_revision = true
     }
+
+    cors_policy {
+      allowed_origins    = ["https://${azurerm_container_app.frontend.ingress[0].fqdn}"]
+      allowed_methods    = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+      allowed_headers    = ["Content-Type", "Authorization", "X-Requested-With", "Accept"]
+      expose_headers     = ["Content-Length", "Content-Range"]
+      allow_credentials  = true
+      max_age_in_seconds = 86400
+    }
   }
 
   template {
@@ -146,4 +155,42 @@ resource "azurerm_container_app" "backend" {
   tags = merge(var.tags, {
     "azd-service-name" = var.backend_config.azd_service_name
   })
+}
+
+# ============================================================================
+# STICKY SESSIONS
+# ============================================================================
+
+resource "azapi_update_resource" "frontend_sticky_sessions" {
+  type        = "Microsoft.App/containerApps@2024-03-01"
+  resource_id = azurerm_container_app.frontend.id
+
+  body = {
+    properties = {
+      configuration = {
+        ingress = {
+          stickySessions = {
+            affinity = "sticky"
+          }
+        }
+      }
+    }
+  }
+}
+
+resource "azapi_update_resource" "backend_sticky_sessions" {
+  type        = "Microsoft.App/containerApps@2024-03-01"
+  resource_id = azurerm_container_app.backend.id
+
+  body = {
+    properties = {
+      configuration = {
+        ingress = {
+          stickySessions = {
+            affinity = "sticky"
+          }
+        }
+      }
+    }
+  }
 }

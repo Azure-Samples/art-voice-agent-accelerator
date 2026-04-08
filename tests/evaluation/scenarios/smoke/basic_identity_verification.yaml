@@ -1,0 +1,81 @@
+# yaml-language-server: $schema=../scenario.schema.json
+# ============================================================================
+# SMOKE TEST: Basic Identity Verification
+# ============================================================================
+#
+# Purpose: Quick sanity check that the agent system is functional.
+# Run time: ~30 seconds
+# Cost: ~$0.05
+#
+# Tests:
+# 1. Agent responds to greeting
+# 2. Identity verification tool is called with correct pattern
+# 3. Response is coherent and grounded
+#
+# This scenario runs on every scheduled CI run and push to main.
+# ============================================================================
+
+scenario_name: smoke_basic_identity
+description: Minimal smoke test - verify core agent functionality
+
+# Use banking scenario template (most commonly tested)
+scenario_template: banking
+
+# Simple session config - single agent, no handoffs
+session_config:
+  agents:
+    - BankingConcierge
+  start_agent: BankingConcierge
+  handoff_type: announced
+  handoffs: []
+  generic_handoff:
+    enabled: false
+
+# Use default model (no override - tests production config)
+agent_overrides: []
+
+# Minimal turns - just enough to verify system works
+turns:
+  - turn_id: smoke_1_greeting
+    user_input: "Hello, I need help with my account."
+    expectations:
+      # No tools required for greeting - just verify response
+      tools_called: []
+      response_constraints:
+        must_include_any:
+          - "help"
+          - "assist"
+          - "account"
+
+  - turn_id: smoke_2_identity
+    user_input: "My name is John Smith and my last four SSN digits are 1234."
+    expectations:
+      # This MUST trigger identity verification
+      tools_called:
+        - verify_client_identity
+      # Response should acknowledge verification attempt
+      response_constraints:
+        must_include_any:
+          - "verify"
+          - "confirm"
+          - "identity"
+          - "account"
+
+# Relaxed thresholds for smoke test
+# Goal: detect complete failures, not fine-tune quality
+thresholds:
+  min_tool_precision: 0.5   # At least half the tools called are expected
+  min_tool_recall: 0.5      # At least half expected tools are called
+  min_grounded_ratio: 0.3   # Basic groundedness
+  max_latency_p95_ms: 15000 # Allow slower responses (cold start, etc.)
+
+# No Foundry export for smoke tests
+foundry_export:
+  enabled: false
+
+# Metadata
+metadata:
+  tier: smoke
+  estimated_cost_usd: 0.05
+  expected_duration_s: 30
+  owner: evaluation-framework

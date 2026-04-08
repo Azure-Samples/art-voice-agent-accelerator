@@ -308,7 +308,7 @@ async def get_401k_details(args: Get401kDetailsArgs) -> Dict[str, Any]:
             )
         
         logger.info(
-            "✅ 401(k) details retrieved | client=%s accounts=%d merrill=%d total=$%,.2f",
+            "✅ 401(k) details retrieved | client=%s accounts=%d merrill=%d total=$%.2f",
             client_id, len(accounts), len(merrill_accounts), total_retirement_balance
         )
         

@@ -31,6 +31,9 @@ from fastapi.websockets import WebSocketState
 from utils.ml_logging import get_logger
 from utils.telemetry_decorators import add_speech_tts_metrics, trace_speech
 
+from apps.artagent.backend.src.orchestration.naming import find_agent_by_name
+from apps.artagent.backend.src.orchestration.session_agents import get_session_agent
+
 if TYPE_CHECKING:
     from apps.artagent.backend.voice.shared.context import VoiceSessionContext
 
@@ -161,10 +164,24 @@ class TTSPlayback:
                 )
                 return (voice.name, voice.style, voice.rate)
 
-        # Fallback to start agent from unified agents
-        unified_agents = getattr(self._app_state, "unified_agents", {})
+        # Try session agent (Agent Builder override) - has priority over base agents
         start_agent_name = getattr(self._app_state, "start_agent", "Concierge")
-        start_agent = unified_agents.get(start_agent_name)
+        session_agent = get_session_agent(self._context.session_id, start_agent_name)
+        if session_agent and hasattr(session_agent, "voice") and session_agent.voice:
+            voice = session_agent.voice
+            if voice.name:
+                logger.debug(
+                    "[%s] Voice from session agent '%s': %s",
+                    self._session_short,
+                    start_agent_name,
+                    voice.name,
+                )
+                return (voice.name, voice.style, voice.rate)
+
+        # Fallback to start agent from unified agents (base registry)
+        unified_agents = getattr(self._app_state, "unified_agents", {})
+        # Use case-insensitive lookup
+        _, start_agent = find_agent_by_name(unified_agents, start_agent_name)
 
         if start_agent and hasattr(start_agent, "voice") and start_agent.voice:
             voice = start_agent.voice
@@ -195,19 +212,31 @@ class TTSPlayback:
             agent_name: Name of the active agent
         """
         if agent_name:
-            # Look up agent in unified_agents and set on context
+            # First check session agents (Agent Builder overrides have priority)
+            session_agent = get_session_agent(self._context.session_id, agent_name)
+            if session_agent:
+                self._context.current_agent = session_agent
+                logger.debug(
+                    "[%s] Active agent set from session agents: %s (voice=%s)",
+                    self._session_short,
+                    agent_name,
+                    getattr(session_agent.voice, "name", "unknown") if session_agent.voice else "none",
+                )
+                return
+
+            # Fallback to unified_agents (base registry)
             unified_agents = getattr(self._app_state, "unified_agents", {})
-            agent = unified_agents.get(agent_name)
-            if agent:
+            actual_key, agent = find_agent_by_name(unified_agents, agent_name)
+            if actual_key is not None:
                 self._context.current_agent = agent
                 logger.debug(
-                    "[%s] Active agent set for TTS: %s",
+                    "[%s] Active agent set from unified_agents: %s",
                     self._session_short,
                     agent_name,
                 )
             else:
                 logger.warning(
-                    "[%s] Agent '%s' not found in unified_agents",
+                    "[%s] Agent '%s' not found in session_agents or unified_agents",
                     self._session_short,
                     agent_name,
                 )
@@ -306,15 +335,18 @@ class TTSPlayback:
             run_id,
         )
 
-        async with self._tts_lock:
-            if self._cancel_event.is_set():
-                self._cancel_event.clear()
-                return False
+        # Synthesize under lock, stream without lock to avoid blocking
+        # concurrent TTS requests during the (slower) streaming phase.
+        pcm_bytes = None
+        try:
+            async with self._tts_lock:
+                if self._cancel_event.is_set():
+                    self._cancel_event.clear()
+                    return False
 
-            self._is_playing = True
-            synth = None
+                self._is_playing = True
+                synth = None
 
-            try:
                 # Acquire TTS synthesizer from pool
                 synth, tier = await self._app_state.tts_pool.acquire_for_session(self._session_id)
 
@@ -326,26 +358,31 @@ class TTSPlayback:
                     )
                     return False
 
-                # Synthesize audio
+                # Synthesize audio (under lock)
                 pcm_bytes = await self._synthesize(
                     synth, text, voice_name, style, rate, SAMPLE_RATE_BROWSER
                 )
 
-                if not pcm_bytes:
-                    logger.warning("[%s] TTS returned empty audio", self._session_short)
-                    return False
-
-                # Stream to browser
-                return await self._stream_to_browser(pcm_bytes, on_first_audio, run_id)
-
-            except asyncio.CancelledError:
-                logger.debug("[%s] Browser TTS cancelled", self._session_short)
+            # Lock released — check cancel before streaming
+            if self._cancel_event.is_set():
+                self._cancel_event.clear()
                 return False
-            except Exception as e:
-                logger.error("[%s] Browser TTS failed: %s", self._session_short, e)
+
+            if not pcm_bytes:
+                logger.warning("[%s] TTS returned empty audio", self._session_short)
                 return False
-            finally:
-                self._is_playing = False
+
+            # Stream to browser (without lock)
+            return await self._stream_to_browser(pcm_bytes, on_first_audio, run_id)
+
+        except asyncio.CancelledError:
+            logger.debug("[%s] Browser TTS cancelled", self._session_short)
+            return False
+        except Exception as e:
+            logger.error("[%s] Browser TTS failed: %s", self._session_short, e)
+            return False
+        finally:
+            self._is_playing = False
 
     async def play_to_acs(
         self,
@@ -395,15 +432,18 @@ class TTSPlayback:
             run_id,
         )
 
-        async with self._tts_lock:
-            if self._cancel_event.is_set():
-                self._cancel_event.clear()
-                return False
+        # Synthesize under lock, stream without lock to avoid blocking
+        # concurrent TTS requests during the (slower) streaming phase.
+        pcm_bytes = None
+        try:
+            async with self._tts_lock:
+                if self._cancel_event.is_set():
+                    self._cancel_event.clear()
+                    return False
 
-            self._is_playing = True
-            synth = None
+                self._is_playing = True
+                synth = None
 
-            try:
                 # Acquire TTS synthesizer from pool
                 synth, tier = await self._app_state.tts_pool.acquire_for_session(self._session_id)
 
@@ -415,31 +455,36 @@ class TTSPlayback:
                     )
                     return False
 
-                # Synthesize audio
+                # Synthesize audio (under lock)
                 logger.info("[%s] ACS TTS: Starting synthesis at %dHz", self._session_short, SAMPLE_RATE_ACS)
                 pcm_bytes = await self._synthesize(
                     synth, text, voice_name, style, rate, SAMPLE_RATE_ACS
                 )
 
-                if not pcm_bytes:
-                    logger.error("[%s] ACS TTS returned empty audio (synthesis failed)", self._session_short)
-                    return False
-
-                logger.info("[%s] ACS TTS: Synthesis OK, got %d bytes, starting stream", self._session_short, len(pcm_bytes))
-
-                # Stream to ACS
-                result = await self._stream_to_acs(pcm_bytes, blocking, on_first_audio, run_id)
-                logger.info("[%s] ACS TTS: Stream complete, result=%s", self._session_short, result)
-                return result
-
-            except asyncio.CancelledError:
-                logger.debug("[%s] ACS TTS cancelled", self._session_short)
+            # Lock released — check cancel before streaming
+            if self._cancel_event.is_set():
+                self._cancel_event.clear()
                 return False
-            except Exception as e:
-                logger.error("[%s] ACS TTS failed: %s", self._session_short, e)
+
+            if not pcm_bytes:
+                logger.error("[%s] ACS TTS returned empty audio (synthesis failed)", self._session_short)
                 return False
-            finally:
-                self._is_playing = False
+
+            logger.info("[%s] ACS TTS: Synthesis OK, got %d bytes, starting stream", self._session_short, len(pcm_bytes))
+
+            # Stream to ACS (without lock)
+            result = await self._stream_to_acs(pcm_bytes, blocking, on_first_audio, run_id)
+            logger.info("[%s] ACS TTS: Stream complete, result=%s", self._session_short, result)
+            return result
+
+        except asyncio.CancelledError:
+            logger.debug("[%s] ACS TTS cancelled", self._session_short)
+            return False
+        except Exception as e:
+            logger.error("[%s] ACS TTS failed: %s", self._session_short, e)
+            return False
+        finally:
+            self._is_playing = False
 
     @trace_speech(operation="tts.synthesize")
     async def _synthesize(
@@ -473,10 +518,33 @@ class TTSPlayback:
             rate=rate,
         )
 
-        if executor:
-            result = await loop.run_in_executor(executor, synth_func)
-        else:
-            result = await loop.run_in_executor(None, synth_func)
+        # Add timeout to prevent indefinite blocking on Speech SDK issues
+        # The "Codec decoding is not started within 2s" error can cause hangs
+        # Dynamic timeout: base 10s + ~1s per 100 chars (Azure TTS is ~100-200 words/sec)
+        base_timeout = 10.0
+        per_char_timeout = len(text) / 100.0  # ~1 second per 100 chars
+        synthesis_timeout = min(base_timeout + per_char_timeout, 120.0)  # Cap at 2 minutes
+        
+        try:
+            if executor:
+                result = await asyncio.wait_for(
+                    loop.run_in_executor(executor, synth_func),
+                    timeout=synthesis_timeout
+                )
+            else:
+                result = await asyncio.wait_for(
+                    loop.run_in_executor(None, synth_func),
+                    timeout=synthesis_timeout
+                )
+        except asyncio.TimeoutError:
+            logger.error(
+                "[%s] TTS synthesis timed out after %.1fs (voice=%s, text_len=%d)",
+                self._session_short,
+                synthesis_timeout,
+                voice,
+                len(text),
+            )
+            return None
 
         if result:
             logger.info("[%s] Synthesis complete: %d bytes", self._session_short, len(result))

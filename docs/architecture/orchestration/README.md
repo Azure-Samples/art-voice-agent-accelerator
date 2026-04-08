@@ -10,8 +10,8 @@ The accelerator provides two orchestrator implementations that share the same [U
 
 | Mode | Orchestrator | Audio Processing | Best For |
 |------|--------------|------------------|----------|
-| **SpeechCascade** | `CascadeOrchestratorAdapter` | Azure Speech SDK (STT/TTS) | Fine-grained control, custom VAD |
-| **VoiceLive** | `LiveOrchestrator` | OpenAI Realtime API | Lowest latency, managed audio |
+| **SpeechCascade** | `CascadeOrchestratorAdapter` | Azure Speech SDK (STT/TTS) + Any LLM | Full control, component swapping |
+| **VoiceLive** | `LiveOrchestrator` | Managed pipeline (OpenAI Realtime + Azure Speech customization) | Lowest latency, managed ops |
 
 Both orchestrators:
 
@@ -30,20 +30,20 @@ Handoff routing is defined at the **scenario level**, not embedded in agents. Th
 
 ```mermaid
 flowchart LR
-    subgraph Scenario["Scenario Configuration"]
+    subgraph Scenario[Scenario Configuration]
         S[scenario.yaml]
     end
     
-    subgraph Service["Handoff Resolution"]
+    subgraph Service[Handoff Resolution]
         HS[HandoffService]
     end
     
-    subgraph Orchestrators["Orchestrators"]
+    subgraph Orchestrators[Orchestrators]
         CO[CascadeOrchestrator]
         LO[LiveOrchestrator]
     end
     
-    subgraph Agents["Agent Layer"]
+    subgraph Agents[Agent Layer]
         A1[Agent A]
         A2[Agent B]
     end
@@ -55,6 +55,11 @@ flowchart LR
     CO --> A2
     LO --> A1
     LO --> A2
+    
+    style Scenario fill:#FFF4CE,stroke:#FFB900
+    style Service fill:#E6F3FF,stroke:#0078D4
+    style Orchestrators fill:#E6FFE6,stroke:#107C10
+    style Agents fill:#F3E6FF,stroke:#8764B8
 ```
 
 ### Key Benefits
@@ -74,40 +79,54 @@ For full details, see [Scenario-Based Orchestration](industry-scenarios.md).
 
 ```mermaid
 flowchart LR
-    subgraph Input
-        WS[WebSocket]
-    end
-
-    subgraph Orchestration
-        WS --> Mode{Streaming Mode}
-        Mode -->|MEDIA / TRANSCRIPTION| Cascade[SpeechCascade]
-        Mode -->|VOICE_LIVE| Live[VoiceLive]
-    end
-
-    subgraph Cascade Path
-        Cascade --> STT[Azure Speech STT]
-        STT --> LLM[Azure OpenAI]
-        LLM --> TTS[Azure Speech TTS]
-    end
-
-    subgraph VoiceLive Path
-        Live --> RT[OpenAI Realtime API]
-    end
-
-    subgraph Shared
-        Agents[(Agents)]
-        Tools[(Tools)]
-        State[(State)]
-    end
-
-    Cascade -.-> Shared
-    Live -.-> Shared
+    ACS[ACS WebSocket] --> Mode{Mode}
+    Mode -->|MEDIA| Cascade[Cascade]
+    Mode -->|VOICE_LIVE| VL[VoiceLive]
+    
+    Cascade --> Shared[(Shared: Agents, Tools, State)]
+    VL --> Shared
+    
+    style Cascade fill:#E6FFE6,stroke:#107C10
+    style VL fill:#FFF4CE,stroke:#FFB900
+    style Shared fill:#F3E6FF,stroke:#8764B8
 ```
 
-Both orchestrators share:
-- **Agents** — Unified agent registry from `apps/artagent/backend/agents/`
-- **Tools** — Centralized tool registry with handoff support
-- **State** — `MemoManager` for session persistence
+### Cascade: Full Control
+
+You orchestrate each component separately:
+
+| Component | Options |
+|-----------|---------|
+| **STT** | Azure Speech, Whisper, Custom Speech models |
+| **LLM** | Any Azure OpenAI model (GPT-4o, GPT-4, etc.) |
+| **TTS** | 400+ Azure Neural Voices, Custom Neural Voice |
+
+Best for: Per-component debugging, LLM flexibility, on-premises deployment.
+
+### VoiceLive: Managed Pipeline
+
+Azure manages the real-time conversation pipeline with extensive customization:
+
+| Voice Type | Description |
+|------------|-------------|
+| **OpenAI voices** | `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer` |
+| **Azure Standard** | 400+ Neural voices (`en-US-AvaNeural`, etc.) |
+| **Azure HD** | High-definition voices with temperature control |
+| **Azure Custom** | Your trained Custom Neural Voice |
+
+| Customization | Description |
+|---------------|-------------|
+| **Phrase lists** | Improve recognition for domain terms |
+| **Custom Speech** | Your trained STT model per locale |
+| **Custom lexicon** | Pronunciation tuning for TTS |
+| **Custom Avatar** | Video output with talking avatar |
+
+Best for: Lowest latency (200-400ms), turnkey setup, managed operations.
+
+!!! info "Same Customization, Different Architecture"
+    Both modes support Azure Speech customization (phrase lists, custom STT, custom TTS). VoiceLive wraps them in a managed pipeline; Cascade lets you swap components entirely.
+
+See [VoiceLive customization docs](https://learn.microsoft.com/azure/ai-services/speech-service/voice-live-how-to-customize) for configuration details.
 
 ---
 
@@ -123,18 +142,11 @@ export ACS_STREAMING_MODE=TRANSCRIPTION  # ACS-provided transcriptions
 # VoiceLive mode (OpenAI Realtime API)
 export ACS_STREAMING_MODE=VOICE_LIVE
 ```
+!!! info "On-Premises Deployment"
+    **Cascade** supports hosting [Azure Speech containers](https://learn.microsoft.com/azure/ai-services/speech-service/speech-container-overview) on your own infrastructure for STT and TTS. This enables air-gapped deployments, data sovereignty requirements, and reduced network latency. **VoiceLive** does not currently support on-premises containers—it requires connectivity to Azure's managed VoiceLive service.
 
-### Decision Matrix
-
-| Requirement | SpeechCascade | VoiceLive |
-|-------------|---------------|-----------|
-| Lowest possible latency | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
-| Custom VAD/segmentation | ⭐⭐⭐⭐⭐ | ⭐⭐ |
-| Sentence-level TTS control | ⭐⭐⭐⭐⭐ | ⭐⭐ |
-| Azure Speech voices | ⭐⭐⭐⭐⭐ | ⭐⭐ |
-| Phrase list customization | ⭐⭐⭐⭐⭐ | ❌ |
-| Simplicity of setup | ⭐⭐ | ⭐⭐⭐⭐ |
-| Audio quality control | ⭐⭐⭐⭐ | ⭐⭐⭐ |
+!!! note "Same Customization, Different Control"
+    Both modes support identical Azure Speech customizations (phrase lists, custom STT, custom TTS). The difference is **how you configure them**: Cascade lets you swap components entirely; VoiceLive applies customizations within its managed pipeline.
 
 ---
 
@@ -202,27 +214,31 @@ VoiceLive is event-driven — the orchestrator reacts to events from the OpenAI 
 
 ```mermaid
 flowchart LR
-    subgraph Audio["Bidirectional Audio"]
+    subgraph Audio[Bidirectional Audio]
         A[Audio Stream]
     end
     
-    subgraph Realtime["OpenAI Realtime API"]
+    subgraph Realtime[OpenAI Realtime API]
         R[Realtime API]
         E1[Events]
     end
     
-    subgraph Orchestrator["LiveOrchestrator"]
+    subgraph Orchestrator[LiveOrchestrator]
         L[handle_event]
         H[Event Handlers]
         T[Tool Execution]
-        S[Handoff + Session Update]
+        S[Handoff + Session]
     end
     
     A <--> R
     R --> E1
-    E1 -->|transcription<br>audio delta<br>tool call| H
+    E1 --> H
     H --> T
     T --> S
+    
+    style Audio fill:#F3F2F1,stroke:#605E5C
+    style Realtime fill:#FFF4CE,stroke:#FFB900
+    style Orchestrator fill:#E6F3FF,stroke:#0078D4
 ```
 
 The `LiveOrchestrator.handle_event()` method routes events:

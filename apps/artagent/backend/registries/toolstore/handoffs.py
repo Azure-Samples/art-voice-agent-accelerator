@@ -44,6 +44,32 @@ def _cleanup_context(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _extract_client_id(args: dict[str, Any]) -> str:
+    """
+    Extract client_id from args, checking both explicit and injected sources.
+    
+    The orchestrator injects `_client_id` from MemoManager's corememory when
+    the customer has been verified. Handoff tools should use this if the LLM
+    doesn't explicitly pass client_id.
+    
+    Priority:
+    1. args["client_id"] - explicitly passed by LLM
+    2. args["_client_id"] - injected by orchestrator from session state
+    """
+    # Try explicit client_id first
+    explicit = (args.get("client_id") or "").strip()
+    if explicit:
+        return explicit
+    
+    # Fall back to injected _client_id from orchestrator
+    injected = (args.get("_client_id") or "").strip()
+    if injected:
+        logger.debug("Using injected _client_id for handoff: %s", injected[:8] + "...")
+        return injected
+    
+    return ""
+
+
 def _build_handoff_payload(
     *,
     target_agent: str,
@@ -105,6 +131,31 @@ handoff_fraud_agent_schema: dict[str, Any] = {
             "issue_summary": {
                 "type": "string",
                 "description": "Brief summary of the fraud concern",
+            },
+        },
+        "required": ["client_id"],
+    },
+}
+
+handoff_decline_specialist_schema: dict[str, Any] = {
+    "name": "handoff_decline_specialist",
+    "description": (
+        "Transfer to Decline Specialist for debit card decline inquiries and resolution. "
+        "Use when customer needs help understanding why their card was declined, "
+        "or needs to resolve a declined transaction."
+        + SILENT_HANDOFF_NOTE
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "client_id": {"type": "string", "description": "Customer identifier"},
+            "decline_code": {
+                "type": "string",
+                "description": "Decline code if available (e.g., '02', '51', 'C1')",
+            },
+            "issue_summary": {
+                "type": "string",
+                "description": "Brief summary of the decline issue",
             },
         },
         "required": ["client_id"],
@@ -452,7 +503,7 @@ handoff_subro_agent_schema: dict[str, Any] = {
 
 async def handoff_concierge(args: dict[str, Any]) -> dict[str, Any]:
     """Return customer to Concierge from specialist agent."""
-    client_id = (args.get("client_id") or "").strip()
+    client_id = _extract_client_id(args)
     previous_topic = (args.get("previous_topic") or "").strip()
     resolution_summary = (args.get("resolution_summary") or "").strip()
 
@@ -476,7 +527,7 @@ async def handoff_concierge(args: dict[str, Any]) -> dict[str, Any]:
 
 async def handoff_fraud_agent(args: dict[str, Any]) -> dict[str, Any]:
     """Transfer to Fraud Detection Agent."""
-    client_id = (args.get("client_id") or "").strip()
+    client_id = _extract_client_id(args)
     fraud_type = (args.get("fraud_type") or "").strip()
     issue_summary = (args.get("issue_summary") or "").strip()
 
@@ -500,9 +551,39 @@ async def handoff_fraud_agent(args: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+async def handoff_decline_specialist(args: dict[str, Any]) -> dict[str, Any]:
+    """Transfer to Decline Specialist for card decline inquiries."""
+    client_id = _extract_client_id(args)
+    decline_code = (args.get("decline_code") or "").strip()
+    issue_summary = (args.get("issue_summary") or "").strip()
+
+    if not client_id:
+        return {"success": False, "message": "client_id is required."}
+
+    logger.info(
+        "💳 Handoff to DeclineSpecialist | client=%s code=%s",
+        client_id,
+        decline_code or "(unknown)",
+    )
+
+    return _build_handoff_payload(
+        target_agent="DeclineSpecialist",
+        message="",
+        summary=f"Card decline: {decline_code or issue_summary or 'declined transaction'}",
+        context={
+            "client_id": client_id,
+            "decline_code": decline_code,
+            "issue_summary": issue_summary,
+            "handoff_timestamp": _utc_now(),
+            "previous_agent": "Concierge",
+        },
+        extra={"should_interrupt_playback": True},
+    )
+
+
 async def handoff_to_auth(args: dict[str, Any]) -> dict[str, Any]:
     """Transfer to Authentication Agent."""
-    client_id = (args.get("client_id") or "").strip()
+    client_id = _extract_client_id(args)
     reason = (args.get("reason") or "identity verification required").strip()
 
     if not client_id:
@@ -524,7 +605,7 @@ async def handoff_to_auth(args: dict[str, Any]) -> dict[str, Any]:
 
 async def handoff_card_recommendation(args: dict[str, Any]) -> dict[str, Any]:
     """Transfer to Card Recommendation Agent."""
-    client_id = (args.get("client_id") or "").strip()
+    client_id = _extract_client_id(args)
     customer_goal = (args.get("customer_goal") or "").strip()
     spending_prefs = (args.get("spending_preferences") or "").strip()
     current_cards = (args.get("current_cards") or "").strip()
@@ -552,7 +633,7 @@ async def handoff_card_recommendation(args: dict[str, Any]) -> dict[str, Any]:
 
 async def handoff_investment_advisor(args: dict[str, Any]) -> dict[str, Any]:
     """Transfer to Investment Advisor Agent."""
-    client_id = (args.get("client_id") or "").strip()
+    client_id = _extract_client_id(args)
     topic = (args.get("topic") or "retirement planning").strip()
     employment_change = (args.get("employment_change") or "").strip()
     retirement_question = (args.get("retirement_question") or "").strip()
@@ -580,7 +661,7 @@ async def handoff_investment_advisor(args: dict[str, Any]) -> dict[str, Any]:
 
 async def handoff_compliance_desk(args: dict[str, Any]) -> dict[str, Any]:
     """Transfer to Compliance Desk Agent."""
-    client_id = (args.get("client_id") or "").strip()
+    client_id = _extract_client_id(args)
     compliance_issue = (args.get("compliance_issue") or "").strip()
     urgency = (args.get("urgency") or "normal").strip()
     transaction_details = (args.get("transaction_details") or "").strip()
@@ -606,7 +687,7 @@ async def handoff_compliance_desk(args: dict[str, Any]) -> dict[str, Any]:
 
 async def handoff_transfer_agency_agent(args: dict[str, Any]) -> dict[str, Any]:
     """Transfer to Transfer Agency Agent."""
-    client_id = (args.get("client_id") or "").strip()
+    client_id = _extract_client_id(args)
     request_type = (args.get("request_type") or "drip_liquidation").strip()
     client_code = (args.get("client_code") or "").strip()
     drip_symbols = (args.get("drip_symbols") or "").strip()
@@ -634,7 +715,7 @@ async def handoff_transfer_agency_agent(args: dict[str, Any]) -> dict[str, Any]:
 
 async def handoff_bank_advisor(args: dict[str, Any]) -> dict[str, Any]:
     """Schedule callback with financial advisor."""
-    client_id = (args.get("client_id") or "").strip()
+    client_id = _extract_client_id(args)
     reason = (args.get("reason") or "").strip()
     context_summary = (args.get("context") or "").strip()
 
@@ -662,7 +743,7 @@ async def handoff_bank_advisor(args: dict[str, Any]) -> dict[str, Any]:
 
 async def handoff_to_trading(args: dict[str, Any]) -> dict[str, Any]:
     """Transfer to Trading Desk."""
-    client_id = (args.get("client_id") or "").strip()
+    client_id = _extract_client_id(args)
     trade_details = (args.get("trade_details") or "").strip()
     complexity = (args.get("complexity_level") or "standard").strip()
 
@@ -705,7 +786,7 @@ async def handoff_general_kb(args: dict[str, Any]) -> dict[str, Any]:
 
 async def handoff_claims_specialist(args: dict[str, Any]) -> dict[str, Any]:
     """Transfer to Claims Specialist for claims processing and FNOL."""
-    client_id = (args.get("client_id") or "").strip()
+    client_id = _extract_client_id(args)
     reason = (args.get("reason") or "claims_inquiry").strip()
     incident_summary = (args.get("incident_summary") or "").strip()
 
@@ -750,7 +831,7 @@ async def handoff_to_agent(args: dict[str, Any]) -> dict[str, Any]:
     target_agent = (args.get("target_agent") or "").strip()
     reason = (args.get("reason") or "").strip()
     context_summary = (args.get("context") or "").strip()
-    client_id = (args.get("client_id") or "").strip()
+    client_id = _extract_client_id(args)
 
     if not target_agent:
         return {"success": False, "message": "target_agent is required."}
@@ -789,7 +870,7 @@ async def handoff_to_agent(args: dict[str, Any]) -> dict[str, Any]:
 
 async def handoff_policy_advisor(args: dict[str, Any]) -> dict[str, Any]:
     """Transfer to Policy Advisor Agent for policy questions and changes."""
-    client_id = (args.get("client_id") or "").strip()
+    client_id = _extract_client_id(args)
     caller_name = (args.get("caller_name") or "").strip()
     policy_type = (args.get("policy_type") or "").strip()
     request_type = (args.get("request_type") or "").strip()
@@ -825,7 +906,7 @@ async def handoff_policy_advisor(args: dict[str, Any]) -> dict[str, Any]:
 
 async def handoff_fnol_agent(args: dict[str, Any]) -> dict[str, Any]:
     """Transfer to FNOL Agent for filing insurance claims."""
-    client_id = (args.get("client_id") or "").strip()
+    client_id = _extract_client_id(args)
     caller_name = (args.get("caller_name") or "").strip()
     incident_type = (args.get("incident_type") or "").strip()
     incident_date = (args.get("incident_date") or "").strip()
@@ -921,6 +1002,13 @@ register_tool(
     handoff_fraud_agent,
     is_handoff=True,
     tags={"handoff", "fraud"},
+)
+register_tool(
+    "handoff_decline_specialist",
+    handoff_decline_specialist_schema,
+    handoff_decline_specialist,
+    is_handoff=True,
+    tags={"handoff", "banking", "decline-codes"},
 )
 register_tool(
     "handoff_to_auth",

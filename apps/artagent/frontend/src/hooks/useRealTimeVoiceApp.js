@@ -152,7 +152,11 @@ export const useRealTimeVoiceApp = (API_BASE_URL, WS_URL) => {
     await initializeAudioPlayback();
 
     const sessionId = getOrCreateSessionId();
-    const conversationUrl = `${WS_URL}/api/v1/browser/conversation?session_id=${encodeURIComponent(sessionId)}&scenario=${encodeURIComponent(window.selectedScenario || 'banking')}`;
+    // Read the active scenario from sessionStorage (kept in sync by App.jsx).
+    // Falls back to 'banking' for backward compatibility with sessions
+    // that have no explicit scenario selection.
+    const activeScenario = sessionStorage.getItem('voice_agent_active_scenario') || 'banking';
+    const conversationUrl = `${WS_URL}/api/v1/browser/conversation?session_id=${encodeURIComponent(sessionId)}&scenario=${encodeURIComponent(activeScenario)}`;
 
     // 1) open WS
     const socket = new WebSocket(conversationUrl);

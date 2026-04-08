@@ -16,6 +16,7 @@ const ConversationControls = React.memo(({
   recording,
   callActive,
   isCallDisabled,
+  scenarioSwitching,
   onResetSession,
   onMicToggle,
   onPhoneButtonClick,
@@ -232,8 +233,12 @@ const ConversationControls = React.memo(({
         <div style={{ position: 'relative' }}>
           <IconButton
             disableRipple
-            aria-label={recording ? "End conversation with agent" : "Start talking to agent"}
-            sx={styles.micButton(recording, micHovered)}
+            aria-label={recording ? "End conversation with agent" : scenarioSwitching ? "Switching scenario…" : "Start talking to agent"}
+            sx={{
+              ...styles.micButton(recording, micHovered),
+              ...(scenarioSwitching && !recording ? { opacity: 0.45, pointerEvents: 'none' } : {}),
+            }}
+            disabled={!!scenarioSwitching && !recording}
             ref={micButtonRef}
             onMouseEnter={(event) => {
               setShowMicTooltip(true);
@@ -266,7 +271,7 @@ const ConversationControls = React.memo(({
                 ...(showMicTooltip ? styles.buttonTooltipVisible : {}),
               }}
             >
-              {recording ? "End the conversation" : "Start talking to the agent"}
+              {scenarioSwitching && !recording ? "Switching scenario…" : recording ? "End the conversation" : "Start talking to the agent"}
             </div>
           )}
         </div>

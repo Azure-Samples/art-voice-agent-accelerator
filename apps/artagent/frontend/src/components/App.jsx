@@ -192,6 +192,11 @@ function RealTimeVoiceApp() {
   const [agentDetail, setAgentDetail] = useState(null);
   const [sessionAgentConfig, setSessionAgentConfig] = useState(null);
   const [sessionScenarioConfig, setSessionScenarioConfig] = useState(null);
+  // Version counter to protect optimistic updates from stale fetches.
+  // Incremented on every optimistic update; fetchSessionScenarioConfig only
+  // applies the server response when the version hasn't changed since the
+  // fetch started (i.e., no optimistic update is in-flight).
+  const scenarioVersionRef = useRef(0);
   const [showAgentsPanel, setShowAgentsPanel] = useState(false);
   const [selectedAgentName, setSelectedAgentName] = useState(null);
   const [realtimePanelCoords, setRealtimePanelCoords] = useState({ top: 0, left: 0 });
@@ -259,40 +264,73 @@ function RealTimeVoiceApp() {
   // Session ID must be declared before scenario helpers that use it
   const [sessionId, setSessionId] = useState(() => getOrCreateSessionId());
   
-  // Scenario selection state - now per session
+  // Scenario selection state
   const [showScenarioMenu, setShowScenarioMenu] = useState(false);
+  // Non-null while a scenario switch is in-flight (POST + confirmation fetch).
+  // The menu and button are disabled while this is set to prevent double-clicks.
+  const [scenarioSwitching, setScenarioSwitching] = useState(null);
   const scenarioButtonRef = useRef(null);
-  
-  // Helper to get scenario for current session (default: banking)
-  const getSessionScenario = useCallback((sessId = sessionId) => {
-    return sessionProfiles[sessId]?.scenario || 'banking';
-  }, [sessionProfiles, sessionId]);
-  
-  // Helper to set scenario for current session
-  const setSessionScenario = useCallback((scenario, sessId = sessionId) => {
-    setSessionProfiles(prev => ({
-      ...prev,
-      [sessId]: { ...prev[sessId], scenario }
-    }));
-  }, [sessionId]);
-  
-  // Helper to get scenario icon from session config (falls back to scenario type icons)
-  const getSessionScenarioIcon = useCallback(() => {
-    const scenario = getSessionScenario();
-    // First check if we have a custom scenario with an icon in sessionScenarioConfig
-    if (sessionScenarioConfig?.scenarios) {
-      const activeScenario = sessionScenarioConfig.scenarios.find(s => 
-        s.name && `custom_${s.name.replace(/\s+/g, '_').toLowerCase()}` === scenario
-      );
-      if (activeScenario?.icon) {
-        return activeScenario.icon;
-      }
+
+  // Brief confirmation shown after a scenario switch completes
+  // { name: string, startAgent: string|null } or null
+  const [scenarioConfirmed, setScenarioConfirmed] = useState(null);
+  const scenarioConfirmedTimerRef = useRef(null);
+  const showScenarioConfirmation = useCallback((name, startAgent) => {
+    if (scenarioConfirmedTimerRef.current) clearTimeout(scenarioConfirmedTimerRef.current);
+    setScenarioConfirmed({ name, startAgent });
+    scenarioConfirmedTimerRef.current = setTimeout(() => setScenarioConfirmed(null), 3500);
+  }, []);
+  useEffect(() => () => { if (scenarioConfirmedTimerRef.current) clearTimeout(scenarioConfirmedTimerRef.current); }, []);
+
+  // ── Derived scenario state from sessionScenarioConfig (single source of truth) ──
+  // The backend `/session/{sid}/scenarios` endpoint is canonical. All scenario
+  // state is derived from its response stored in `sessionScenarioConfig`.
+  // No custom_ prefix, no sync heuristics, no duplicate tracking.
+
+  // Active scenario key (lowercase, e.g., "banking")
+  const activeScenarioKey = sessionScenarioConfig?.active_scenario?.toLowerCase() || null;
+
+  // Active scenario data (the entry with is_active=true)
+  const activeScenarioData = useMemo(() => {
+    if (!sessionScenarioConfig?.scenarios) return null;
+    return sessionScenarioConfig.scenarios.find(s => s.is_active) || null;
+  }, [sessionScenarioConfig]);
+
+  // Icon from the active scenario
+  const activeScenarioIcon = activeScenarioData?.icon
+    || sessionScenarioConfig?.active_scenario_icon
+    || '🏦';
+
+  // Builtin scenarios for the menu (always available from the scenarios endpoint)
+  const builtinScenarios = useMemo(
+    () => sessionScenarioConfig?.builtin_scenarios || [],
+    [sessionScenarioConfig]
+  );
+
+  // Custom scenarios for the menu (exclude duplicates of builtins)
+  const customScenarios = useMemo(() => {
+    const custom = sessionScenarioConfig?.custom_scenarios || [];
+    if (custom.length === 0) return [];
+    const builtinNames = new Set(builtinScenarios.map(s => s.name?.toLowerCase()));
+    const seenNames = new Set();
+    return custom.filter(s => {
+      const normalizedName = s.name?.toLowerCase();
+      if (!normalizedName || seenNames.has(normalizedName)) return false;
+      if (builtinNames.has(normalizedName)) return false;
+      seenNames.add(normalizedName);
+      return true;
+    });
+  }, [sessionScenarioConfig, builtinScenarios]);
+
+  // Keep sessionStorage in sync with activeScenarioKey so that the legacy
+  // useRealTimeVoiceApp hook (and any other code reading the active scenario)
+  // always has the current value. This replaces the broken window.selectedScenario.
+  useEffect(() => {
+    if (activeScenarioKey) {
+      sessionStorage.setItem('voice_agent_active_scenario', activeScenarioKey);
     }
-    // Fall back to type-based icons
-    if (scenario?.startsWith('custom_')) return '🎭';
-    if (scenario === 'banking') return '🏦';
-    return '🛡️'; // insurance default
-  }, [getSessionScenario, sessionScenarioConfig]);
+  }, [activeScenarioKey]);
+
   // Profile menu state moved to ProfileButton component
   const [editingSessionId, setEditingSessionId] = useState(false);
   const [pendingSessionId, setPendingSessionId] = useState(() => getOrCreateSessionId());
@@ -346,25 +384,364 @@ function RealTimeVoiceApp() {
     fetchSessionAgentConfig();
   }, [fetchSessionAgentConfig]);
 
-  // Fetch all session scenarios (for custom scenarios list)
+  // Fetch all session scenarios (for custom scenarios list).
+  // Version-guarded: if an optimistic update fires between request-start and
+  // response-arrival, the stale response is silently discarded.
   const fetchSessionScenarioConfig = useCallback(async (targetSessionId = sessionId) => {
-    if (!targetSessionId) return;
+    if (!targetSessionId) return null;
+    const versionAtStart = scenarioVersionRef.current;
     try {
       const res = await fetch(
-        `${API_BASE_URL}/api/v1/scenario-builder/session/${encodeURIComponent(targetSessionId)}/scenarios`
+        `${API_BASE_URL}/api/v1/scenario-builder/session/${encodeURIComponent(targetSessionId)}/scenarios`,
+        {
+          // Prevent browser caching to ensure fresh data after scenario changes
+          headers: { 'Cache-Control': 'no-cache' },
+        }
       );
       if (res.status === 404) {
-        setSessionScenarioConfig(null);
-        return;
+        // Only apply 404-null if no optimistic update happened since
+        if (scenarioVersionRef.current === versionAtStart) {
+          setSessionScenarioConfig(null);
+        }
+        return null;
       }
-      if (!res.ok) return;
+      if (!res.ok) return null;
       const data = await res.json();
-      // Store the scenarios array
-      setSessionScenarioConfig(data.scenarios && data.scenarios.length > 0 ? data : null);
+
+      // Guard: discard this response if an optimistic update landed while
+      // the fetch was in flight — the optimistic state is more recent.
+      if (scenarioVersionRef.current !== versionAtStart) {
+        return data; // return data but don't apply — caller may inspect it
+      }
+
+      // Bump version BEFORE applying so that any concurrent fetch (started
+      // with the same versionAtStart) will fail this guard and be discarded.
+      // Without this, two rapid clicks that fire fetches at the same version
+      // would both pass and both apply, briefly showing stale state.
+      scenarioVersionRef.current += 1;
+
+      // Merge: preserve custom scenarios from optimistic state that the
+      // backend response may be missing (eventual consistency across workers).
+      setSessionScenarioConfig(prev => {
+        const prevCustom = prev?.custom_scenarios;
+        if (!prevCustom?.length) return data;
+
+        const responseCustomNames = new Set(
+          (data.custom_scenarios || []).map(s => s.name?.toLowerCase()),
+        );
+        const orphaned = prevCustom.filter(
+          s => s.name && !responseCustomNames.has(s.name.toLowerCase()),
+        );
+        if (!orphaned.length) return data;
+
+        const preserved = orphaned.map(s => ({
+          ...s,
+          is_active: s.name?.toLowerCase() === data.active_scenario?.toLowerCase(),
+        }));
+        const mergedCustom = [...(data.custom_scenarios || []), ...preserved];
+        return {
+          ...data,
+          custom_scenarios: mergedCustom,
+          scenarios: [...(data.builtin_scenarios || []), ...mergedCustom],
+          total: (data.builtin_scenarios?.length || 0) + mergedCustom.length,
+        };
+      });
+
+      // The backend response is the single source of truth for the active
+      // scenario's start agent.  Always apply it so that scenario switches
+      // from the sidebar menu, builder, or initial page load all behave
+      // consistently — no guard that only fires once on first load.
+      const startAgent = data.active_start_agent
+        || (data.scenarios || []).find(s => s.is_active)?.start_agent;
+      if (startAgent) {
+        currentAgentRef.current = startAgent;
+        setSelectedAgentName(startAgent);
+        setAgentInventory(prev => prev ? { ...prev, startAgent } : prev);
+      }
+      return data;
     } catch (err) {
       appendLog(`Session scenarios fetch failed: ${err.message}`);
+      return null;
     }
   }, [sessionId, appendLog]);
+
+  // Optimistically update scenario state without a network round-trip.
+  // Accepts either a scenario name (to flip active flags on existing entries)
+  // or a full scenarioEntry object (to upsert into custom_scenarios when
+  // creating a brand-new scenario).  Returns the previous state snapshot
+  // so callers can roll back on API failure.
+  const applyScenarioOptimistically = useCallback((scenarioNameOrEntry, startAgent) => {
+    // Bump version so any in-flight fetchSessionScenarioConfig discards
+    // its stale response instead of overwriting this optimistic state.
+    scenarioVersionRef.current += 1;
+    let prevSnapshot = null;
+    setSessionScenarioConfig(prev => {
+      prevSnapshot = prev;
+      // When prev is null (e.g., fresh session before first fetch), build a
+      // minimal wrapper so the switch isn't silently swallowed.
+      const base = prev || { scenarios: [], builtin_scenarios: [], custom_scenarios: [] };
+      const isEntry = scenarioNameOrEntry && typeof scenarioNameOrEntry === 'object';
+      const scenarioName = isEntry ? scenarioNameOrEntry.name : scenarioNameOrEntry;
+      const nameLower = scenarioName?.toLowerCase();
+
+      // Helper: flip is_active on an array of scenario objects
+      const flipActive = (arr) => (arr || []).map(s => ({
+        ...s,
+        is_active: s.name?.toLowerCase() === nameLower,
+      }));
+
+      let updatedScenarios = flipActive(base.scenarios);
+      let updatedBuiltins = flipActive(base.builtin_scenarios);
+      let updatedCustom = flipActive(base.custom_scenarios);
+
+      // If a full entry was provided and it doesn't already exist in
+      // custom_scenarios, upsert it so the UI has something to render.
+      if (isEntry) {
+        const exists = updatedCustom.some(s => s.name?.toLowerCase() === nameLower);
+        if (!exists) {
+          const newEntry = { ...scenarioNameOrEntry, is_active: true };
+          updatedCustom = [...updatedCustom, newEntry];
+          // Also add to the unified scenarios array
+          updatedScenarios = [...updatedScenarios, newEntry];
+        }
+      }
+
+      // Resolve icon from whichever array contains the active scenario
+      const activeEntry =
+        updatedScenarios.find(s => s.is_active) ||
+        updatedBuiltins.find(s => s.is_active) ||
+        updatedCustom.find(s => s.is_active);
+      const resolvedIcon = activeEntry?.icon || (isEntry ? scenarioNameOrEntry.icon : null) || base.active_scenario_icon;
+      const resolvedStartAgent = startAgent || (isEntry ? scenarioNameOrEntry.start_agent : null) || null;
+
+      return {
+        ...base,
+        active_scenario: nameLower,
+        active_start_agent: resolvedStartAgent,
+        active_scenario_icon: resolvedIcon,
+        scenarios: updatedScenarios,
+        builtin_scenarios: updatedBuiltins,
+        custom_scenarios: updatedCustom,
+      };
+    });
+    // Also update agent state synchronously
+    const resolvedAgent = startAgent
+      || (scenarioNameOrEntry && typeof scenarioNameOrEntry === 'object' ? scenarioNameOrEntry.start_agent : null);
+    if (resolvedAgent) {
+      currentAgentRef.current = resolvedAgent;
+      setSelectedAgentName(resolvedAgent);
+      setAgentInventory(prev => prev ? { ...prev, startAgent: resolvedAgent } : prev);
+    }
+    return prevSnapshot;
+  }, []);
+
+  // Poll the backend until a just-saved scenario appears as the active
+  // scenario.  This avoids the race condition where a single fetch after
+  // save returns stale data (the backend hasn't propagated yet) and
+  // overwrites the optimistic state set by applyScenarioOptimistically.
+  //
+  // The function makes raw fetch calls without touching sessionScenarioConfig
+  // until the expected scenario is confirmed active.  If a new optimistic
+  // update fires while polling (user switches scenarios), polling aborts
+  // immediately to avoid clobbering the newer state.
+  const pollUntilScenarioPropagated = useCallback(async (
+    expectedScenarioName,
+    { maxAttempts = 3, intervalMs = 500 } = {},
+  ) => {
+    const nameLower = expectedScenarioName?.toLowerCase();
+    if (!nameLower || !sessionId) return null;
+
+    const startVersion = scenarioVersionRef.current;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      // Abort if a newer optimistic update landed (user switched scenarios)
+      if (scenarioVersionRef.current !== startVersion) return null;
+
+      if (attempt > 0) {
+        await new Promise(resolve => setTimeout(resolve, intervalMs));
+        // Re-check after sleeping
+        if (scenarioVersionRef.current !== startVersion) return null;
+      }
+
+      try {
+        const res = await fetch(
+          `${API_BASE_URL}/api/v1/scenario-builder/session/${encodeURIComponent(sessionId)}/scenarios`,
+          { headers: { 'Cache-Control': 'no-cache' } },
+        );
+        if (!res.ok) continue;
+        const data = await res.json();
+
+        // Check if the backend now shows the expected scenario as active
+        const propagated = data.active_scenario?.toLowerCase() === nameLower;
+        if (!propagated) continue;
+
+        // Final guard: abort if version changed during this fetch
+        if (scenarioVersionRef.current !== startVersion) return null;
+
+        // Backend has caught up — apply as confirmed truth and bump
+        // the version so any concurrent fetchSessionScenarioConfig
+        // discards its (now-stale) result.
+        scenarioVersionRef.current += 1;
+
+        // Merge: the backend response may be missing custom scenarios
+        // due to eventual consistency (stale in-memory cache on the
+        // worker that served the GET).  Preserve custom scenarios from
+        // the optimistic state that aren't in the response.
+        setSessionScenarioConfig(prev => {
+          const prevCustom = prev?.custom_scenarios;
+          if (!prevCustom?.length) return data;
+
+          const responseCustomNames = new Set(
+            (data.custom_scenarios || []).map(s => s.name?.toLowerCase()),
+          );
+          const orphaned = prevCustom.filter(
+            s => s.name && !responseCustomNames.has(s.name.toLowerCase()),
+          );
+          if (!orphaned.length) return data;
+
+          // Deactivate preserved entries — we're confirming a different
+          // scenario as active, so these should be inactive.
+          const preserved = orphaned.map(s => ({ ...s, is_active: false }));
+          const mergedCustom = [...(data.custom_scenarios || []), ...preserved];
+          return {
+            ...data,
+            custom_scenarios: mergedCustom,
+            scenarios: [...(data.builtin_scenarios || []), ...mergedCustom],
+            total: (data.builtin_scenarios?.length || 0) + mergedCustom.length,
+          };
+        });
+
+        const startAgent = data.active_start_agent
+          || (data.scenarios || []).find(s => s.is_active)?.start_agent;
+        if (startAgent) {
+          currentAgentRef.current = startAgent;
+          setSelectedAgentName(startAgent);
+          setAgentInventory(prev => prev ? { ...prev, startAgent } : prev);
+        }
+        return data;
+      } catch {
+        // Network error — retry on next attempt
+      }
+    }
+
+    // Max attempts reached — keep the optimistic state intact.
+    // A future background refresh will eventually reconcile.
+    return null;
+  }, [sessionId]);
+
+  // Activate a scenario from the builder's template chips.
+  // Mirrors the sidebar's optimistic-update + POST + refetch flow so that
+  // clicking a template chip in the builder activates the scenario on the
+  // session, updates the sidebar, and switches the current agent.
+  const activateScenarioFromBuilder = useCallback(async (scenario, isBuiltin) => {
+    const scenarioName = scenario?.name;
+    if (!scenarioName || !sessionId) return;
+    const startAgent = scenario.start_agent || scenario.agents?.[0] || null;
+
+    setScenarioSwitching(scenarioName);
+
+    // Optimistic update — instant UI feedback
+    const prevState = applyScenarioOptimistically(
+      isBuiltin ? scenarioName : scenario,
+      startAgent,
+    );
+
+    // Capture version AFTER optimistic update.  If a newer action (save,
+    // another chip click, sidebar switch) lands while we're awaiting the
+    // POST, the version will have changed and we must NOT overwrite state.
+    const activationVersion = scenarioVersionRef.current;
+
+    try {
+      let response;
+      if (isBuiltin) {
+        const id = scenarioName.toLowerCase().replace(/\s+/g, '_');
+        response = await fetch(
+          `${API_BASE_URL}/api/v1/scenario-builder/session/${encodeURIComponent(sessionId)}/apply-template?template_id=${encodeURIComponent(id)}`,
+          { method: 'POST' },
+        );
+      } else {
+        // Newly-created custom scenarios can race Redis/session propagation.
+        // Retry a few times before treating activation as failed.
+        const maxActivateAttempts = 3;
+        for (let attempt = 1; attempt <= maxActivateAttempts; attempt += 1) {
+          response = await fetch(
+            `${API_BASE_URL}/api/v1/scenario-builder/session/${encodeURIComponent(sessionId)}/active?scenario_name=${encodeURIComponent(scenarioName)}`,
+            { method: 'POST' },
+          );
+
+          if (response.ok || response.status !== 404 || attempt === maxActivateAttempts) {
+            break;
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+        }
+      }
+
+      // Abort if a newer action superseded this activation
+      if (scenarioVersionRef.current !== activationVersion) {
+        setScenarioSwitching(null);
+        return;
+      }
+
+      if (!response.ok) {
+        // POST failed — only rollback if still current
+        if (scenarioVersionRef.current === activationVersion) {
+          scenarioVersionRef.current += 1;
+          // For custom scenarios, avoid aggressive eviction on 404 because
+          // save+activate can briefly race propagation and would remove a
+          // just-created scenario from the UI.
+          if (response.status === 404 && isBuiltin) {
+            const ghostName = scenarioName?.toLowerCase();
+            setSessionScenarioConfig(prev => {
+              if (!prev) return prev;
+              const prunedCustom = (prev.custom_scenarios || []).filter(
+                s => s.name?.toLowerCase() !== ghostName,
+              );
+              const prunedScenarios = (prev.scenarios || []).filter(
+                s => s.name?.toLowerCase() !== ghostName,
+              );
+              return {
+                ...prev,
+                custom_scenarios: prunedCustom,
+                scenarios: prunedScenarios,
+                total: prunedScenarios.length,
+              };
+            });
+          } else {
+            setSessionScenarioConfig(prevState);
+          }
+        }
+        appendLog(`⚠️ Failed to activate scenario "${scenarioName}"`);
+        setScenarioSwitching(null);
+        return;
+      }
+
+      // Only set the agent from this POST if no newer activation superseded us
+      if (scenarioVersionRef.current === activationVersion) {
+        const data = await response.json();
+        const confirmedAgent = data?.scenario?.start_agent || startAgent;
+        if (confirmedAgent) {
+          currentAgentRef.current = confirmedAgent;
+          setSelectedAgentName(confirmedAgent);
+          setAgentInventory(prev => prev ? { ...prev, startAgent: confirmedAgent } : prev);
+        }
+        // POST succeeded — wait for backend propagation before applying
+        // any server state to avoid stale responses overwriting optimistic UI.
+        scenarioVersionRef.current += 1;
+        await pollUntilScenarioPropagated(scenarioName);
+      }
+showScenarioConfirmation(scenarioName, currentAgentRef.current);
+        setScenarioSwitching(null);
+    } catch (err) {
+      // Network error — only rollback if still current
+      if (scenarioVersionRef.current === activationVersion) {
+        scenarioVersionRef.current += 1;
+        setSessionScenarioConfig(prevState);
+      }
+      appendLog(`Failed to activate scenario: ${err.message}`);
+      setScenarioSwitching(null);
+    }
+  }, [sessionId, applyScenarioOptimistically, pollUntilScenarioPropagated, showScenarioConfirmation, appendLog]);
 
   // Fetch session core memory for performance analysis
   const fetchSessionCoreMemory = useCallback(async (targetSessionId = sessionId) => {
@@ -524,13 +901,8 @@ function RealTimeVoiceApp() {
           handoffMap: data.handoff_map || data.handoffMap || {},
         };
         setAgentInventory(normalized);
-        if (
-          normalized.startAgent &&
-          (currentAgentRef.current === "Concierge" || !currentAgentRef.current)
-        ) {
-          currentAgentRef.current = normalized.startAgent;
-        setSelectedAgentName(normalized.startAgent);
-      }
+        // Start agent is managed by scenario state (fetchSessionScenarioConfig),
+        // NOT by the global agent inventory endpoint.
     } catch (err) {
       appendLog(`Agent preload failed: ${err.message}`);
     }
@@ -544,13 +916,9 @@ function RealTimeVoiceApp() {
     setPendingSessionId(sessionId);
   }, [sessionId]);
 
-  useEffect(() => {
-    if (sessionAgentConfig?.config?.name) {
-      const name = sessionAgentConfig.config.name;
-      setSelectedAgentName((prev) => prev || name);
-      currentAgentRef.current = name;
-    }
-  }, [sessionAgentConfig]);
+  // Note: Removed auto-setting of currentAgentRef from sessionAgentConfig
+  // to prevent Agent Builder creations from overriding scenario start_agent.
+  // The agent is only set when explicitly selected by user or scenario.
 
   useEffect(() => {
     let cancelled = false;
@@ -750,6 +1118,9 @@ function RealTimeVoiceApp() {
   const [showAgentBuilder, setShowAgentBuilder] = useState(false);
   const [showAgentScenarioBuilder, setShowAgentScenarioBuilder] = useState(false);
   const [builderInitialMode, setBuilderInitialMode] = useState('agents');
+  // When true, the scenario builder opens in "create new" mode (blank form, POST endpoint).
+  // When false, it opens in "edit existing" mode with the active custom scenario pre-filled.
+  const [builderScenarioCreateMode, setBuilderScenarioCreateMode] = useState(false);
   const [createProfileHovered, setCreateProfileHovered] = useState(false);
   const demoFormCloseTimeoutRef = useRef(null);
   const profileHighlightTimeoutRef = useRef(null);
@@ -1169,6 +1540,9 @@ function RealTimeVoiceApp() {
   // Throttle hot-path UI updates for streaming text
   const lastSttPartialUpdateRef = useRef(0);
   const lastAssistantStreamUpdateRef = useRef(0);
+  // Buffer to accumulate streaming text between throttled UI updates
+  // This prevents dropped deltas when VoiceLive sends rapid character-level updates
+  const assistantStreamBufferRef = useRef({ turnId: null, text: "" });
 
   const workletSource = `
     class PcmSink extends AudioWorkletProcessor {
@@ -1298,6 +1672,10 @@ function RealTimeVoiceApp() {
 
   // Initialize playback audio context and worklet (call on user gesture)
   const initializeAudioPlayback = async () => {
+    if (playbackAudioContextRef.current?.state === "closed") {
+      playbackAudioContextRef.current = null;
+      pcmSinkRef.current = null;
+    }
     if (playbackAudioContextRef.current) return; // Already initialized
     if (audioInitFailedRef.current) return; // Already failed, don't retry
     if (audioInitAttemptedRef.current) return; // Already attempting
@@ -1461,6 +1839,9 @@ function RealTimeVoiceApp() {
     setSessionProfiles({});
     setSessionAgentConfig(null); // Clear session-specific agent config
     setSessionScenarioConfig(null); // Clear session-specific scenario config
+    sessionStorage.removeItem('voice_agent_active_scenario'); // Clear active scenario sync
+    setAgentInventory(null); // Clear agent inventory to remove session-specific agents
+    setSelectedAgentName(null); // Clear selected agent
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       logger.info('🔌 Closing WebSocket for session reset...');
       try {
@@ -1482,13 +1863,15 @@ function RealTimeVoiceApp() {
     setMicMuted(false);
     closeRelaySocket("session reset");
     appendLog(`🔄️ Session reset - new session ID: ${newSessionId}`);
+    // Re-fetch agent inventory for the new session (without old session agents)
     setTimeout(() => {
+      fetchAgentInventory();
       appendSystemMessage(
         "Session restarted with new ID. Ready for a fresh conversation!",
         { tone: "success" },
       );
     }, 500);
-  }, [appendLog, appendSystemMessage, closeRelaySocket, setSessionId, setSessionProfiles, setMessages, setActiveSpeaker, setCallActive, setShowPhoneInput]);
+  }, [appendLog, appendSystemMessage, closeRelaySocket, setSessionId, setSessionProfiles, setMessages, setActiveSpeaker, setCallActive, setShowPhoneInput, fetchAgentInventory]);
 
   const handleMuteToggle = useCallback(() => {
     if (!recording) {
@@ -1821,7 +2204,7 @@ function RealTimeVoiceApp() {
       appendLog("🎤 PCM streaming started");
       await initializeAudioPlayback();
 
-      const sessionId = getOrCreateSessionId();
+      const currentSessionId = sessionId || getOrCreateSessionId();
       const realtimeMode = modeOverride || selectedRealtimeStreamingMode;
       const realtimeReadableMode =
         selectedRealtimeStreamingModeLabel || realtimeMode;
@@ -1834,12 +2217,23 @@ function RealTimeVoiceApp() {
                        activeSessionProfile?.profile?.contact_info?.email || null;
       const emailParam = userEmail ? `&user_email=${encodeURIComponent(userEmail)}` : '';
       
-      const currentScenario = getSessionScenario();
-      const baseConversationUrl = `${WS_URL}/api/v1/browser/conversation?session_id=${sessionId}&streaming_mode=${encodeURIComponent(
+      const currentScenario = activeScenarioKey || 'banking';
+      const activeScenarioNameForStart =
+        activeScenarioData?.name ||
+        (currentScenario ? currentScenario.replace(/_/g, ' ') : null);
+
+      // The scenario is passed as a query parameter on the WebSocket URL.
+      // The backend's _create_voice_live_handler already calls
+      // set_active_scenario_async with this value when the connection opens,
+      // so no separate pre-start POST is needed.
+      const scenarioForQuery = activeScenarioNameForStart || currentScenario;
+
+      const baseConversationUrl = `${WS_URL}/api/v1/browser/conversation?session_id=${currentSessionId}&streaming_mode=${encodeURIComponent(
         realtimeMode,
-      )}${emailParam}&scenario=${encodeURIComponent(currentScenario)}`;
-      resetMetrics(sessionId);
+      )}${emailParam}&scenario=${encodeURIComponent(scenarioForQuery || currentScenario)}`;
+      resetMetrics(currentSessionId);
       assistantStreamGenerationRef.current = 0;
+      assistantStreamBufferRef.current = { turnId: null, text: "" };
       terminationReasonRef.current = null;
       resampleWarningRef.current = false;
       audioInitFailedRef.current = false;
@@ -1853,7 +2247,7 @@ function RealTimeVoiceApp() {
       }
       logger.info(
         '🔗 [FRONTEND] Starting conversation WebSocket with session_id: %s (realtime_mode=%s)',
-        sessionId,
+        currentSessionId,
         realtimeReadableMode,
       );
       if (activeRealtimeConfig) {
@@ -2072,7 +2466,7 @@ function RealTimeVoiceApp() {
     };
 
     const updateTurnMessage = (turnId, updater, options = {}) => {
-      const { createIfMissing = true, initial } = options;
+      const { createIfMissing = true, initial, speaker } = options;
 
       setMessages((prev) => {
         if (!turnId) {
@@ -2086,7 +2480,24 @@ function RealTimeVoiceApp() {
           return [...prev, base];
         }
 
-        const index = prev.findIndex((m) => m.turnId === turnId);
+        // After handoff, a message may have been created with a speaker-qualified turnId
+        // (e.g., "abc123_DeclineSpecialist"). Check for that variant first if speaker is known.
+        const speakerQualifiedTurnId = speaker ? `${turnId}_${speaker}` : null;
+        let index = speakerQualifiedTurnId
+          ? prev.findIndex((m) => m.turnId === speakerQualifiedTurnId)
+          : -1;
+        
+        // Fall back to looking for exact turnId match with SAME speaker
+        // This prevents finding a different agent's message with the same base turnId
+        if (index === -1 && speaker) {
+          index = prev.findIndex((m) => m.turnId === turnId && m.speaker === speaker);
+        }
+        
+        // Final fallback: exact turnId match (for cases without speaker info)
+        if (index === -1) {
+          index = prev.findIndex((m) => m.turnId === turnId);
+        }
+
         if (index === -1) {
           if (!createIfMissing) {
             return prev;
@@ -2095,7 +2506,20 @@ function RealTimeVoiceApp() {
           if (!base) {
             return prev;
           }
-          return [...prev, { ...base, turnId }];
+          // DEDUPLICATION: Don't create a new message if the last message has same speaker+text
+          // This prevents duplicate bubbles when turnId changes but content is the same
+          const lastMsg = prev.at(-1);
+          if (lastMsg && lastMsg.speaker === base.speaker && lastMsg.text === base.text) {
+            // Update the existing message's turnId instead of creating duplicate
+            return prev.map((m, i) => 
+              i === prev.length - 1 
+                ? { ...m, turnId: speaker ? `${turnId}_${speaker}` : turnId, streaming: false }
+                : m
+            );
+          }
+          // For new messages with a speaker, use qualified turnId to isolate from other agents
+          const effectiveTurnId = speaker ? `${turnId}_${speaker}` : turnId;
+          return [...prev, { ...base, turnId: effectiveTurnId }];
         }
 
         const current = prev[index];
@@ -2104,8 +2528,29 @@ function RealTimeVoiceApp() {
           return prev;
         }
 
+        // If the speaker changed (e.g., after handoff), create a new message
+        // instead of overwriting the previous agent's bubble
+        if (patch.speaker && current.speaker && patch.speaker !== current.speaker) {
+          const base = typeof initial === "function" ? initial() : initial;
+          // MUST use qualified turnId so subsequent lookups can find this message
+          const qualifiedTurnId = `${turnId}_${patch.speaker}`;
+          const newMsg = base 
+            ? { ...base, ...patch, turnId: qualifiedTurnId } 
+            : { ...patch, turnId: qualifiedTurnId };
+          // DEDUPLICATION: Don't add if last message already has same speaker+text
+          const lastMsg = prev.at(-1);
+          if (lastMsg && lastMsg.speaker === newMsg.speaker && lastMsg.text === newMsg.text) {
+            return prev.map((m, i) => 
+              i === prev.length - 1 
+                ? { ...m, turnId: qualifiedTurnId, streaming: false }
+                : m
+            );
+          }
+          return [...prev, newMsg];
+        }
+
         const next = [...prev];
-        next[index] = { ...current, ...patch, turnId };
+        next[index] = { ...current, ...patch, turnId: current.turnId };
         return next;
       });
     };
@@ -2360,6 +2805,9 @@ function RealTimeVoiceApp() {
               text: reasonText,
               ts: payload.ts || payload.timestamp,
             });
+            // Reset streaming state on agent handoff to force new bubble for new agent
+            assistantStreamGenerationRef.current += 1;
+            assistantStreamBufferRef.current = { turnId: null, text: "" };
           }
           if (label !== "System" && label !== "User") {
             currentAgentRef.current = label;
@@ -2948,12 +3396,16 @@ function RealTimeVoiceApp() {
       }
 
       if (type === "assistant_cancelled") {
+        // Clear streaming buffer when response is cancelled
+        assistantStreamBufferRef.current = { turnId: null, text: "" };
+        
         const turnId =
           payload.turn_id ||
           payload.turnId ||
           payload.response_id ||
           payload.responseId ||
           null;
+        const cancelledSpeaker = speaker || payload.active_agent || payload.sender || null;
         if (turnId) {
           updateTurnMessage(
             turnId,
@@ -2969,7 +3421,7 @@ function RealTimeVoiceApp() {
                       current.cancelReason,
                   }
                 : null,
-            { createIfMissing: false },
+            { createIfMissing: false, speaker: cancelledSpeaker },
           );
         }
         setActiveSpeaker(null);
@@ -2994,67 +3446,63 @@ function RealTimeVoiceApp() {
           payload.responseId ||
           null;
 
+        // Always accumulate streaming text into buffer (prevents dropped deltas)
+        // Track by turnId+speaker to prevent cross-agent contamination during handoffs
+        const buffer = assistantStreamBufferRef.current;
+        const bufferKey = turnId ? `${turnId}_${streamingSpeaker}` : null;
+        if (buffer.turnId !== bufferKey) {
+          buffer.turnId = bufferKey;
+          buffer.text = txt; // Start fresh for new turn or new speaker
+        } else {
+          buffer.text += txt; // Accumulate for same turn+speaker
+        }
+
         if (shouldUpdateUi) {
           lastAssistantStreamUpdateRef.current = now;
-          if (turnId) {
-            updateTurnMessage(
-              turnId,
-              (current) => {
-                const previousText =
-                  current?.streamGeneration === streamGeneration
-                    ? current?.text ?? ""
-                    : "";
-                return {
-                  speaker: streamingSpeaker,
-                  text: `${previousText}${txt}`,
-                  streaming: true,
-                  streamGeneration,
-                  cancelled: false,
-                  cancelReason: undefined,
-                };
-              },
-              {
-                initial: () => ({
-                  speaker: streamingSpeaker,
-                  text: txt,
-                  streaming: true,
-                  streamGeneration,
-                  turnId,
-                  cancelled: false,
-                }),
-              },
-            );
-          } else {
-            setMessages((prev) => {
-              const latest = prev.at(-1);
+          // Use accumulated buffer text instead of just current delta
+          const accumulatedText = buffer.text;
+          
+          // Use speaker+streamGeneration as primary key for finding/updating streaming messages
+          // This is more robust than turnId alone, especially during handoffs where
+          // the same turnId may be used by multiple agents
+          setMessages((prev) => {
+            // Find the most recent streaming message for this speaker with matching generation
+            // Search backwards since we want the latest one
+            for (let idx = prev.length - 1; idx >= 0; idx -= 1) {
+              const candidate = prev[idx];
               if (
-                latest?.streaming &&
-                latest?.speaker === streamingSpeaker &&
-                latest?.streamGeneration === streamGeneration
+                candidate?.streaming &&
+                candidate?.speaker === streamingSpeaker &&
+                candidate?.streamGeneration === streamGeneration
               ) {
+                // Found it - update in place
                 return prev.map((m, i) =>
-                  i === prev.length - 1
+                  i === idx
                     ? {
                         ...m,
-                        text: m.text + txt,
+                        text: accumulatedText,
+                        turnId: turnId || m.turnId,
                         cancelled: false,
                         cancelReason: undefined,
                       }
                     : m,
                 );
               }
-              return [
-                ...prev,
-                {
-                  speaker: streamingSpeaker,
-                  text: txt,
-                  streaming: true,
-                  streamGeneration,
-                  cancelled: false,
-                },
-              ];
-            });
-          }
+            }
+            
+            // No existing streaming message for this speaker+generation - create new one
+            return [
+              ...prev,
+              {
+                speaker: streamingSpeaker,
+                text: accumulatedText,
+                streaming: true,
+                streamGeneration,
+                turnId,
+                cancelled: false,
+              },
+            ];
+          });
         }
         const pending = metricsRef.current?.pendingBargeIn;
         if (pending) {
@@ -3064,6 +3512,9 @@ function RealTimeVoiceApp() {
       }
 
       if (msgType === "assistant" || msgType === "status" || speaker === "Concierge") {
+        // Clear streaming buffer when final message arrives
+        assistantStreamBufferRef.current = { turnId: null, text: "" };
+        
         if (msgType === "status") {
           const normalizedStatus = (txt || "").toLowerCase();
           if (
@@ -3110,6 +3561,8 @@ function RealTimeVoiceApp() {
               cancelReason: undefined,
             }),
             {
+              // Pass speaker so we can find messages with speaker-qualified turnIds after handoff
+              speaker: assistantSpeaker,
               initial: () => ({
                 ...messageOptions,
                 streaming: false,
@@ -3120,9 +3573,11 @@ function RealTimeVoiceApp() {
           );
         } else {
           setMessages((prev) => {
+            // Only finalize a streaming message if it belongs to the same speaker
+            // This prevents handoff responses from overwriting previous agent's bubbles
             for (let idx = prev.length - 1; idx >= 0; idx -= 1) {
               const candidate = prev[idx];
-              if (candidate?.streaming) {
+              if (candidate?.streaming && candidate?.speaker === assistantSpeaker) {
                 return prev.map((m, i) =>
                   i === idx
                     ? {
@@ -3627,6 +4082,46 @@ function RealTimeVoiceApp() {
           backdropFilter: 'blur(24px)',
           WebkitBackdropFilter: 'blur(24px)',
         }}>
+          {/* Floating scenario-confirmed bubble — above the button cluster */}
+          {scenarioConfirmed && (
+            <div
+              key={scenarioConfirmed.name + (scenarioConfirmed.startAgent || '')}
+              style={{
+                position: 'absolute',
+                bottom: 'calc(100% + 10px)',
+                left: 0,
+                zIndex: 1,
+                pointerEvents: 'none',
+                animation: 'voiceapp-scenario-flash 3.5s ease forwards',
+              }}
+            >
+              <div style={{
+                padding: '8px 14px',
+                borderRadius: '12px',
+                background: 'linear-gradient(135deg, rgba(16,185,129,0.95), rgba(5,150,105,0.92))',
+                boxShadow: '0 8px 28px rgba(16,185,129,0.35), 0 0 0 1px rgba(16,185,129,0.15)',
+                backdropFilter: 'blur(12px)',
+                color: '#fff',
+                fontSize: '12px',
+                fontWeight: 600,
+                lineHeight: 1.4,
+                whiteSpace: 'nowrap',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+              }}>
+                <span style={{ fontSize: '14px' }}>✓</span>
+                <div>
+                  <div>{scenarioConfirmed.name}</div>
+                  {scenarioConfirmed.startAgent && (
+                    <div style={{ fontSize: '10px', fontWeight: 500, opacity: 0.85 }}>
+                      → {scenarioConfirmed.startAgent}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
           {/* Scenario Selector Button */}
           <div style={{
             paddingBottom: '8px',
@@ -3638,27 +4133,32 @@ function RealTimeVoiceApp() {
           }}>
             <button
               ref={scenarioButtonRef}
-              onClick={() => setShowScenarioMenu((prev) => !prev)}
-              title="Select Industry Scenario"
+              onClick={() => !scenarioSwitching && setShowScenarioMenu((prev) => !prev)}
+              disabled={!!scenarioSwitching}
+              title={scenarioSwitching ? `Switching to ${scenarioSwitching}…` : 'Select Industry Scenario'}
               style={{
                 width: '44px',
                 height: '44px',
                 borderRadius: '12px',
                 border: '1px solid rgba(226,232,240,0.6)',
-                background: getSessionScenario()?.startsWith('custom_') 
-                  ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)'
-                  : getSessionScenario() === 'banking' 
-                    ? 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)'
-                    : 'linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%)',
+                background: scenarioSwitching
+                  ? 'linear-gradient(135deg, rgba(148,163,184,0.3), rgba(148,163,184,0.2))'
+                  : activeScenarioData?.is_custom 
+                    ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)'
+                    : activeScenarioKey === 'banking' 
+                      ? 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)'
+                      : 'linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%)',
                 color: '#ffffff',
                 fontSize: '18px',
                 fontWeight: '500',
-                cursor: 'pointer',
+                cursor: scenarioSwitching ? 'wait' : 'pointer',
+                opacity: scenarioSwitching ? 0.7 : 1,
                 transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
                 boxShadow: '0 2px 8px rgba(15,23,42,0.1), inset 0 1px 0 rgba(255,255,255,0.15)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
+                position: 'relative',
               }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.transform = 'translateY(-2px)';
@@ -3669,11 +4169,21 @@ function RealTimeVoiceApp() {
                 e.currentTarget.style.boxShadow = '0 2px 8px rgba(15,23,42,0.1), inset 0 1px 0 rgba(255,255,255,0.15)';
               }}
             >
-              {getSessionScenarioIcon()}
+              {scenarioSwitching ? (
+                <span style={{
+                  display: 'inline-block',
+                  width: '18px',
+                  height: '18px',
+                  border: '2px solid rgba(255,255,255,0.3)',
+                  borderTopColor: '#fff',
+                  borderRadius: '50%',
+                  animation: 'voiceapp-spin 0.6s linear infinite',
+                }} />
+              ) : activeScenarioIcon}
             </button>
 
             {/* Scenario Selection Menu */}
-            {showScenarioMenu && (
+            {showScenarioMenu && !scenarioSwitching && (
               <div 
                 data-scenario-menu
                 style={{
@@ -3689,94 +4199,148 @@ function RealTimeVoiceApp() {
                 minWidth: '200px',
                 zIndex: 1400,
               }}>
-                {/* Built-in Scenarios */}
-                <div style={{
-                  padding: '4px 8px 6px',
-                  fontSize: '10px',
-                  fontWeight: '600',
-                  color: '#94a3b8',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.5px',
-                }}>
-                  Industry Templates
-                </div>
-                {[
-                  { id: 'banking', icon: '🏦', label: 'Banking' },
-                  { id: 'insurance', icon: '🛡️', label: 'Insurance' },
-                ].map(({ id, icon, label }) => (
-                  <button
-                    key={id}
-                    onClick={async () => {
-                      // Apply industry template to session on backend
-                      try {
-                        await fetch(
-                          `${API_BASE_URL}/api/v1/scenario-builder/session/${sessionId}/apply-template?template_id=${encodeURIComponent(id)}`,
-                          { method: 'POST' }
-                        );
-                        appendLog(`${icon} Applied ${label} template to session ${sessionId}`);
-                      } catch (err) {
-                        appendLog(`Failed to apply template: ${err.message}`);
-                      }
-                      
-                      setSessionScenario(id);
-                      setShowScenarioMenu(false);
-                      appendLog(`${icon} Switched to ${label} for session ${sessionId}`);
-                      
-                      if (callActive) {
-                        // ACS mode: restart the call with new scenario
-                        appendLog(`🔄 Restarting call with ${label} scenario...`);
-                        terminateACSCall();
-                        setTimeout(() => {
-                          handlePhoneButtonClick();
-                        }, 500);
-                      } else if (recording) {
-                        // Browser recording mode: reconnect WebSocket with new scenario
-                        appendLog(`🔄 Reconnecting with ${label} scenario...`);
-                        handleMicToggle(); // Stop current recording
-                        setTimeout(() => {
-                          handleMicToggle(); // Start new recording with new scenario
-                        }, 500);
-                      }
-                    }}
-                    style={{
-                      width: '100%',
-                      padding: '10px 14px',
-                      borderRadius: '10px',
-                      border: 'none',
-                      background: getSessionScenario() === id 
-                        ? 'linear-gradient(135deg, rgba(99,102,241,0.1), rgba(79,70,229,0.08))' 
-                        : 'transparent',
-                      color: getSessionScenario() === id ? '#4f46e5' : '#64748b',
-                      fontSize: '13px',
-                      fontWeight: getSessionScenario() === id ? '600' : '500',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '10px',
-                      transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-                      textAlign: 'left',
-                    }}
-                    onMouseEnter={(e) => {
-                      if (getSessionScenario() !== id) {
-                        e.currentTarget.style.background = 'rgba(148,163,184,0.06)';
-                      }
-                    }}
-                    onMouseLeave={(e) => {
-                      if (getSessionScenario() !== id) {
-                        e.currentTarget.style.background = 'transparent';
-                      }
-                    }}
-                  >
-                    <span style={{ fontSize: '16px' }}>{icon}</span>
-                    <span>{label}</span>
-                    {getSessionScenario() === id && (
-                      <span style={{ marginLeft: 'auto', fontSize: '14px', color: '#4f46e5' }}>✓</span>
-                    )}
-                  </button>
-                ))}
+                {/* Built-in Scenarios (eagerly-loaded, always available) */}
+                {builtinScenarios.length > 0 && (
+                  <>
+                    <div style={{
+                      padding: '4px 8px 6px',
+                      fontSize: '10px',
+                      fontWeight: '600',
+                      color: '#94a3b8',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                    }}>
+                      Industry Templates
+                    </div>
+                    {builtinScenarios.map((template) => {
+                      const id = template.name?.toLowerCase().replace(/\s+/g, '_') || 'unknown';
+                      const icon = template.icon || '🎭';
+                      const label = template.name || 'Scenario';
+                      const isActive = Boolean(template.is_active);
+                      return (
+                        <button
+                          key={id}
+                          disabled={!!scenarioSwitching}
+                          onClick={async () => {
+                            if (scenarioSwitching) return;
+                            let templateStartAgent = template.start_agent || null;
+                            setScenarioSwitching(template.name);
+                            // Optimistically update UI before the POST completes;
+                            // capture previous state for rollback on failure.
+                            const prevState = applyScenarioOptimistically(template.name, templateStartAgent);
+                            const activationVersion = scenarioVersionRef.current;
+                            setShowScenarioMenu(false);
+                            
+                            // Apply industry template to session on backend
+                            try {
+                              const response = await fetch(
+                                `${API_BASE_URL}/api/v1/scenario-builder/session/${sessionId}/apply-template?template_id=${encodeURIComponent(id)}`,
+                                { method: 'POST' }
+                              );
+                              // Abort if a newer switch superseded this one
+                              if (scenarioVersionRef.current !== activationVersion) {
+                                setScenarioSwitching(null);
+                                return;
+                              }
+                              if (response.ok) {
+                                const data = await response.json();
+                                const confirmedAgent = data?.scenario?.start_agent || templateStartAgent;
+                                if (confirmedAgent && confirmedAgent !== templateStartAgent) {
+                                  // Backend returned a different start agent — update
+                                  currentAgentRef.current = confirmedAgent;
+                                  setSelectedAgentName(confirmedAgent);
+                                  setAgentInventory(prev => prev ? { ...prev, startAgent: confirmedAgent } : prev);
+                                }
+                              } else {
+                                // POST failed — roll back optimistic update
+                                scenarioVersionRef.current += 1;
+                                setSessionScenarioConfig(prevState);
+                                appendLog(`⚠️ Failed to apply ${label} template (HTTP ${response.status})`);
+                                setScenarioSwitching(null);
+                                return;
+                              }
+                              appendLog(`${icon} Applied ${label} template to session ${sessionId}`);
+                            } catch (err) {
+                              // Network error — roll back only if still current
+                              if (scenarioVersionRef.current === activationVersion) {
+                                scenarioVersionRef.current += 1;
+                                setSessionScenarioConfig(prevState);
+                              }
+                              appendLog(`Failed to apply template: ${err.message}`);
+                              setScenarioSwitching(null);
+                              return;
+                            }
+                            
+                            // POST succeeded — wait for backend propagation before
+                            // applying server state, avoiding stale override races.
+                            if (scenarioVersionRef.current !== activationVersion) {
+                              setScenarioSwitching(null);
+                              return;
+                            }
+                            scenarioVersionRef.current += 1;
+                            await pollUntilScenarioPropagated(template.name);
+                            appendLog(`${icon} Switched to ${label} for session ${sessionId}`);
+                            showScenarioConfirmation(label, currentAgentRef.current);
+                            
+                            if (callActive) {
+                              // ACS mode: restart the call with new scenario
+                              appendLog(`🔄 Restarting call with ${label} scenario...`);
+                              terminateACSCall();
+                              setTimeout(() => {
+                                handlePhoneButtonClick();
+                              }, 500);
+                            } else if (recording) {
+                              // Browser recording mode: reconnect WebSocket with new scenario
+                              appendLog(`🔄 Reconnecting with ${label} scenario...`);
+                              handleMicToggle(); // Stop current recording
+                              setTimeout(() => {
+                                handleMicToggle(); // Start new recording with new scenario
+                              }, 500);
+                            }
+                            setScenarioSwitching(null);
+                          }}
+                          style={{
+                            width: '100%',
+                            padding: '10px 14px',
+                            borderRadius: '10px',
+                            border: 'none',
+                            background: isActive 
+                              ? 'linear-gradient(135deg, rgba(99,102,241,0.1), rgba(79,70,229,0.08))' 
+                              : 'transparent',
+                            color: isActive ? '#4f46e5' : '#64748b',
+                            fontSize: '13px',
+                            fontWeight: isActive ? '600' : '500',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                            textAlign: 'left',
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!isActive) {
+                              e.currentTarget.style.background = 'rgba(148,163,184,0.06)';
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!isActive) {
+                              e.currentTarget.style.background = 'transparent';
+                            }
+                          }}
+                        >
+                          <span style={{ fontSize: '16px' }}>{icon}</span>
+                          <span>{label}</span>
+                          {isActive && (
+                            <span style={{ marginLeft: 'auto', fontSize: '14px', color: '#4f46e5' }}>✓</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </>
+                )}
 
-                {/* Custom Scenarios (show all custom scenarios for the session) */}
-                {sessionScenarioConfig?.scenarios?.length > 0 && (
+                {/* Custom Scenarios (show only user-modified scenarios, not duplicates of industry templates) */}
+                {customScenarios.length > 0 && (
                   <>
                     <div style={{
                       margin: '8px 0 4px',
@@ -3795,30 +4359,98 @@ function RealTimeVoiceApp() {
                         gap: '4px',
                       }}>
                         <span style={{ fontSize: '12px' }}>🎭</span>
-                        Custom Scenarios ({sessionScenarioConfig.scenarios.length})
+                        Custom Scenarios ({customScenarios.length})
                       </div>
                     </div>
-                    {sessionScenarioConfig.scenarios.map((scenario, index) => {
-                      const scenarioKey = `custom_${scenario.name.replace(/\s+/g, '_').toLowerCase()}`;
-                      const isActive = getSessionScenario() === scenarioKey;
+                    {customScenarios.map((scenario, index) => {
+                      const scenarioKey = scenario.name?.toLowerCase().replace(/\s+/g, '_') || 'custom';
+                      const isActive = Boolean(scenario.is_active);
                       const scenarioIcon = scenario.icon || '🎭';
                       return (
                         <button
                           key={scenarioKey}
+                          disabled={!!scenarioSwitching}
                           onClick={async () => {
-                            // Set active scenario on backend
+                            if (scenarioSwitching) return;
+                            let scenarioStartAgent = scenario.start_agent || scenario.agents?.[0] || null;
+                            setScenarioSwitching(scenario.name);
+                            // Optimistically update UI; capture previous state for rollback
+                            const prevState = applyScenarioOptimistically(scenario.name, scenarioStartAgent);
+                            const activationVersion = scenarioVersionRef.current;
+                            setShowScenarioMenu(false);
+                            
+                            // Set active scenario on backend (awaited Redis persist)
                             try {
-                              await fetch(
+                              const response = await fetch(
                                 `${API_BASE_URL}/api/v1/scenario-builder/session/${sessionId}/active?scenario_name=${encodeURIComponent(scenario.name)}`,
                                 { method: 'POST' }
                               );
+                              // Abort if a newer switch superseded this one
+                              if (scenarioVersionRef.current !== activationVersion) {
+                                setScenarioSwitching(null);
+                                return;
+                              }
+                              if (response.ok) {
+                                const data = await response.json();
+                                const confirmedAgent = data.scenario?.start_agent;
+                                if (confirmedAgent && confirmedAgent !== scenarioStartAgent) {
+                                  currentAgentRef.current = confirmedAgent;
+                                  setSelectedAgentName(confirmedAgent);
+                                  setAgentInventory(prev => prev ? { ...prev, startAgent: confirmedAgent } : prev);
+                                }
+                              } else {
+                                // POST failed — evict the phantom scenario from
+                                // local state instead of blindly rolling back.
+                                // A simple rollback would restore `prevState` which
+                                // may already contain the phantom (added by the
+                                // orphan-preservation merge).  Evicting it prevents
+                                // the 404 loop.
+                                scenarioVersionRef.current += 1;
+                                if (response.status === 404) {
+                                  const ghostName = scenario.name?.toLowerCase();
+                                  setSessionScenarioConfig(prev => {
+                                    if (!prev) return prev;
+                                    const prunedCustom = (prev.custom_scenarios || []).filter(
+                                      s => s.name?.toLowerCase() !== ghostName,
+                                    );
+                                    const prunedScenarios = (prev.scenarios || []).filter(
+                                      s => s.name?.toLowerCase() !== ghostName,
+                                    );
+                                    return {
+                                      ...prev,
+                                      custom_scenarios: prunedCustom,
+                                      scenarios: prunedScenarios,
+                                      total: prunedScenarios.length,
+                                    };
+                                  });
+                                } else {
+                                  setSessionScenarioConfig(prevState);
+                                }
+                                appendLog(`⚠️ Failed to set scenario ${scenario.name} (HTTP ${response.status})`);
+                                setScenarioSwitching(null);
+                                return;
+                              }
                             } catch (err) {
+                              // Network error — roll back only if still current
+                              if (scenarioVersionRef.current === activationVersion) {
+                                scenarioVersionRef.current += 1;
+                                setSessionScenarioConfig(prevState);
+                              }
                               appendLog(`Failed to set active scenario: ${err.message}`);
+                              setScenarioSwitching(null);
+                              return;
                             }
                             
-                            setSessionScenario(scenarioKey);
-                            setShowScenarioMenu(false);
+                            // POST succeeded — wait for backend propagation before
+                            // applying server state, avoiding stale override races.
+                            if (scenarioVersionRef.current !== activationVersion) {
+                              setScenarioSwitching(null);
+                              return;
+                            }
+                            scenarioVersionRef.current += 1;
+                            await pollUntilScenarioPropagated(scenario.name);
                             appendLog(`${scenarioIcon} Switched to Custom Scenario: ${scenario.name}`);
+                            showScenarioConfirmation(scenario.name, currentAgentRef.current);
                             
                             if (callActive) {
                               appendLog(`🔄 Restarting call with custom scenario...`);
@@ -3833,6 +4465,7 @@ function RealTimeVoiceApp() {
                                 handleMicToggle();
                               }, 500);
                             }
+                            setScenarioSwitching(null);
                           }}
                           style={{
                             width: '100%',
@@ -3851,7 +4484,7 @@ function RealTimeVoiceApp() {
                             gap: '10px',
                             transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
                             textAlign: 'left',
-                            marginBottom: index < sessionScenarioConfig.scenarios.length - 1 ? '4px' : 0,
+                            marginBottom: index < customScenarios.length - 1 ? '4px' : 0,
                           }}
                           onMouseEnter={(e) => {
                             if (!isActive) {
@@ -3890,20 +4523,43 @@ function RealTimeVoiceApp() {
                   </>
                 )}
 
-                <div style={{
-                  marginTop: '8px',
-                  padding: '8px 10px 6px',
-                  borderRadius: '10px',
-                  background: 'rgba(148,163,184,0.08)',
-                  color: '#475569',
-                  fontSize: '11px',
-                  lineHeight: 1.4,
-                  border: '1px dashed rgba(148,163,184,0.35)',
-                }}>
-                  {sessionScenarioConfig?.scenarios?.length > 0 
-                    ? 'Switch between scenarios for this session'
-                    : 'Create a custom scenario in the Scenario Builder'}
-                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBuilderInitialMode('scenarios');
+                    setBuilderScenarioCreateMode(true);
+                    setShowAgentScenarioBuilder(true);
+                    setShowScenarioMenu(false);
+                  }}
+                  style={{
+                    width: '100%',
+                    marginTop: customScenarios.length > 0 ? '10px' : '6px',
+                    padding: '10px 14px',
+                    borderRadius: '10px',
+                    border: '1px dashed rgba(59,130,246,0.35)',
+                    background: 'linear-gradient(135deg, rgba(59,130,246,0.08), rgba(37,99,235,0.06))',
+                    color: '#1d4ed8',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                    textAlign: 'left',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'linear-gradient(135deg, rgba(59,130,246,0.16), rgba(37,99,235,0.12))';
+                    e.currentTarget.style.borderColor = 'rgba(59,130,246,0.55)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'linear-gradient(135deg, rgba(59,130,246,0.08), rgba(37,99,235,0.06))';
+                    e.currentTarget.style.borderColor = 'rgba(59,130,246,0.35)';
+                  }}
+                >
+                  <span style={{ fontSize: '16px' }}>➕</span>
+                  <span>Create custom scenario…</span>
+                </button>
               </div>
             )}
           </div>
@@ -3912,6 +4568,7 @@ function RealTimeVoiceApp() {
           <button
             onClick={() => {
               setBuilderInitialMode('agents');
+              setBuilderScenarioCreateMode(false);
               setShowAgentScenarioBuilder(true);
             }}
             title="Agent Builder"
@@ -4051,14 +4708,14 @@ function RealTimeVoiceApp() {
                     <span style={{
                       padding: "2px 8px",
                       borderRadius: "4px",
-                      background: getSessionScenario()?.startsWith('custom_')
+                      background: activeScenarioData?.is_custom
                         ? "rgba(245,158,11,0.1)"
-                        : getSessionScenario() === 'banking' 
+                        : activeScenarioKey === 'banking' 
                           ? "rgba(99,102,241,0.1)" 
                           : "rgba(14,165,233,0.1)",
-                      color: getSessionScenario()?.startsWith('custom_')
+                      color: activeScenarioData?.is_custom
                         ? "#f59e0b"
-                        : getSessionScenario() === 'banking' 
+                        : activeScenarioKey === 'banking' 
                           ? "#6366f1" 
                           : "#0ea5e9",
                       fontSize: "10px",
@@ -4066,7 +4723,7 @@ function RealTimeVoiceApp() {
                       textTransform: "uppercase",
                       letterSpacing: "0.5px",
                     }}>
-                      {getSessionScenario()?.startsWith('custom_') ? getSessionScenario().replace('custom_', '') : getSessionScenario()}
+                      {activeScenarioData?.name || activeScenarioKey || 'banking'}
                     </span>
                   </div>
                   <code style={styles.sessionTagValue}>{sessionId}</code>
@@ -4212,6 +4869,7 @@ function RealTimeVoiceApp() {
               recording={recording}
               callActive={callActive}
               isCallDisabled={isCallDisabled}
+              scenarioSwitching={scenarioSwitching}
               onResetSession={handleResetSession}
               onMicToggle={handleMicToggle}
               micMuted={micMuted}
@@ -4335,6 +4993,7 @@ function RealTimeVoiceApp() {
       coreMemory={sessionCoreMemory}
       sessionMeta={sessionMetadata}
       sessionMetrics={sessionMetrics}
+      scenarioConfig={sessionScenarioConfig}
     />
     <AgentBuilder
       open={showAgentBuilder}
@@ -4343,13 +5002,13 @@ function RealTimeVoiceApp() {
       sessionProfile={activeSessionProfile}
       onAgentCreated={(agentConfig) => {
         appendLog(`✨ Dynamic agent created: ${agentConfig.name}`);
-        appendSystemMessage(`🤖 Agent "${agentConfig.name}" is now active`, {
+        appendSystemMessage(`🤖 Agent "${agentConfig.name}" created and available`, {
           tone: "success",
           statusCaption: `Tools: ${agentConfig.tools?.length || 0} · Voice: ${agentConfig.voice?.name || 'default'}`,
-          statusLabel: "Agent Active",
+          statusLabel: "Agent Created",
         });
-        // Set the created agent as the active agent
-        setSelectedAgentName(agentConfig.name);
+        // Note: Do NOT auto-select the created agent to prevent unintended scenario changes
+        // User can explicitly select the agent if they want to use it
         fetchSessionAgentConfig();
         // Refresh agent inventory to include the new session agent
         setAgentInventory((prev) => {
@@ -4425,24 +5084,28 @@ function RealTimeVoiceApp() {
     />
     <AgentScenarioBuilder
       open={showAgentScenarioBuilder}
-      onClose={() => setShowAgentScenarioBuilder(false)}
+      onClose={() => { setShowAgentScenarioBuilder(false); setBuilderScenarioCreateMode(false); }}
       initialMode={builderInitialMode}
       sessionId={sessionId}
       sessionProfile={activeSessionProfile}
-      scenarioEditMode={sessionScenarioConfig?.scenarios?.length > 0}
+      scenarioEditMode={builderInitialMode === 'scenarios' && builderScenarioCreateMode ? false : customScenarios.length > 0}
       existingScenarioConfig={
-        sessionScenarioConfig?.scenarios?.find(s => s.is_active) || 
-        sessionScenarioConfig?.scenarios?.[0] || 
-        null
+        builderInitialMode === 'scenarios' && builderScenarioCreateMode
+          ? null
+          : (customScenarios.find(s => s.is_active) || customScenarios[0] || null)
       }
+      sharedScenarioConfig={sessionScenarioConfig}
+      onRefreshScenarios={pollUntilScenarioPropagated}
+      onActivateScenario={activateScenarioFromBuilder}
       onAgentCreated={(agentConfig) => {
         appendLog(`✨ Dynamic agent created: ${agentConfig.name}`);
-        appendSystemMessage(`🤖 Agent "${agentConfig.name}" is now active`, {
+        appendSystemMessage(`🤖 Agent "${agentConfig.name}" created and available`, {
           tone: "success",
           statusCaption: `Tools: ${agentConfig.tools?.length || 0} · Voice: ${agentConfig.voice?.name || 'default'}`,
-          statusLabel: "Agent Active",
+          statusLabel: "Agent Created",
         });
-        setSelectedAgentName(agentConfig.name);
+        // Note: Do NOT auto-select the created agent to prevent unintended scenario changes
+        // User can explicitly select the agent if they want to use it
         fetchSessionAgentConfig();
         setAgentInventory((prev) => {
           if (!prev) return prev;
@@ -4510,29 +5173,27 @@ function RealTimeVoiceApp() {
           };
         });
       }}
-      onScenarioCreated={(scenarioConfig) => {
+      onScenarioCreated={async (scenarioConfig) => {
         appendLog(`🎭 Scenario created: ${scenarioConfig.name || 'Custom Scenario'}`);
         appendSystemMessage(`🎭 Scenario "${scenarioConfig.name || 'Custom'}" is now active`, {
           tone: "success",
           statusCaption: `Agents: ${scenarioConfig.agents?.length || 0} · Handoffs: ${scenarioConfig.handoffs?.length || 0}`,
           statusLabel: "Scenario Active",
         });
-        // Refresh scenario configuration and set to custom scenario
-        fetchSessionScenarioConfig();
-        setSessionScenario('custom');
+        // Pass the full scenarioConfig so applyScenarioOptimistically can
+        // upsert it into custom_scenarios (it's brand-new, not in any array yet).
+        applyScenarioOptimistically(scenarioConfig, scenarioConfig.start_agent);
       }}
-      onScenarioUpdated={(scenarioConfig) => {
+      onScenarioUpdated={async (scenarioConfig) => {
         appendLog(`✏️ Scenario updated: ${scenarioConfig.name || 'Custom Scenario'}`);
         appendSystemMessage(`🎭 Scenario "${scenarioConfig.name || 'Custom'}" updated`, {
           tone: "success",
           statusCaption: `Agents: ${scenarioConfig.agents?.length || 0} · Handoffs: ${scenarioConfig.handoffs?.length || 0}`,
           statusLabel: "Scenario Updated",
         });
-        fetchSessionScenarioConfig();
-        // Keep the scenario set to custom if updating
-        if (!getSessionScenario()?.startsWith('custom_')) {
-          setSessionScenario('custom');
-        }
+        // Pass the full scenarioConfig so applyScenarioOptimistically can
+        // upsert or update the entry in custom_scenarios.
+        applyScenarioOptimistically(scenarioConfig, scenarioConfig.start_agent);
       }}
     />
 
@@ -4552,13 +5213,21 @@ function RealTimeVoiceApp() {
           // Refresh session data
           const sessionData = buildSessionProfile(null, newSessionId, activeSessionProfile);
           if (sessionData && sessionData.sessionId === newSessionId) {
-            setActiveSessionProfile(sessionData);
+            setSessionProfiles((prev) => ({
+              ...prev,
+              [newSessionId]: sessionData,
+            }));
           }
 
           // Reset UI state for new session
           setMessages([]);
           setGraphEvents([]);
           setAgentInventory(null);
+          // Clear scenario state BEFORE fetching to prevent old session's
+          // custom scenarios from bleeding into the new session via the
+          // orphan-preservation merge in fetchSessionScenarioConfig.
+          setSessionScenarioConfig(null);
+          scenarioVersionRef.current += 1;
 
           // Fetch new session data
           fetchSessionAgentConfig(newSessionId);

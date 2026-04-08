@@ -2,7 +2,8 @@
 # APP CONFIGURATION MODULE - VARIABLES (INFRASTRUCTURE ONLY)
 # ============================================================================
 # Application-tier settings (pools, connections, voice, monitoring, features)
-# are now managed via /config/appconfig.json and synced by postprovision.sh
+# have sensible defaults in the application code.
+# Runtime-discovered values (URLs, endpoints) are synced by postprovision.sh
 # ============================================================================
 
 variable "name" {

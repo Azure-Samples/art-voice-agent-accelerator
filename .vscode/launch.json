@@ -5,12 +5,13 @@
     "version": "0.2.0",
     "configurations": [
         { // Added React Debug Configuration
-            "name": "[RT Agent] React App: Browser Debug",
+            "name": "[ART Agent] React App: Browser Debug",
             "type": "msedge", // or "chrome"
             "request": "launch",
             "url": "http://localhost:5173", // Ensure this matches your Vite dev server port
             "webRoot": "${workspaceFolder}/apps/artagent/frontend",
             "sourceMaps": true,
+            "preLaunchTask": "Start Frontend Dev Server",
             "sourceMapPathOverrides": {
             "webpack:///src/*": "${webRoot}/src/*",
             "webpack:///*": "${webRoot}/*"
@@ -18,27 +19,54 @@
         },
 
         {
-            "name": "[RT Agent] Python Debugger: FastAPI",
+            "name": "[ART Agent] Python Debugger: FastAPI",
             "type": "debugpy",
             "request": "launch",
             "module": "uvicorn",
             "python": "${command:python.interpreterPath}",
             "args": [
-            "apps.artagent.backend.main:app",
-            // Watch only the app backend directory for reloads so changes under tests/ won't trigger reloads
-            "--reload",
-            "--reload-dir",
-            "${workspaceFolder}/apps/artagent/backend",
-            "--port",
-            "8010"
-            // "--log-level",
-            // "debug"
+                "apps.artagent.backend.main:app",
+                // Watch only the app backend directory for reloads so changes under tests/ won't trigger reloads
+                "--reload",
+                "--reload-dir",
+                "${workspaceFolder}/apps/artagent/backend",
+                "--port",
+                "8010"
+                // "--log-level",
+                // "debug"
             ],
             "jinja": true,
             "env": {
-            "PYTHONPATH": "${workspaceFolder}"
+                "PYTHONPATH": "${workspaceFolder}",
+                "MCP_SERVER_CARDAPI_URL": "http://localhost:8080"
             },
             "envFile": "${workspaceFolder}/.env.local"
         },
+
+
+        {
+            "name": "[Card API] MCP Server",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/apps/cardapi/mcp_app/service.py",
+            "python": "${workspaceFolder}/apps/cardapi/mcp_app/.venv/bin/python",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/apps/cardapi/mcp_app",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "envFile": "${workspaceFolder}/.env.local"
+        },
+    ],
+    "compounds": [
+        {
+            "name": "[All] ART Agent + MCP",
+            "configurations": [
+                "[ART Agent] React App: Browser Debug",
+                "[ART Agent] Python Debugger: FastAPI",
+                "[Card API] MCP Server"
+            ],
+            "stopAll": true
+        }
     ]
 }

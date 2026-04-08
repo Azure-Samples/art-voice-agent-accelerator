@@ -8,8 +8,8 @@
 # - RBAC assignments for managed identities
 # - Key Vault access for the App Config system identity
 #
-# ALL configuration keys (infrastructure endpoints + app settings) are 
-# synced by postprovision.sh using azd env values and /config/appconfig.json
+# Runtime-discovered values (infrastructure endpoints, container URLs) are 
+# synced by postprovision.sh using azd env values.
 # ============================================================================
 
 module "appconfig" {

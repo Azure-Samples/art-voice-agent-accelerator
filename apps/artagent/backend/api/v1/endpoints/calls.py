@@ -734,13 +734,11 @@ async def handle_acs_callbacks(
     :rtype: JSONResponse
     :raises Exception: When event processing fails or dependencies are unavailable
     """
-    # Log every callback attempt
-    logger.info("=" * 80)
-    logger.info("🔔 ACS CALLBACK RECEIVED!")
-    logger.info(f"   Method: {http_request.method}")
-    logger.info(f"   URL: {http_request.url}")
-    logger.info(f"   Headers: {dict(http_request.headers)}")
-    logger.info("=" * 80)
+    # Log every callback attempt (safe headers only — never log auth tokens)
+    SAFE_HEADERS = {"content-type", "x-ms-call-connection-id", "user-agent", "content-length"}
+    safe_headers = {k: v for k, v in http_request.headers.items() if k.lower() in SAFE_HEADERS}
+    logger.info("🔔 ACS CALLBACK RECEIVED! Method=%s URL=%s", http_request.method, http_request.url)
+    logger.debug("   Safe headers: %s", safe_headers)
 
     # Validate dependencies
     if not http_request.app.state.acs_caller:
@@ -749,7 +747,7 @@ async def handle_acs_callbacks(
 
     try:
         events_data = await http_request.json()
-        logger.info(f"📦 Callback payload: {events_data}")
+        logger.debug("📦 Callback payload: %s", events_data)
 
         # Extract call connection ID for tracing
         call_connection_id = None

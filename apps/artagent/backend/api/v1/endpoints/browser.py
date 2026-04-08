@@ -342,7 +342,27 @@ async def _create_voice_live_handler(
     redis_mgr = websocket.app.state.redis
     memory_manager = MemoManager.from_redis(session_id, redis_mgr)
     if scenario:
-        memory_manager.set_corememory("scenario_name", scenario)
+        from apps.artagent.backend.src.orchestration.naming import (
+            normalize_scenario_name,
+            set_scenario_in_corememory,
+        )
+        from apps.artagent.backend.src.orchestration.session_scenarios import (
+            set_active_scenario_async,
+        )
+
+        normalized_scenario = normalize_scenario_name(scenario)
+        if normalized_scenario:
+            set_scenario_in_corememory(memory_manager, normalized_scenario)
+
+            # Best-effort: sync the authoritative active scenario state so the
+            # orchestrator starts with the correct scenario start agent.
+            activated = await set_active_scenario_async(session_id, normalized_scenario)
+            if not activated:
+                logger.debug(
+                    "VoiceLive startup scenario not found in session store; using corememory fallback | session=%s scenario=%s",
+                    session_id,
+                    normalized_scenario,
+                )
 
     # Set up session context
     session_context = SessionContext(

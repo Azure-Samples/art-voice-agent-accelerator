@@ -78,6 +78,10 @@ import BusinessIcon from '@mui/icons-material/Business';
 import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
 import BadgeIcon from '@mui/icons-material/Badge';
 import InsightsIcon from '@mui/icons-material/Insights';
+import AddIcon from '@mui/icons-material/Add';
+import LinkIcon from '@mui/icons-material/Link';
+import LinkOffIcon from '@mui/icons-material/LinkOff';
+import DeleteIcon from '@mui/icons-material/Delete';
 
 import { API_BASE_URL } from '../config/constants.js';
 import logger from '../utils/logger.js';
@@ -164,6 +168,16 @@ const styles = {
       boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
     },
   },
+};
+
+const formatMcpTransport = (transport) => {
+  if (!transport) return null;
+  const normalized = String(transport).toLowerCase();
+  if (normalized === 'streamable-http') return 'HTTP';
+  if (normalized === 'sse') return 'SSE';
+  if (normalized === 'http') return 'HTTP';
+  if (normalized === 'stdio') return 'STDIO';
+  return normalized.toUpperCase();
 };
 
 const CASCADE_MODEL_PRESETS = [
@@ -710,7 +724,6 @@ function AgentDetailsDialog({ open, onClose, agent, loading }) {
   const modelLabel = getModelLabel(agent);
   const cascadeLabel = getCascadeLabel(agent);
   const voiceLiveLabel = getVoiceLiveLabel(agent);
-  const isSessionAgent = Boolean(agent?.is_session_agent);
   const promptIsPreview = !agent?.prompt_full && !agent?.prompt && !!agent?.prompt_preview;
 
   if (!open) return null;
@@ -719,7 +732,7 @@ function AgentDetailsDialog({ open, onClose, agent, loading }) {
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
       <DialogTitle sx={{ pb: 1 }}>
         <Stack direction="row" alignItems="center" spacing={2}>
-          <Avatar sx={{ bgcolor: isSessionAgent ? '#6366f1' : '#0ea5e9' }}>
+          <Avatar sx={{ bgcolor: '#0ea5e9' }}>
             {agent?.name?.[0] || 'A'}
           </Avatar>
           <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -727,14 +740,6 @@ function AgentDetailsDialog({ open, onClose, agent, loading }) {
               <Typography variant="h6" sx={{ fontWeight: 600 }}>
                 {agent?.name || 'Agent Details'}
               </Typography>
-              {isSessionAgent && (
-                <Chip
-                  size="small"
-                  icon={<MemoryIcon sx={{ fontSize: 14 }} />}
-                  label="Session"
-                  sx={{ backgroundColor: '#eef2ff', color: '#4338ca' }}
-                />
-              )}
               {agent?.is_entry_point && (
                 <Chip size="small" color="primary" label="Entry" />
               )}
@@ -785,9 +790,6 @@ function AgentDetailsDialog({ open, onClose, agent, loading }) {
                   icon={<HearingIcon sx={{ fontSize: 14 }} />}
                   label={`VoiceLive ${voiceLiveLabel}`}
                 />
-                {isSessionAgent && agent?.session_id && (
-                  <Chip size="small" label={`Session ${agent.session_id}`} />
-                )}
               </Stack>
             </Box>
 
@@ -931,6 +933,26 @@ function ToolDetailsDialog({ open, onClose, tool }) {
             </Typography>
           </Box>
 
+          {(tool.source === 'mcp' || tool.mcp_server) && (
+            <Box>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
+                MCP Source
+              </Typography>
+              <Stack direction="row" flexWrap="wrap" gap={1}>
+                <Chip
+                  size="small"
+                  label={`server: ${tool.mcp_server || 'unknown'}`}
+                />
+                {tool.mcp_transport && (
+                  <Chip
+                    size="small"
+                    label={`protocol: ${formatMcpTransport(tool.mcp_transport)}`}
+                  />
+                )}
+              </Stack>
+            </Box>
+          )}
+
           {tool.tags?.length > 0 && (
             <Box>
               <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
@@ -1031,6 +1053,27 @@ export default function AgentBuilderContent({
   const [showExportInstructions, setShowExportInstructions] = useState(false);
   const [exportedYaml, setExportedYaml] = useState('');
 
+  // MCP Server Management state
+  const [mcpServers, setMcpServers] = useState([]);
+  const [mcpLoading, setMcpLoading] = useState(false);
+  const [showAddMcpDialog, setShowAddMcpDialog] = useState(false);
+  const [mcpTestResult, setMcpTestResult] = useState(null);
+  const [newMcpServer, setNewMcpServer] = useState({
+    name: '',
+    url: '',
+    transport: 'streamable-http',
+    timeout: 30,
+    auth_token: '',
+    auth_method: 'none', // 'none', 'token', or 'oauth'
+    oauth: {
+      client_id: '',
+      auth_url: '',
+      token_url: '',
+      scope: '',
+    },
+  });
+  const [oauthPending, setOauthPending] = useState(null); // { state, popup }
+
   // Agent configuration state
   const [config, setConfig] = useState({
     name: 'Custom Agent',
@@ -1097,6 +1140,15 @@ export default function AgentBuilderContent({
       agent_name: 'Assistant',
     },
   });
+  const [draftGreeting, setDraftGreeting] = useState('');
+  const [draftReturnGreeting, setDraftReturnGreeting] = useState('');
+  const [draftPrompt, setDraftPrompt] = useState(DEFAULT_PROMPT);
+
+  // Explicit custom mode tracking - prevents input reset when typing hyphens
+  // that might temporarily match a preset name (e.g., typing "my-gpt-4o-test" matches "gpt-4o")
+  const [isCascadeCustomMode, setIsCascadeCustomMode] = useState(false);
+  const [isVoiceliveCustomMode, setIsVoiceliveCustomMode] = useState(false);
+  const customModeInitialized = useRef(false);
 
   const cascadeEndpointPreference = useMemo(
     () => resolveEndpointPreference(config.cascade_model),
@@ -1106,20 +1158,35 @@ export default function AgentBuilderContent({
     () => resolveEndpointPreference(config.voicelive_model),
     [config.voicelive_model],
   );
+  // Compute preset values for dropdown display
   const cascadeModelPreset = useMemo(() => {
+    if (isCascadeCustomMode) return 'custom';
     const deploymentId = (config.cascade_model?.deployment_id || '').trim();
     return CASCADE_MODEL_PRESETS.some((preset) => preset.id === deploymentId)
       ? deploymentId
       : 'custom';
-  }, [config.cascade_model?.deployment_id]);
+  }, [config.cascade_model?.deployment_id, isCascadeCustomMode]);
   const voiceliveModelPreset = useMemo(() => {
+    if (isVoiceliveCustomMode) return 'custom';
     const deploymentId = (config.voicelive_model?.deployment_id || '').trim();
     return VOICELIVE_MODEL_PRESETS.some((preset) => preset.id === deploymentId)
       ? deploymentId
       : 'custom';
-  }, [config.voicelive_model?.deployment_id]);
-  const isCascadeCustom = cascadeModelPreset === 'custom';
-  const isVoiceliveCustom = voiceliveModelPreset === 'custom';
+  }, [config.voicelive_model?.deployment_id, isVoiceliveCustomMode]);
+  const isCascadeCustom = isCascadeCustomMode || cascadeModelPreset === 'custom';
+  const isVoiceliveCustom = isVoiceliveCustomMode || voiceliveModelPreset === 'custom';
+
+  // Initialize custom mode flags based on loaded config (only once)
+  useEffect(() => {
+    if (customModeInitialized.current) return;
+    const cascadeId = (config.cascade_model?.deployment_id || '').trim();
+    const voiceliveId = (config.voicelive_model?.deployment_id || '').trim();
+    const cascadeIsCustom = cascadeId && !CASCADE_MODEL_PRESETS.some(p => p.id === cascadeId);
+    const voiceliveIsCustom = voiceliveId && !VOICELIVE_MODEL_PRESETS.some(p => p.id === voiceliveId);
+    if (cascadeIsCustom) setIsCascadeCustomMode(true);
+    if (voiceliveIsCustom) setIsVoiceliveCustomMode(true);
+    customModeInitialized.current = true;
+  }, [config.cascade_model?.deployment_id, config.voicelive_model?.deployment_id]);
   const cascadeOverrideValue = (config.cascade_model?.deployment_id || '').trim();
   const voiceliveOverrideValue = (config.voicelive_model?.deployment_id || '').trim();
   const isCascadeOverrideMissing = isCascadeCustom && !cascadeOverrideValue;
@@ -1131,16 +1198,9 @@ export default function AgentBuilderContent({
 
   // Tool categories
   const [expandedCategories, setExpandedCategories] = useState({});
-  const [toolFilter, setToolFilter] = useState('all');
-  const sessionTemplates = useMemo(() => {
-    const sessionItems = (availableTemplates || []).filter((t) => t.is_session_agent);
-    if (sessionId) {
-      return sessionItems.filter((t) => t.session_id === sessionId);
-    }
-    return sessionItems;
-  }, [availableTemplates, sessionId]);
-  const staticTemplates = useMemo(
-    () => (availableTemplates || []).filter((t) => !t.is_session_agent),
+  // All templates displayed uniformly - no session vs built-in distinction
+  const allTemplates = useMemo(
+    () => availableTemplates || [],
     [availableTemplates],
   );
 
@@ -1223,6 +1283,210 @@ export default function AgentBuilderContent({
     }
   }, [sessionId, editMode]);
 
+  // MCP Server Management functions
+  const fetchMcpServers = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/mcp/servers`);
+      if (response.ok) {
+        const data = await response.json();
+        setMcpServers(data.servers || []);
+      }
+    } catch (err) {
+      logger.error('Failed to fetch MCP servers:', err);
+    }
+  }, []);
+
+  const handleTestMcpConnection = useCallback(async () => {
+    if (!newMcpServer.name || !newMcpServer.url) {
+      setError('Please enter server name and URL');
+      return;
+    }
+    setMcpLoading(true);
+    setMcpTestResult(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/mcp/servers/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newMcpServer),
+      });
+      const data = await response.json();
+      setMcpTestResult(data);
+      if (data.connected && data.tools_count > 0) {
+        setSuccess(`Connected! Found ${data.tools_count} tools`);
+      } else if (data.connected) {
+        setSuccess('Connected, but no tools discovered');
+      } else {
+        setError(data.error || 'Connection failed');
+      }
+    } catch (err) {
+      setError(`Connection test failed: ${err.message}`);
+    } finally {
+      setMcpLoading(false);
+      setTimeout(() => { setSuccess(null); setError(null); }, 3000);
+    }
+  }, [newMcpServer]);
+
+  const handleAddMcpServer = useCallback(async () => {
+    if (!newMcpServer.name || !newMcpServer.url) {
+      setError('Please enter server name and URL');
+      return;
+    }
+    setMcpLoading(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/mcp/servers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newMcpServer),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setSuccess(`MCP server "${newMcpServer.name}" added with ${data.server?.tools_count || 0} tools`);
+        setShowAddMcpDialog(false);
+        setNewMcpServer({ name: '', url: '', transport: 'streamable-http', timeout: 30, auth_token: '', auth_method: 'none', oauth: { client_id: '', auth_url: '', token_url: '', scope: '' } });
+        setMcpTestResult(null);
+        // Refresh servers and tools
+        await Promise.all([fetchMcpServers(), fetchAvailableTools()]);
+      } else {
+        const errData = await response.json();
+        setError(errData.detail || 'Failed to add MCP server');
+      }
+    } catch (err) {
+      setError(`Failed to add MCP server: ${err.message}`);
+    } finally {
+      setMcpLoading(false);
+      setTimeout(() => { setSuccess(null); setError(null); }, 3000);
+    }
+  }, [newMcpServer, fetchMcpServers, fetchAvailableTools]);
+
+  const handleRemoveMcpServer = useCallback(async (serverName) => {
+    if (!window.confirm(`Remove MCP server "${serverName}" and unregister its tools?`)) {
+      return;
+    }
+    setMcpLoading(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/mcp/servers/${serverName}`, {
+        method: 'DELETE',
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setSuccess(`Removed MCP server "${serverName}" and ${data.tools_removed || 0} tools`);
+        // Refresh servers and tools
+        await Promise.all([fetchMcpServers(), fetchAvailableTools()]);
+      } else {
+        const errData = await response.json();
+        setError(errData.detail || 'Failed to remove MCP server');
+      }
+    } catch (err) {
+      setError(`Failed to remove MCP server: ${err.message}`);
+    } finally {
+      setMcpLoading(false);
+      setTimeout(() => { setSuccess(null); setError(null); }, 3000);
+    }
+  }, [fetchMcpServers, fetchAvailableTools]);
+
+  // OAuth flow for MCP servers
+  const handleStartOAuth = useCallback(async () => {
+    if (!newMcpServer.name || !newMcpServer.url) {
+      setError('Server name and URL are required');
+      return;
+    }
+    if (!newMcpServer.oauth.client_id || !newMcpServer.oauth.auth_url || !newMcpServer.oauth.token_url) {
+      setError('OAuth client ID, auth URL, and token URL are required');
+      return;
+    }
+
+    setMcpLoading(true);
+    try {
+      // Generate redirect URI (OAuth callback page)
+      const redirectUri = `${window.location.origin}/oauth/callback.html`;
+
+      const response = await fetch(`${API_BASE_URL}/api/v1/mcp/oauth/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newMcpServer.name,
+          url: newMcpServer.url,
+          oauth: newMcpServer.oauth,
+          redirect_uri: redirectUri,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        // Open OAuth popup
+        const popup = window.open(
+          data.auth_url,
+          'mcp_oauth',
+          'width=500,height=700,menubar=no,toolbar=no,location=yes'
+        );
+        setOauthPending({ state: data.state, popup });
+      } else {
+        const errData = await response.json();
+        setError(errData.detail || 'Failed to start OAuth flow');
+      }
+    } catch (err) {
+      setError(`Failed to start OAuth: ${err.message}`);
+    } finally {
+      setMcpLoading(false);
+    }
+  }, [newMcpServer]);
+
+  // Handle OAuth callback message from popup
+  useEffect(() => {
+    const handleOAuthMessage = async (event) => {
+      if (event.origin !== window.location.origin) return;
+      if (event.data?.type !== 'oauth_callback') return;
+
+      const { code, state, error: oauthError } = event.data;
+
+      if (oauthError) {
+        setError(`OAuth failed: ${oauthError}`);
+        setOauthPending(null);
+        return;
+      }
+
+      if (!oauthPending || oauthPending.state !== state) {
+        setError('OAuth state mismatch');
+        setOauthPending(null);
+        return;
+      }
+
+      // Close popup
+      oauthPending.popup?.close();
+
+      // Exchange code for token
+      setMcpLoading(true);
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/v1/mcp/oauth/callback`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code, state }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          setSuccess(data.message || 'OAuth authentication successful');
+          // Refresh servers to show the authenticated server
+          await fetchMcpServers();
+          // Test the connection now that we're authenticated
+          handleTestMcpConnection();
+        } else {
+          const errData = await response.json();
+          setError(errData.detail || 'Failed to complete OAuth');
+        }
+      } catch (err) {
+        setError(`OAuth callback failed: ${err.message}`);
+      } finally {
+        setMcpLoading(false);
+        setOauthPending(null);
+        setTimeout(() => { setSuccess(null); setError(null); }, 3000);
+      }
+    };
+
+    window.addEventListener('message', handleOAuthMessage);
+    return () => window.removeEventListener('message', handleOAuthMessage);
+  }, [oauthPending, fetchMcpServers, handleTestMcpConnection]);
+
   useEffect(() => {
     setLoading(true);
     Promise.all([
@@ -1230,8 +1494,9 @@ export default function AgentBuilderContent({
       fetchAvailableVoices(),
       fetchAvailableTemplates(),
       fetchExistingConfig(),
+      fetchMcpServers(),
     ]).finally(() => setLoading(false));
-  }, [fetchAvailableTools, fetchAvailableVoices, fetchAvailableTemplates, fetchExistingConfig]);
+  }, [fetchAvailableTools, fetchAvailableVoices, fetchAvailableTemplates, fetchExistingConfig, fetchMcpServers]);
 
   // Apply existing config
   useEffect(() => {
@@ -1247,29 +1512,71 @@ export default function AgentBuilderContent({
   // COMPUTED
   // ─────────────────────────────────────────────────────────────────────────
 
+  // Organize tools into categories with MCP first, then handoffs, then others
   const toolsByCategory = useMemo(() => {
     const grouped = {};
-    availableTools.forEach((tool) => {
-      const category = tool.is_handoff ? 'Handoffs' : (tool.tags?.[0] || 'General');
+    
+    // Sort tools to ensure MCP tools appear first, then handoffs
+    const sortedTools = [...availableTools].sort((a, b) => {
+      // MCP first
+      if (a.source === 'mcp' && b.source !== 'mcp') return -1;
+      if (a.source !== 'mcp' && b.source === 'mcp') return 1;
+      // Handoffs second
+      if (a.is_handoff && !b.is_handoff) return -1;
+      if (!a.is_handoff && b.is_handoff) return 1;
+      // Then sort by name
+      return a.name.localeCompare(b.name);
+    });
+    
+    sortedTools.forEach((tool) => {
+      let category;
+      if (tool.is_handoff) {
+        category = '🔀 Handoffs';
+      } else if (tool.source === 'mcp') {
+        const transportLabel = formatMcpTransport(tool.mcp_transport);
+        category = `🔌 MCP: ${tool.mcp_server || 'unknown'}${transportLabel ? ` (${transportLabel})` : ''}`;
+      } else {
+        category = tool.tags?.[0] || 'General';
+      }
       if (!grouped[category]) grouped[category] = [];
       grouped[category].push(tool);
     });
-    return grouped;
+    
+    // Sort categories to put MCP first, then Handoffs, then others
+    const sortedKeys = Object.keys(grouped).sort((a, b) => {
+      if (a.startsWith('🔌')) return -1;
+      if (b.startsWith('🔌')) return 1;
+      if (a.startsWith('🔀')) return -1;
+      if (b.startsWith('🔀')) return 1;
+      return a.localeCompare(b);
+    });
+    
+    const sortedGrouped = {};
+    sortedKeys.forEach(key => {
+      sortedGrouped[key] = grouped[key];
+    });
+    
+    return sortedGrouped;
   }, [availableTools]);
 
-  const filteredTools = useMemo(() => {
-    if (toolFilter === 'all') return availableTools;
-    if (toolFilter === 'handoff') return availableTools.filter((t) => t.is_handoff);
-    return availableTools.filter((t) => !t.is_handoff);
-  }, [availableTools, toolFilter]);
 
-  // Compute used Jinja variables from prompt, greeting, return_greeting
-  const usedVars = useMemo(() => {
-    const fromGreeting = extractJinjaVariables(config.greeting);
-    const fromReturnGreeting = extractJinjaVariables(config.return_greeting);
-    const fromPrompt = extractJinjaVariables(config.prompt);
-    return [...new Set([...fromGreeting, ...fromReturnGreeting, ...fromPrompt])];
-  }, [config.greeting, config.return_greeting, config.prompt]);
+
+  const greetingVars = useMemo(
+    () => extractJinjaVariables(config.greeting),
+    [config.greeting],
+  );
+  const returnGreetingVars = useMemo(
+    () => extractJinjaVariables(config.return_greeting),
+    [config.return_greeting],
+  );
+  const promptVars = useMemo(
+    () => extractJinjaVariables(config.prompt),
+    [config.prompt],
+  );
+  const usedVars = useMemo(
+    () => [...new Set([...greetingVars, ...returnGreetingVars, ...promptVars])],
+    [greetingVars, returnGreetingVars, promptVars],
+  );
 
   // Ref for prompt textarea to support variable insertion
   const promptTextareaRef = useRef(null);
@@ -1308,11 +1615,11 @@ export default function AgentBuilderContent({
     if (textarea) {
       const start = textarea.selectionStart || 0;
       const end = textarea.selectionEnd || 0;
-      const text = config.prompt;
+      const text = draftPrompt;
       const before = text.substring(0, start);
       const after = text.substring(end);
       const newText = before + varText + after;
-      handleConfigChange('prompt', newText);
+      setDraftPrompt(newText);
       // Set cursor position after inserted text
       setTimeout(() => {
         textarea.focus();
@@ -1320,9 +1627,21 @@ export default function AgentBuilderContent({
       }, 0);
     } else {
       // Fallback: append to end
-      handleConfigChange('prompt', config.prompt + varText);
+      setDraftPrompt((prev) => prev + varText);
     }
-  }, [config.prompt, handleConfigChange]);
+  }, [draftPrompt]);
+
+  useEffect(() => {
+    setDraftGreeting(config.greeting || '');
+  }, [config.greeting]);
+
+  useEffect(() => {
+    setDraftReturnGreeting(config.return_greeting || '');
+  }, [config.return_greeting]);
+
+  useEffect(() => {
+    setDraftPrompt(config.prompt || DEFAULT_PROMPT);
+  }, [config.prompt]);
 
   const isCustomVoice = (config.voice?.type || 'azure-standard') === 'azure-custom';
 
@@ -1353,7 +1672,7 @@ export default function AgentBuilderContent({
       voicelive_model: template.voicelive_model || prev.voicelive_model,
       voice: template.voice || prev.voice,
     }));
-    setSuccess(`Applied ${template.is_session_agent ? 'session agent' : 'template'}: ${template.name}`);
+    setSuccess(`Applied agent: ${template.name}`);
     setTimeout(() => setSuccess(null), 3000);
   }, []);
 
@@ -1456,10 +1775,10 @@ export default function AgentBuilderContent({
       const payload = {
         name: config.name,
         description: config.description,
-        greeting: config.greeting,
-        return_greeting: config.return_greeting,
+        greeting: draftGreeting,
+        return_greeting: draftReturnGreeting,
         handoff_trigger: config.handoff_trigger,
-        prompt: config.prompt,
+        prompt: draftPrompt,
         tools: config.tools,
         cascade_model: {
           ...config.cascade_model,
@@ -1475,6 +1794,16 @@ export default function AgentBuilderContent({
         session: config.session,
         template_vars: config.template_vars,
       };
+
+      if (draftGreeting !== config.greeting) {
+        handleConfigChange('greeting', draftGreeting);
+      }
+      if (draftReturnGreeting !== config.return_greeting) {
+        handleConfigChange('return_greeting', draftReturnGreeting);
+      }
+      if (draftPrompt !== config.prompt) {
+        handleConfigChange('prompt', draftPrompt);
+      }
 
       const url = isEditMode
         ? `${API_BASE_URL}/api/v1/agent-builder/session/${encodeURIComponent(sessionId)}`
@@ -1655,7 +1984,6 @@ export default function AgentBuilderContent({
     const voiceLabel = getVoiceLabel(agent);
     const cascadeLabel = getCascadeLabel(agent);
     const voiceLiveLabel = getVoiceLiveLabel(agent);
-    const isSessionAgent = Boolean(agent?.is_session_agent);
 
     return (
       <Card
@@ -1668,7 +1996,7 @@ export default function AgentBuilderContent({
           display: 'flex',
           flexDirection: 'column',
           borderRadius: '12px',
-          borderColor: isSessionAgent ? '#c7d2fe' : '#e5e7eb',
+          borderColor: '#e5e7eb',
           boxShadow: 'none',
           '&:hover': {
             borderColor: '#6366f1',
@@ -1678,7 +2006,7 @@ export default function AgentBuilderContent({
       >
         <CardContent sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
           <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
-            <Avatar sx={{ width: 32, height: 32, bgcolor: isSessionAgent ? '#6366f1' : '#0ea5e9' }}>
+            <Avatar sx={{ width: 32, height: 32, bgcolor: '#0ea5e9' }}>
               {agent?.name?.[0] || 'A'}
             </Avatar>
             <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -1688,9 +2016,6 @@ export default function AgentBuilderContent({
             </Box>
             {agent?.is_entry_point && (
               <Chip size="small" color="primary" label="Entry" />
-            )}
-            {isSessionAgent && (
-              <Chip size="small" label="Session" sx={{ bgcolor: '#eef2ff', color: '#4338ca' }} />
             )}
           </Stack>
           <Typography
@@ -1840,11 +2165,11 @@ export default function AgentBuilderContent({
             </Button>
             <Button
               size="small"
-              variant={isSessionAgent ? 'contained' : 'outlined'}
+              variant="outlined"
               onClick={() => handleApplyTemplateCard(agent)}
               sx={{ textTransform: 'none' }}
             >
-              {isSessionAgent ? 'Edit Agent' : 'Use Template'}
+              Edit Agent
             </Button>
           </Stack>
         </CardContent>
@@ -1947,53 +2272,25 @@ export default function AgentBuilderContent({
                   </CardContent>
                 </Card>
 
-                {/* Templates & Existing Agents */}
+                {/* Available Agents */}
                 <Card variant="outlined" sx={styles.sectionCard}>
                   <CardContent>
                     <Typography variant="subtitle2" color="primary" sx={{ mb: 1, fontWeight: 600 }}>
                       <FolderOpenIcon fontSize="small" sx={{ mr: 1, verticalAlign: 'middle' }} />
-                      Edit Existing or Create from Template
+                      Available Agents
                     </Typography>
                     <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>
-                      Select an agent to edit or use as a starting template for a new agent.
+                      Select an agent to edit. Changes with the same name will update the existing agent.
                     </Typography>
-                    <Stack spacing={2.5}>
-                      {sessionTemplates.length > 0 && (
-                        <Box>
-                          <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
-                            <MemoryIcon sx={{ fontSize: 16, color: '#4338ca' }} />
-                            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                              Session Memory Agents
-                            </Typography>
-                            <Chip size="small" label={sessionTemplates.length} />
-                          </Stack>
-                          <Stack direction="row" flexWrap="wrap" gap={1.5}>
-                            {sessionTemplates.map(renderAgentCard)}
-                          </Stack>
-                        </Box>
-                      )}
-
-                      {staticTemplates.length > 0 && (
-                        <Box>
-                          <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
-                            <FolderOpenIcon sx={{ fontSize: 16, color: '#0ea5e9' }} />
-                            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                              Built-in Templates
-                            </Typography>
-                            <Chip size="small" label={staticTemplates.length} />
-                          </Stack>
-                          <Stack direction="row" flexWrap="wrap" gap={1.5}>
-                            {staticTemplates.map(renderAgentCard)}
-                          </Stack>
-                        </Box>
-                      )}
-
-                      {sessionTemplates.length === 0 && staticTemplates.length === 0 && (
-                        <Typography variant="body2" color="text.secondary">
-                          No templates available
-                        </Typography>
-                      )}
-                    </Stack>
+                    {allTemplates.length > 0 ? (
+                      <Stack direction="row" flexWrap="wrap" gap={1.5}>
+                        {allTemplates.map(renderAgentCard)}
+                      </Stack>
+                    ) : (
+                      <Typography variant="body2" color="text.secondary">
+                        No agents available
+                      </Typography>
+                    )}
                   </CardContent>
                 </Card>
               </Stack>
@@ -2011,8 +2308,13 @@ export default function AgentBuilderContent({
                     <Box>
                       <TextField
                         label="Initial Greeting"
-                        value={config.greeting}
-                        onChange={(e) => handleConfigChange('greeting', e.target.value)}
+                        value={draftGreeting}
+                        onChange={(e) => setDraftGreeting(e.target.value)}
+                        onBlur={() => {
+                          if (draftGreeting !== config.greeting) {
+                            handleConfigChange('greeting', draftGreeting);
+                          }
+                        }}
                         fullWidth
                         multiline
                         rows={3}
@@ -2020,15 +2322,20 @@ export default function AgentBuilderContent({
                         sx={styles.promptEditor}
                       />
                       <InlineVariablePicker 
-                        onInsert={(text) => handleConfigChange('greeting', config.greeting + text)} 
-                        usedVars={extractJinjaVariables(config.greeting)}
+                        onInsert={(text) => setDraftGreeting((prev) => prev + text)} 
+                        usedVars={greetingVars}
                       />
                     </Box>
                     <Box>
                       <TextField
                         label="Return Greeting"
-                        value={config.return_greeting}
-                        onChange={(e) => handleConfigChange('return_greeting', e.target.value)}
+                        value={draftReturnGreeting}
+                        onChange={(e) => setDraftReturnGreeting(e.target.value)}
+                        onBlur={() => {
+                          if (draftReturnGreeting !== config.return_greeting) {
+                            handleConfigChange('return_greeting', draftReturnGreeting);
+                          }
+                        }}
                         fullWidth
                         multiline
                         rows={3}
@@ -2036,8 +2343,8 @@ export default function AgentBuilderContent({
                         sx={styles.promptEditor}
                       />
                       <InlineVariablePicker 
-                        onInsert={(text) => handleConfigChange('return_greeting', config.return_greeting + text)} 
-                        usedVars={extractJinjaVariables(config.return_greeting)}
+                        onInsert={(text) => setDraftReturnGreeting((prev) => prev + text)} 
+                        usedVars={returnGreetingVars}
                       />
                     </Box>
                   </Stack>
@@ -2052,8 +2359,13 @@ export default function AgentBuilderContent({
                   </Typography>
                   <TextField
                     inputRef={promptTextareaRef}
-                    value={config.prompt}
-                    onChange={(e) => handleConfigChange('prompt', e.target.value)}
+                    value={draftPrompt}
+                    onChange={(e) => setDraftPrompt(e.target.value)}
+                    onBlur={() => {
+                      if (draftPrompt !== config.prompt) {
+                        handleConfigChange('prompt', draftPrompt);
+                      }
+                    }}
                     fullWidth
                     multiline
                     rows={18}
@@ -2062,7 +2374,7 @@ export default function AgentBuilderContent({
                   />
                   <InlineVariablePicker 
                     onInsert={handleInsertVariable} 
-                    usedVars={extractJinjaVariables(config.prompt)}
+                    usedVars={promptVars}
                   />
                 </CardContent>
               </Card>
@@ -2071,124 +2383,311 @@ export default function AgentBuilderContent({
             {/* TAB 2: TOOLS */}
             <TabPanel value={activeTab} index={2}>
               <Stack spacing={2}>
+                {/* Header with selected count and catalog link */}
                 <Stack direction="row" justifyContent="space-between" alignItems="center">
                   <Typography variant="subtitle2" color="primary" sx={{ fontWeight: 600 }}>
                     🛠️ Available Tools ({config.tools.length} selected)
                   </Typography>
-                  <ToggleButtonGroup
-                    value={toolFilter}
-                    exclusive
-                    onChange={(e, v) => v && setToolFilter(v)}
+                  <Button
                     size="small"
+                    variant="text"
+                    href="https://aiappsgbbfactory.github.io/art-voice-agent-accelerator/architecture/registries/tool-catalog/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    startIcon={<InfoOutlinedIcon />}
+                    sx={{ textTransform: 'none', fontSize: 12 }}
                   >
-                    <ToggleButton value="all">All</ToggleButton>
-                    <ToggleButton value="normal">Tools</ToggleButton>
-                    <ToggleButton value="handoff">Handoffs</ToggleButton>
-                  </ToggleButtonGroup>
+                    View Tool Catalog
+                  </Button>
                 </Stack>
 
-                {Object.entries(toolsByCategory).map(([category, tools]) => (
-                  <Accordion key={category} defaultExpanded>
-                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                      <Typography variant="subtitle2">{category}</Typography>
-                      <Chip
-                        size="small"
-                        label={`${tools.filter((t) => config.tools.includes(t.name)).length}/${tools.length}`}
-                        sx={{ ml: 2 }}
-                      />
-                    </AccordionSummary>
-                    <AccordionDetails>
-                      <Stack spacing={1}>
-                        {tools.map((tool) => (
-                          <FormControlLabel
-                            key={tool.name}
-                            control={
-                              <Checkbox
-                                checked={config.tools.includes(tool.name)}
-                                onChange={() => handleToolToggle(tool.name)}
-                              />
-                            }
-                            label={
-                              <Box
-                                sx={{
-                                  display: 'flex',
-                                  alignItems: 'flex-start',
-                                  gap: 1,
-                                  width: '100%',
-                                  minWidth: 0,
-                                }}
-                              >
-                                <Box sx={{ flex: 1, minWidth: 0 }}>
-                                  <Stack
-                                    direction="row"
-                                    alignItems="center"
-                                    spacing={1}
-                                    sx={{ flexWrap: 'wrap', minWidth: 0 }}
-                                  >
-                                    <Typography
-                                      variant="body2"
-                                      sx={{
-                                        fontWeight: 600,
-                                        minWidth: 0,
-                                        maxWidth: '100%',
-                                        overflowWrap: 'anywhere',
-                                      }}
-                                    >
-                                      {tool.name}
-                                    </Typography>
-                                    {tool.is_handoff && (
-                                      <Chip
-                                        label="handoff"
-                                        size="small"
-                                        color="secondary"
-                                        sx={{ height: 18, fontSize: 10 }}
-                                      />
-                                    )}
-                                    {(tool.tags || []).slice(0, 2).map((tag) => (
-                                      <Chip key={tag} label={tag} size="small" sx={{ height: 18, fontSize: 10 }} />
-                                    ))}
-                                  </Stack>
-                                  <Typography
-                                    variant="caption"
-                                    color="text.secondary"
-                                    sx={{
-                                      display: 'block',
-                                      mt: 0.25,
-                                      overflow: 'hidden',
-                                      textOverflow: 'ellipsis',
-                                      whiteSpace: 'nowrap',
-                                    }}
-                                  >
-                                    {tool.description || 'No description available.'}
-                                  </Typography>
-                                </Box>
-                                <Tooltip title="Tool details">
-                                  <IconButton
-                                    size="small"
-                                    sx={{ flexShrink: 0, alignSelf: 'flex-start' }}
-                                    onClick={(e) => {
-                                      e.preventDefault();
-                                      e.stopPropagation();
-                                      handleOpenToolDetails(tool);
-                                    }}
-                                  >
-                                    <InfoOutlinedIcon fontSize="small" />
-                                  </IconButton>
-                                </Tooltip>
-                              </Box>
-                            }
-                            sx={{
-                              alignItems: 'flex-start',
-                              width: '100%',
-                              m: 0,
-                              '& .MuiFormControlLabel-label': {
-                                flex: 1,
-                                minWidth: 0,
-                              },
+                {/* Selected Tools Summary (chips at top) */}
+                {config.tools.length > 0 && (
+                  <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'primary.50', borderColor: 'primary.200' }}>
+                    <Typography variant="caption" color="primary.dark" sx={{ fontWeight: 600, mb: 1, display: 'block' }}>
+                      Selected Tools:
+                    </Typography>
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                      {config.tools.map((toolName) => {
+                        const tool = availableTools.find(t => t.name === toolName);
+                        return (
+                          <Chip
+                            key={toolName}
+                            label={toolName}
+                            size="small"
+                            onDelete={() => handleToolToggle(toolName)}
+                            color={tool?.is_handoff ? 'secondary' : tool?.source === 'mcp' ? 'info' : 'default'}
+                            sx={{ 
+                              height: 24, 
+                              fontSize: 11,
+                              '& .MuiChip-label': { px: 1 },
                             }}
                           />
-                        ))}
+                        );
+                      })}
+                    </Box>
+                  </Paper>
+                )}
+
+                {/* MCP Server Management */}
+                <Accordion
+                  sx={{
+                    '&:before': { display: 'none' },
+                    boxShadow: 'none',
+                    border: '1px solid',
+                    borderColor: '#a5b4fc',
+                    borderRadius: '8px !important',
+                    backgroundColor: '#eef2ff',
+                    '&.Mui-expanded': { margin: 0 },
+                  }}
+                >
+                  <AccordionSummary
+                    expandIcon={<ExpandMoreIcon />}
+                    sx={{
+                      minHeight: 44,
+                      '&.Mui-expanded': { minHeight: 44 },
+                      '& .MuiAccordionSummary-content': { my: 1 },
+                    }}
+                  >
+                    <Stack direction="row" alignItems="center" spacing={1} sx={{ width: '100%' }}>
+                      <LinkIcon sx={{ color: '#4f46e5', fontSize: 18 }} />
+                      <Typography variant="subtitle2" sx={{ fontWeight: 600, color: '#4f46e5' }}>
+                        MCP Servers
+                      </Typography>
+                      <Chip
+                        size="small"
+                        label={mcpServers.length}
+                        color="primary"
+                        sx={{ height: 20, fontSize: 11 }}
+                      />
+                    </Stack>
+                  </AccordionSummary>
+                  <AccordionDetails sx={{ pt: 0, pb: 1.5, backgroundColor: '#fff' }}>
+                    <Stack spacing={1.5}>
+                      <Typography variant="caption" color="text.secondary">
+                        Connect to MCP servers to discover additional tools. Runtime-added servers persist for this session.
+                      </Typography>
+
+                      {/* Connected Servers */}
+                      {mcpServers.length > 0 && (
+                        <Stack spacing={1}>
+                          {mcpServers.map((server) => (
+                            <Paper
+                              key={server.name}
+                              variant="outlined"
+                              sx={{
+                                p: 1,
+                                borderColor: server.status === 'healthy' ? '#86efac' : '#fca5a5',
+                                backgroundColor: server.status === 'healthy' ? '#f0fdf4' : '#fef2f2',
+                              }}
+                            >
+                              <Stack direction="row" alignItems="center" justifyContent="space-between">
+                                <Stack direction="row" alignItems="center" spacing={1}>
+                                  {server.status === 'healthy' ? (
+                                    <LinkIcon sx={{ color: '#22c55e', fontSize: 16 }} />
+                                  ) : (
+                                    <LinkOffIcon sx={{ color: '#ef4444', fontSize: 16 }} />
+                                  )}
+                                  <Box>
+                                    <Typography variant="body2" sx={{ fontWeight: 600, fontFamily: 'monospace' }}>
+                                      {server.name}
+                                    </Typography>
+                                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                                      {server.url} • {server.tools_count} tools
+                                      {server.source === 'environment' && (
+                                        <Chip
+                                          label="env"
+                                          size="small"
+                                          sx={{ ml: 0.5, height: 14, fontSize: 9 }}
+                                        />
+                                      )}
+                                    </Typography>
+                                  </Box>
+                                </Stack>
+                                <Stack direction="row" spacing={0.5}>
+                                  {server.source === 'runtime' && (
+                                    <Tooltip title="Remove server">
+                                      <IconButton
+                                        size="small"
+                                        onClick={() => handleRemoveMcpServer(server.name)}
+                                        disabled={mcpLoading}
+                                      >
+                                        <DeleteIcon sx={{ fontSize: 16, color: '#ef4444' }} />
+                                      </IconButton>
+                                    </Tooltip>
+                                  )}
+                                </Stack>
+                              </Stack>
+                              {server.tool_names?.length > 0 && (
+                                <Box sx={{ mt: 1, display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                                  {server.tool_names.slice(0, 5).map((tool) => (
+                                    <Chip
+                                      key={tool}
+                                      label={tool}
+                                      size="small"
+                                      variant="outlined"
+                                      color="info"
+                                      sx={{ height: 18, fontSize: 9, fontFamily: 'monospace' }}
+                                    />
+                                  ))}
+                                  {server.tool_names.length > 5 && (
+                                    <Chip
+                                      label={`+${server.tool_names.length - 5} more`}
+                                      size="small"
+                                      sx={{ height: 18, fontSize: 9 }}
+                                    />
+                                  )}
+                                </Box>
+                              )}
+                            </Paper>
+                          ))}
+                        </Stack>
+                      )}
+
+                      {/* Add Server Button */}
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        startIcon={<AddIcon />}
+                        onClick={() => setShowAddMcpDialog(true)}
+                        sx={{ textTransform: 'none', borderStyle: 'dashed' }}
+                      >
+                        Add MCP Server
+                      </Button>
+                    </Stack>
+                  </AccordionDetails>
+                </Accordion>
+
+                {/* Tools by Category */}
+                {Object.entries(toolsByCategory).map(([category, tools], catIdx) => (
+                  <Accordion 
+                    key={category} 
+                    defaultExpanded={catIdx === 0}
+                    sx={{
+                      '&:before': { display: 'none' },
+                      boxShadow: 'none',
+                      border: '1px solid',
+                      borderColor: 'divider',
+                      borderRadius: '8px !important',
+                      '&.Mui-expanded': { margin: 0 },
+                    }}
+                  >
+                    <AccordionSummary 
+                      expandIcon={<ExpandMoreIcon />}
+                      sx={{ 
+                        minHeight: 44,
+                        '&.Mui-expanded': { minHeight: 44 },
+                        '& .MuiAccordionSummary-content': { my: 1 },
+                      }}
+                    >
+                      <Stack direction="row" alignItems="center" spacing={1} sx={{ width: '100%' }}>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>{category}</Typography>
+                        <Chip
+                          size="small"
+                          label={`${tools.filter((t) => config.tools.includes(t.name)).length}/${tools.length}`}
+                          color={tools.some(t => config.tools.includes(t.name)) ? 'primary' : 'default'}
+                          sx={{ height: 20, fontSize: 11 }}
+                        />
                       </Stack>
+                    </AccordionSummary>
+                    <AccordionDetails sx={{ pt: 0, pb: 1.5 }}>
+                      <List dense disablePadding>
+                        {tools.map((tool) => (
+                          <ListItem
+                            key={tool.name}
+                            dense
+                            disablePadding
+                            secondaryAction={
+                              <IconButton
+                                edge="end"
+                                size="small"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenToolDetails(tool);
+                                }}
+                              >
+                                <InfoOutlinedIcon sx={{ fontSize: 16 }} />
+                              </IconButton>
+                            }
+                            sx={{
+                              py: 0.5,
+                              px: 1,
+                              mb: 0.5,
+                              borderRadius: 1,
+                              border: '1px solid',
+                              borderColor: config.tools.includes(tool.name) ? 'primary.main' : 'transparent',
+                              bgcolor: config.tools.includes(tool.name) ? 'primary.50' : 'transparent',
+                              '&:hover': { bgcolor: 'action.hover' },
+                              cursor: 'pointer',
+                            }}
+                            onClick={() => handleToolToggle(tool.name)}
+                          >
+                            <ListItemIcon sx={{ minWidth: 32 }}>
+                              <Checkbox
+                                checked={config.tools.includes(tool.name)}
+                                size="small"
+                                sx={{ p: 0 }}
+                              />
+                            </ListItemIcon>
+                            <ListItemText
+                              primary={
+                                <Stack direction="row" alignItems="center" spacing={0.5} sx={{ flexWrap: 'wrap' }}>
+                                  <Typography
+                                    variant="body2"
+                                    sx={{
+                                      fontWeight: 500,
+                                      fontSize: '0.8rem',
+                                      fontFamily: 'monospace',
+                                    }}
+                                  >
+                                    {tool.name}
+                                  </Typography>
+                                  {tool.is_handoff && (
+                                    <Chip 
+                                      label="handoff" 
+                                      size="small" 
+                                      color="secondary" 
+                                      sx={{ height: 16, fontSize: 9, ml: 0.5 }} 
+                                    />
+                                  )}
+                                  {tool.source === 'mcp' && (
+                                    <>
+                                      <Chip 
+                                        label={`MCP: ${tool.mcp_server}`} 
+                                        size="small" 
+                                        color="info"
+                                        variant="outlined"
+                                        sx={{ height: 16, fontSize: 9, ml: 0.5 }} 
+                                      />
+                                      {tool.mcp_transport && (
+                                        <Chip
+                                          label={formatMcpTransport(tool.mcp_transport)}
+                                          size="small"
+                                          color="info"
+                                          variant="outlined"
+                                          sx={{ height: 16, fontSize: 9 }}
+                                        />
+                                      )}
+                                    </>
+                                  )}
+                                </Stack>
+                              }
+                              secondary={tool.description || 'No description'}
+                              secondaryTypographyProps={{
+                                sx: {
+                                  fontSize: '0.7rem',
+                                  lineHeight: 1.3,
+                                  display: '-webkit-box',
+                                  WebkitLineClamp: 2,
+                                  WebkitBoxOrient: 'vertical',
+                                  overflow: 'hidden',
+                                  pr: 3,
+                                },
+                              }}
+                            />
+                          </ListItem>
+                        ))}
+                      </List>
                     </AccordionDetails>
                   </Accordion>
                 ))}
@@ -2321,11 +2820,16 @@ export default function AgentBuilderContent({
                         value={cascadeModelPreset}
                         onChange={(e) => {
                           const selected = e.target.value;
-                          handleNestedConfigChange(
-                            'cascade_model',
-                            'deployment_id',
-                            selected === 'custom' ? '' : selected
-                          );
+                          if (selected === 'custom') {
+                            setIsCascadeCustomMode(true);
+                            // Keep existing value if any, otherwise empty
+                            if (!config.cascade_model?.deployment_id || CASCADE_MODEL_PRESETS.some(p => p.id === config.cascade_model?.deployment_id)) {
+                              handleNestedConfigChange('cascade_model', 'deployment_id', '');
+                            }
+                          } else {
+                            setIsCascadeCustomMode(false);
+                            handleNestedConfigChange('cascade_model', 'deployment_id', selected);
+                          }
                         }}
                         fullWidth
                         size="small"
@@ -2628,11 +3132,16 @@ export default function AgentBuilderContent({
                         value={voiceliveModelPreset}
                         onChange={(e) => {
                           const selected = e.target.value;
-                          handleNestedConfigChange(
-                            'voicelive_model',
-                            'deployment_id',
-                            selected === 'custom' ? '' : selected
-                          );
+                          if (selected === 'custom') {
+                            setIsVoiceliveCustomMode(true);
+                            // Keep existing value if any, otherwise empty
+                            if (!config.voicelive_model?.deployment_id || VOICELIVE_MODEL_PRESETS.some(p => p.id === config.voicelive_model?.deployment_id)) {
+                              handleNestedConfigChange('voicelive_model', 'deployment_id', '');
+                            }
+                          } else {
+                            setIsVoiceliveCustomMode(false);
+                            handleNestedConfigChange('voicelive_model', 'deployment_id', selected);
+                          }
                         }}
                         fullWidth
                         size="small"
@@ -3113,6 +3622,267 @@ export default function AgentBuilderContent({
         tool={selectedTool}
       />
 
+      {/* Add MCP Server Dialog */}
+      <Dialog
+        open={showAddMcpDialog}
+        onClose={() => {
+          setShowAddMcpDialog(false);
+          setMcpTestResult(null);
+          setNewMcpServer({ name: '', url: '', transport: 'streamable-http', timeout: 30, auth_token: '', auth_method: 'none', oauth: { client_id: '', auth_url: '', token_url: '', scope: '' } });
+        }}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <LinkIcon color="primary" />
+          <Box sx={{ flex: 1 }}>
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>
+              Add MCP Server
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Connect to an MCP server to discover and register its tools
+            </Typography>
+          </Box>
+          <IconButton
+            onClick={() => {
+              setShowAddMcpDialog(false);
+              setMcpTestResult(null);
+              setNewMcpServer({ name: '', url: '', transport: 'streamable-http', timeout: 30, auth_token: '', auth_method: 'none', oauth: { client_id: '', auth_url: '', token_url: '', scope: '' } });
+            }}
+          >
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+
+        <DialogContent dividers>
+          <Stack spacing={2.5}>
+            <TextField
+              label="Server Name"
+              value={newMcpServer.name}
+              onChange={(e) => setNewMcpServer((prev) => ({ ...prev, name: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '') }))}
+              fullWidth
+              required
+              placeholder="e.g., knowledge, cardapi"
+              helperText="Unique identifier (lowercase, alphanumeric, hyphens, underscores)"
+              inputProps={{ pattern: '[a-z0-9_-]+' }}
+            />
+
+            <TextField
+              label="Server URL"
+              value={newMcpServer.url}
+              onChange={(e) => setNewMcpServer((prev) => ({ ...prev, url: e.target.value }))}
+              fullWidth
+              required
+              placeholder="http://localhost:8080"
+              helperText="HTTP endpoint of the MCP server"
+            />
+
+            <Stack direction="row" spacing={2}>
+              <TextField
+                select
+                label="Transport"
+                value={newMcpServer.transport}
+                onChange={(e) => setNewMcpServer((prev) => ({ ...prev, transport: e.target.value }))}
+                sx={{ minWidth: 120 }}
+                SelectProps={{ native: true }}
+              >
+                <option value="sse">SSE</option>
+                <option value="http">HTTP</option>
+                <option value="stdio">STDIO</option>
+              </TextField>
+
+              <TextField
+                label="Timeout (s)"
+                type="number"
+                value={newMcpServer.timeout}
+                onChange={(e) => setNewMcpServer((prev) => ({ ...prev, timeout: parseInt(e.target.value) || 30 }))}
+                inputProps={{ min: 1, max: 120 }}
+                sx={{ width: 100 }}
+              />
+            </Stack>
+
+            {/* Authentication Section */}
+            <Box>
+              <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+                Authentication
+              </Typography>
+              <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
+                {['none', 'token', 'oauth'].map((method) => (
+                  <Chip
+                    key={method}
+                    label={method === 'none' ? 'None' : method === 'token' ? 'Bearer Token' : 'OAuth 2.0'}
+                    onClick={() => setNewMcpServer((prev) => ({ ...prev, auth_method: method }))}
+                    color={newMcpServer.auth_method === method ? 'primary' : 'default'}
+                    variant={newMcpServer.auth_method === method ? 'filled' : 'outlined'}
+                    sx={{ cursor: 'pointer' }}
+                  />
+                ))}
+              </Stack>
+
+              {newMcpServer.auth_method === 'token' && (
+                <TextField
+                  label="Bearer Token"
+                  value={newMcpServer.auth_token}
+                  onChange={(e) => setNewMcpServer((prev) => ({ ...prev, auth_token: e.target.value }))}
+                  fullWidth
+                  type="password"
+                  placeholder="Enter your access token"
+                  helperText="Token will be sent as 'Authorization: Bearer <token>' header"
+                />
+              )}
+
+              {newMcpServer.auth_method === 'oauth' && (
+                <Stack spacing={2}>
+                  <TextField
+                    label="Client ID"
+                    value={newMcpServer.oauth.client_id}
+                    onChange={(e) => setNewMcpServer((prev) => ({
+                      ...prev,
+                      oauth: { ...prev.oauth, client_id: e.target.value }
+                    }))}
+                    fullWidth
+                    required
+                    placeholder="OAuth application client ID"
+                  />
+                  <TextField
+                    label="Authorization URL"
+                    value={newMcpServer.oauth.auth_url}
+                    onChange={(e) => setNewMcpServer((prev) => ({
+                      ...prev,
+                      oauth: { ...prev.oauth, auth_url: e.target.value }
+                    }))}
+                    fullWidth
+                    required
+                    placeholder="https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize"
+                  />
+                  <TextField
+                    label="Token URL"
+                    value={newMcpServer.oauth.token_url}
+                    onChange={(e) => setNewMcpServer((prev) => ({
+                      ...prev,
+                      oauth: { ...prev.oauth, token_url: e.target.value }
+                    }))}
+                    fullWidth
+                    required
+                    placeholder="https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
+                  />
+                  <TextField
+                    label="Scopes (Optional)"
+                    value={newMcpServer.oauth.scope}
+                    onChange={(e) => setNewMcpServer((prev) => ({
+                      ...prev,
+                      oauth: { ...prev.oauth, scope: e.target.value }
+                    }))}
+                    fullWidth
+                    placeholder="api://example/.default openid profile"
+                    helperText="Space-separated OAuth scopes"
+                  />
+                  <Button
+                    variant="outlined"
+                    color="primary"
+                    onClick={handleStartOAuth}
+                    disabled={mcpLoading || !newMcpServer.oauth.client_id || !newMcpServer.oauth.auth_url || !newMcpServer.oauth.token_url}
+                    startIcon={oauthPending ? <CircularProgress size={16} /> : <LinkIcon />}
+                    fullWidth
+                  >
+                    {oauthPending ? 'Waiting for OAuth...' : 'Connect with OAuth'}
+                  </Button>
+                  <Typography variant="caption" color="text.secondary">
+                    Opens a popup window for OAuth authentication. After authorizing, the token will be used automatically.
+                  </Typography>
+                </Stack>
+              )}
+            </Box>
+
+            {/* Test Results */}
+            {mcpTestResult && (
+              <Paper
+                variant="outlined"
+                sx={{
+                  p: 2,
+                  borderColor: mcpTestResult.connected ? '#86efac' : '#fca5a5',
+                  backgroundColor: mcpTestResult.connected ? '#f0fdf4' : '#fef2f2',
+                }}
+              >
+                <Stack spacing={1}>
+                  <Stack direction="row" alignItems="center" spacing={1}>
+                    {mcpTestResult.connected ? (
+                      <CheckIcon sx={{ color: '#22c55e' }} />
+                    ) : (
+                      <WarningAmberIcon sx={{ color: '#ef4444' }} />
+                    )}
+                    <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                      {mcpTestResult.connected ? 'Connection Successful' : 'Connection Failed'}
+                    </Typography>
+                  </Stack>
+
+                  {mcpTestResult.connected && (
+                    <>
+                      <Typography variant="body2" color="text.secondary">
+                        Discovered {mcpTestResult.tools_count} tool(s) in {mcpTestResult.response_time_ms}ms
+                      </Typography>
+                      {mcpTestResult.tools?.length > 0 && (
+                        <Box sx={{ mt: 1 }}>
+                          <Typography variant="caption" sx={{ fontWeight: 600, display: 'block', mb: 0.5 }}>
+                            Available Tools:
+                          </Typography>
+                          <Stack direction="row" flexWrap="wrap" gap={0.5}>
+                            {mcpTestResult.tools.map((tool) => (
+                              <Tooltip key={tool.prefixed_name} title={tool.description}>
+                                <Chip
+                                  label={tool.prefixed_name}
+                                  size="small"
+                                  color="info"
+                                  sx={{ fontFamily: 'monospace', fontSize: 11 }}
+                                />
+                              </Tooltip>
+                            ))}
+                          </Stack>
+                        </Box>
+                      )}
+                    </>
+                  )}
+
+                  {mcpTestResult.error && (
+                    <Typography variant="body2" color="error">
+                      {mcpTestResult.error}
+                    </Typography>
+                  )}
+                </Stack>
+              </Paper>
+            )}
+          </Stack>
+        </DialogContent>
+
+        <DialogActions sx={{ p: 2 }}>
+          <Button
+            onClick={() => {
+              setShowAddMcpDialog(false);
+              setMcpTestResult(null);
+              setNewMcpServer({ name: '', url: '', transport: 'streamable-http', timeout: 30, auth_token: '', auth_method: 'none', oauth: { client_id: '', auth_url: '', token_url: '', scope: '' } });
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="outlined"
+            onClick={handleTestMcpConnection}
+            disabled={mcpLoading || !newMcpServer.name || !newMcpServer.url}
+            startIcon={mcpLoading ? <CircularProgress size={16} /> : <LinkIcon />}
+          >
+            Test Connection
+          </Button>
+          <Button
+            variant="contained"
+            onClick={handleAddMcpServer}
+            disabled={mcpLoading || !newMcpServer.name || !newMcpServer.url}
+            startIcon={mcpLoading ? <CircularProgress size={16} color="inherit" /> : <AddIcon />}
+          >
+            Add Server
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       {/* Footer */}
       <Divider />
       <Box sx={{ p: 2, backgroundColor: '#fafbfc', display: 'flex', gap: 2, justifyContent: 'flex-end' }}>
@@ -3138,9 +3908,7 @@ export default function AgentBuilderContent({
               : 'linear-gradient(135deg, #4f46e5 0%, #6366f1 100%)',
           }}
         >
-          {saving
-            ? isEditMode ? 'Updating...' : 'Creating...'
-            : isEditMode ? 'Update Agent' : 'Create Agent'}
+          {saving ? 'Saving Agent...' : 'Save Agent'}
         </Button>
       </Box>
 

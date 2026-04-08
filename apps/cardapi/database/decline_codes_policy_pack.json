@@ -1,0 +1,1489 @@
+{
+  "metadata": {
+    "title": "Debit Card and ATM Card Declined Reason Codes",
+    "description": "Numeric codes are declined on Base24, alphanumeric codes are declined on FAST",
+    "notes": [
+      "If decline code is a number, decline was done on Base24",
+      "If decline code is a letter or number combination, decline was done on FAST",
+      "Transaction Description will begin with 'Rej' for rejected/declined transactions"
+    ]
+  },
+  "numeric_codes": [
+    {
+      "code": "02",
+      "description": "Personal identification number (PIN) translation error",
+      "information": "PIN did not translate. Suggest the client retry the transaction.",
+      "actions": [
+        "Retry transaction"
+      ]
+    },
+    {
+      "code": "04",
+      "description": "Unknown error",
+      "information": "Check the status of the card. If card is open, tell client to retry. If card is closed, tell client transaction was declined due to card being closed.",
+      "actions": [
+        "Check card status",
+        "Retry transaction if open",
+        "Notify client if closed"
+      ]
+    },
+    {
+      "code": "05",
+      "description": "Card not activated",
+      "information": "Card needs to be activated before a Pinless transaction can occur. If using digital wallet, card will be available within 24 hours.",
+      "actions": [
+        "Activate card",
+        "Wait 24 hours for digital wallet"
+      ]
+    },
+    {
+      "code": "06",
+      "description": "System error - manual entry",
+      "information": "System error occurred. Suggest the client retry the transaction.",
+      "actions": [
+        "Retry transaction"
+      ]
+    },
+    {
+      "code": "12",
+      "description": "BOSS - Transaction type not allowed",
+      "information": "Transaction type is not allowed or the account requested is not linked to the card. Locate linked accounts and change linkage if applicable.",
+      "actions": [
+        "Check linked accounts",
+        "Change linkage",
+        "Retry transaction"
+      ],
+      "script_refs": [
+        "txn_type_not_allowed_linkage"
+      ],
+      "orchestrator_actions": [
+        "CHECK_LINKED_ACCOUNTS",
+        "CHANGE_LINKAGE"
+      ],
+      "escalation": {
+        "required": false
+      }
+    },
+    {
+      "code": "13",
+      "description": "Invalid amount",
+      "information": "Amount requested is not permitted. Examples: $10 request at ATM that only dispenses $20s, or $50 cash back with $40 limit.",
+      "actions": [
+        "Attempt different amount"
+      ]
+    },
+    {
+      "code": "14",
+      "description": "Card not recognized by the bank's system",
+      "information": "Card is not recognized or is no longer valid.",
+      "actions": [
+        "Suggest another payment method"
+      ]
+    },
+    {
+      "code": "17",
+      "description": "Client cancelled",
+      "information": "Transaction was cancelled. Suggest the client retry the transaction.",
+      "actions": [
+        "Retry transaction"
+      ]
+    },
+    {
+      "code": "20",
+      "description": "Invalid response",
+      "information": "There was a problem with network. Suggest the client retry the transaction.",
+      "actions": [
+        "Retry transaction"
+      ]
+    },
+    {
+      "code": "21",
+      "description": "Hardware error",
+      "information": "ATM malfunctioned. Suggest the client use a different ATM.",
+      "actions": [
+        "Use different ATM",
+        "Find nearest ATM"
+      ],
+      "orchestrator_actions": [
+        "OFFER_ATM_LOCATOR"
+      ],
+      "escalation": {
+        "required": false
+      }
+    },
+    {
+      "code": "22",
+      "description": "System malfunction",
+      "information": "System malfunction occurred.",
+      "actions": [
+        "Use different ATM",
+        "Find nearest ATM"
+      ],
+      "orchestrator_actions": [
+        "OFFER_ATM_LOCATOR"
+      ],
+      "escalation": {
+        "required": false
+      }
+    },
+    {
+      "code": "30",
+      "description": "TXN malfunction",
+      "information": "Transaction is not making it through the network. Issue may be with merchant, network, or bank system.",
+      "actions": [
+        "Perform transaction later",
+        "Try another payment method"
+      ]
+    },
+    {
+      "code": "31",
+      "description": "Invalid ATM selected",
+      "information": "Bank of America did not generate this decline. Decline is from a non-Bank of America ATM.",
+      "actions": [
+        "Use different ATM",
+        "Find nearest ATM"
+      ],
+      "script_refs": [
+        "atm_invalid_non_bofa"
+      ],
+      "orchestrator_actions": [
+        "OFFER_ATM_LOCATOR"
+      ],
+      "escalation": {
+        "required": false
+      }
+    },
+    {
+      "code": "33",
+      "description": "Expired card",
+      "information": "Card is expired. If using digital wallet, delete then re-add the active debit card.",
+      "actions": [
+        "Replace card",
+        "Use another payment method",
+        "Re-add to digital wallet"
+      ],
+      "script_refs": [
+        "expired_card_explain_and_offer_reissue"
+      ],
+      "orchestrator_actions": [
+        "ORDER_REPLACEMENT_CARD",
+        "OFFER_DIGITAL_INSTANT_ISSUANCE"
+      ],
+      "contextual_rules": [
+        {
+          "if": {
+            "isDigitalWallet": true
+          },
+          "add_script_refs": [
+            "wallet_delete_readd_tip"
+          ]
+        },
+        {
+          "if": {
+            "blockedStatusIn": [
+              "Fraud",
+              "Base24 Velocity",
+              "AML"
+            ]
+          },
+          "escalation": {
+            "required": true,
+            "target": "FRAUD_SERVICING"
+          }
+        }
+      ],
+      "escalation": {
+        "required": false
+      }
+    },
+    {
+      "code": "36",
+      "description": "Card blocked on base24",
+      "information": "Card is blocked. Check Blocked Status: Fraud Block or Bad Debt Block.",
+      "actions": [
+        "Read account comments",
+        "Check blocked status",
+        "Transfer to Recovery Services if Bad Debt"
+      ]
+    },
+    {
+      "code": "40",
+      "description": "Transaction not supported",
+      "information": "Merchant sent a transaction type that is not supported.",
+      "actions": [
+        "Tell client merchant needs to send correct transaction type"
+      ]
+    },
+    {
+      "code": "41",
+      "description": "Lost/stolen block",
+      "information": "Card is flagged as lost or stolen.",
+      "actions": [
+        "Order replacement card",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "43",
+      "description": "Lost/stolen block",
+      "information": "Card is flagged as lost or stolen.",
+      "actions": [
+        "Order replacement card",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "51",
+      "description": "Insufficient funds",
+      "information": "Account does not have available funds.",
+      "actions": [
+        "Transfer funds if applicable",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "54",
+      "description": "Expired card",
+      "information": "Card is expired. If using digital wallet, delete then re-add the active debit card.",
+      "actions": [
+        "Replace card",
+        "Use another payment method",
+        "Re-add to digital wallet"
+      ],
+      "script_refs": [
+        "expired_card_explain_and_offer_reissue"
+      ],
+      "orchestrator_actions": [
+        "ORDER_REPLACEMENT_CARD",
+        "OFFER_DIGITAL_INSTANT_ISSUANCE"
+      ],
+      "contextual_rules": [
+        {
+          "if": {
+            "isDigitalWallet": true
+          },
+          "add_script_refs": [
+            "wallet_delete_readd_tip"
+          ]
+        },
+        {
+          "if": {
+            "blockedStatusIn": [
+              "Fraud",
+              "Base24 Velocity",
+              "AML"
+            ]
+          },
+          "escalation": {
+            "required": true,
+            "target": "FRAUD_SERVICING"
+          }
+        }
+      ],
+      "escalation": {
+        "required": false
+      }
+    },
+    {
+      "code": "55",
+      "description": "Invalid PIN",
+      "information": "Client entered an invalid PIN. If PIN entered incorrectly multiple times, card will be blocked.",
+      "actions": [
+        "Send PIN reminder by mail",
+        "Refer to financial center for new PIN",
+        "Use credit option if available"
+      ],
+      "script_refs": [
+        "invalid_pin_options"
+      ],
+      "orchestrator_actions": [
+        "OFFER_PIN_REMINDER_MAIL",
+        "REFER_TO_FINANCIAL_CENTER",
+        "SUGGEST_CREDIT_OPTION"
+      ],
+      "contextual_rules": [
+        {
+          "if": {
+            "retriesExceeded": true
+          },
+          "notes": "Card may be temporarily blocked for ATM/cashback until midnight."
+        }
+      ],
+      "escalation": {
+        "required": false
+      }
+    },
+    {
+      "code": "56",
+      "description": "Invalid card number",
+      "information": "System did not recognize the card because it was issued on the same day. Card starts working the next day.",
+      "actions": [
+        "Wait until next day",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "57",
+      "description": "Transaction type not allowed",
+      "information": "Transaction type is not allowed or the account requested is not linked to the card.",
+      "actions": [
+        "Check linked accounts",
+        "Change linkage",
+        "Retry transaction"
+      ],
+      "script_refs": [
+        "txn_type_not_allowed_linkage"
+      ],
+      "orchestrator_actions": [
+        "CHECK_LINKED_ACCOUNTS",
+        "CHANGE_LINKAGE"
+      ],
+      "escalation": {
+        "required": false
+      }
+    },
+    {
+      "code": "61",
+      "description": "Daily limit reached",
+      "information": "Exceeds the daily withdrawal limit for the 24-hour calendar day.",
+      "actions": [
+        "Offer Individualized Limits"
+      ],
+      "orchestrator_actions": [
+        "OFFER_INDIVIDUALIZED_LIMITS"
+      ],
+      "escalation": {
+        "required": false
+      }
+    },
+    {
+      "code": "62",
+      "description": "Card block on base4",
+      "information": "For Digital Wallet: card is no longer registered. For non-Digital Wallet: check card status.",
+      "actions": [
+        "Re-add card to Digital Wallet",
+        "Check card status",
+        "Contact Fraud ATM Debit Card Servicing"
+      ]
+    },
+    {
+      "code": "65",
+      "description": "System limit reached",
+      "information": "Exceeds the daily withdrawal limit for the 24-hour calendar day.",
+      "actions": [
+        "Offer Individualized Limits"
+      ],
+      "orchestrator_actions": [
+        "OFFER_INDIVIDUALIZED_LIMITS"
+      ],
+      "escalation": {
+        "required": false
+      }
+    },
+    {
+      "code": "68",
+      "description": "System time out",
+      "information": "Merchant's POS terminal was not communicating with bank systems and the transaction was cancelled.",
+      "actions": [
+        "Retry transaction"
+      ]
+    },
+    {
+      "code": "75",
+      "description": "Max invalid PIN tries",
+      "information": "Incorrect PIN entered multiple times. Card is temporarily blocked from ATM and cash back until midnight of domiciling state.",
+      "actions": [
+        "Send PIN reminder",
+        "Refer to financial center",
+        "Use another payment method",
+        "Retry next day"
+      ]
+    },
+    {
+      "code": "76",
+      "description": "Invalid acct selected",
+      "information": "Account selected is not linked, or client selecting Fast Cash option on ATM-only card.",
+      "actions": [
+        "Check linked accounts",
+        "Change linkage",
+        "Select Withdrawal instead of Fast Cash"
+      ],
+      "script_refs": [
+        "txn_type_not_allowed_linkage"
+      ],
+      "orchestrator_actions": [
+        "CHECK_LINKED_ACCOUNTS",
+        "CHANGE_LINKAGE",
+        "SUGGEST_WITHDRAWAL_INSTEAD_OF_FAST_CASH"
+      ],
+      "escalation": {
+        "required": false
+      }
+    },
+    {
+      "code": "78",
+      "description": "Disallowed during stand-in",
+      "information": "Transaction not making it through network. Bank system unavailable due to updates.",
+      "actions": [
+        "Use another payment method",
+        "Retry later"
+      ]
+    },
+    {
+      "code": "83",
+      "description": "Card record not found",
+      "information": "Primary debit account needs to be re-linked to the card.",
+      "actions": [
+        "Unlink and re-link card",
+        "Retry transaction",
+        "Use another payment method"
+      ],
+      "orchestrator_actions": [
+        "UNLINK_AND_RELINK_CARD"
+      ],
+      "escalation": {
+        "required": false
+      }
+    },
+    {
+      "code": "86",
+      "description": "No statement information",
+      "information": "Client attempting to obtain account statement at ATM with no transactions in previous 45 days.",
+      "actions": [
+        "Tell client statement unavailable without activity in 45 days"
+      ]
+    },
+    {
+      "code": "87",
+      "description": "Magnetic stripe/CRD reader error",
+      "information": "Magnetic stripe on card is damaged.",
+      "actions": [
+        "Order replacement card"
+      ]
+    },
+    {
+      "code": "88",
+      "description": "Card block on base24",
+      "information": "Card temporarily blocked on base24 due to network connectivity issue. Will resume once network stabilizes.",
+      "actions": [
+        "Use another payment method",
+        "Retry later"
+      ]
+    },
+    {
+      "code": "89",
+      "description": "Transaction Malfunction",
+      "information": "Transaction malfunction occurred.",
+      "actions": [
+        "Use another payment method",
+        "Retry later"
+      ]
+    },
+    {
+      "code": "91",
+      "description": "Host not available",
+      "information": "Host system not available.",
+      "actions": [
+        "Retry transaction later"
+      ]
+    },
+    {
+      "code": "92",
+      "description": "Invalid card number",
+      "information": "System did not recognize the card because it was issued on the same day. Card starts working the next day.",
+      "actions": [
+        "Wait until next day",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "94",
+      "description": "Duplicate transaction",
+      "information": "A duplicate transaction has presented through the network within a 15-minute timeframe.",
+      "actions": [
+        "Wait at least 15 minutes before retrying"
+      ]
+    },
+    {
+      "code": "95",
+      "description": "Transactions blocked by internal remark",
+      "information": "Transactions blocked by internal remark. Blocked Status shows Base24 Velocity.",
+      "actions": [
+        "Transfer to Fraud ATM Debit Card Detection and Servicing"
+      ]
+    },
+    {
+      "code": "97",
+      "description": "Amt exceeds limits available",
+      "information": "Exceeds the daily withdrawal limit for the 24-hour calendar day.",
+      "actions": [
+        "Offer Individualized Limits"
+      ],
+      "orchestrator_actions": [
+        "OFFER_INDIVIDUALIZED_LIMITS"
+      ],
+      "escalation": {
+        "required": false
+      }
+    },
+    {
+      "code": "700",
+      "description": "ARQC (CAM) invalid",
+      "information": "Chip verification failed.",
+      "actions": [
+        "Retry transaction",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "701",
+      "description": "HSM param error",
+      "information": "HSM parameter error occurred.",
+      "actions": [
+        "Retry transaction",
+        "Use another payment method"
+      ]
+    }
+  ],
+  "alphanumeric_codes": [
+    {
+      "code": "0A-0V",
+      "description": "Fraud protection - temp block",
+      "information": "Card has been blocked to protect the client account.",
+      "actions": [
+        "Transfer to Fraud ATM Debit Card Servicing"
+      ],
+      "escalation": {
+        "required": true,
+        "target": "FRAUD_SERVICING"
+      }
+    },
+    {
+      "code": "0W-0Z",
+      "description": "Identity theft - temp block",
+      "information": "Card has been blocked to protect the client account.",
+      "actions": [
+        "Transfer to Fraud ATM Debit Card Servicing"
+      ],
+      "escalation": {
+        "required": true,
+        "target": "FRAUD_SERVICING"
+      }
+    },
+    {
+      "code": "1A-1D",
+      "description": "Identity theft - temp block",
+      "information": "Card has been blocked to protect the client account.",
+      "actions": [
+        "Transfer to Fraud ATM Debit Card Servicing"
+      ],
+      "escalation": {
+        "required": true,
+        "target": "FRAUD_SERVICING"
+      }
+    },
+    {
+      "code": "1E",
+      "description": "Blocked by internal remark on card",
+      "information": "Card blocked by internal remark.",
+      "actions": [
+        "Transfer to Consumer AML Operations"
+      ],
+      "escalation": {
+        "required": true,
+        "target": "AML_OPERATIONS"
+      }
+    },
+    {
+      "code": "A1",
+      "description": "From linked account not found",
+      "information": "The account requested is not linked to the card.",
+      "actions": [
+        "Check linked accounts",
+        "Change linkage",
+        "Retry transaction"
+      ],
+      "script_refs": [
+        "txn_type_not_allowed_linkage"
+      ],
+      "orchestrator_actions": [
+        "CHECK_LINKED_ACCOUNTS",
+        "CHANGE_LINKAGE"
+      ],
+      "escalation": {
+        "required": false
+      }
+    },
+    {
+      "code": "A2",
+      "description": "To linked account not found",
+      "information": "The account requested is not linked to the card.",
+      "actions": [
+        "Check linked accounts",
+        "Change linkage",
+        "Retry transaction"
+      ],
+      "script_refs": [
+        "txn_type_not_allowed_linkage"
+      ],
+      "orchestrator_actions": [
+        "CHECK_LINKED_ACCOUNTS",
+        "CHANGE_LINKAGE"
+      ],
+      "escalation": {
+        "required": false
+      }
+    },
+    {
+      "code": "C1",
+      "description": "Card status closed",
+      "information": "Card is not open on the system. Check card status and account alerts.",
+      "actions": [
+        "Check card status",
+        "Read account alerts",
+        "Contact Fraud if needed"
+      ]
+    },
+    {
+      "code": "C2",
+      "description": "Card status purgeable",
+      "information": "Card status is purgeable and card cannot be reopened.",
+      "actions": [
+        "Read account alerts",
+        "Transfer to Fraud if fraud notes",
+        "Offer new card"
+      ]
+    },
+    {
+      "code": "C5",
+      "description": "Daily purchase limit exceeded",
+      "information": "Exceeds the daily withdrawal limit for the 24-hour calendar day.",
+      "actions": [
+        "Offer Individualized Limits"
+      ],
+      "orchestrator_actions": [
+        "OFFER_INDIVIDUALIZED_LIMITS"
+      ],
+      "escalation": {
+        "required": false
+      }
+    },
+    {
+      "code": "C6",
+      "description": "Daily purchase limit exceeded",
+      "information": "Exceeds the daily withdrawal limit for the 24-hour calendar day.",
+      "actions": [
+        "Offer Individualized Limits"
+      ],
+      "orchestrator_actions": [
+        "OFFER_INDIVIDUALIZED_LIMITS"
+      ],
+      "escalation": {
+        "required": false
+      }
+    },
+    {
+      "code": "C8",
+      "description": "Exceeds daily withdrawal",
+      "information": "Exceeds the daily withdrawal limit for the 24-hour calendar day.",
+      "actions": [
+        "Offer Individualized Limits"
+      ],
+      "orchestrator_actions": [
+        "OFFER_INDIVIDUALIZED_LIMITS"
+      ],
+      "escalation": {
+        "required": false
+      }
+    },
+    {
+      "code": "CC",
+      "description": "Declined country code",
+      "information": "Federal government prohibits the bank from doing business in this country.",
+      "actions": [
+        "Suggest another payment method"
+      ]
+    },
+    {
+      "code": "CP",
+      "description": "Card not present/PIN transaction",
+      "information": "Company tried to run transaction using PIN when not required. Never give out PIN.",
+      "actions": [
+        "Remind client never to give out PIN",
+        "Ask merchant to run without PIN"
+      ]
+    },
+    {
+      "code": "CV",
+      "description": "CVV verification failed",
+      "information": "CVV value did not pass verification, or expiration doesn't match CVV, or address verification failure.",
+      "actions": [
+        "Verify CVV is correct",
+        "Verify expiration date",
+        "Verify address"
+      ]
+    },
+    {
+      "code": "D1",
+      "description": "Duplicate transaction",
+      "information": "A duplicate transaction has presented through the network within a 15-minute timeframe.",
+      "actions": [
+        "Wait at least 15 minutes before retrying"
+      ]
+    },
+    {
+      "code": "E1",
+      "description": "Invalid debit number",
+      "information": "Merchant converted debit into ElectCHK transaction. Debit number was keyed or scanned incorrectly.",
+      "actions": [
+        "Merchant retry debit",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "E2",
+      "description": "Amount input error",
+      "information": "Merchant converted debit into ElectCHK transaction. Debit number was keyed or scanned incorrectly.",
+      "actions": [
+        "Merchant retry debit",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "E3",
+      "description": "Stop payment detected",
+      "information": "Merchant converted debit into ElectCHK. Stop payment detected on this debit number and amount.",
+      "actions": [
+        "Delete Stop Payment if applicable",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "E4",
+      "description": "Stop payment suspected",
+      "information": "Merchant converted debit into ElectCHK. Stop payment detected on this debit number and amount.",
+      "actions": [
+        "Delete Stop Payment if applicable",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "E5",
+      "description": "Stop payment debit",
+      "information": "Merchant converted debit into ElectCHK. Stop payment detected on this debit number and amount.",
+      "actions": [
+        "Delete Stop Payment if applicable",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "F1",
+      "description": "No overdraft protection (ODP) defined or allowed",
+      "information": "Account does not have available funds. No Balance Connect for overdraft protection available.",
+      "actions": [
+        "Transfer funds if applicable",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "F2",
+      "description": "Non-sufficient funds (NSF) matrix not allowed",
+      "information": "ATM withdrawal declined due to insufficient funds in account or linked Balance Connect accounts.",
+      "actions": [
+        "Transfer funds if applicable",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "F3",
+      "description": "NSF ODP coverage exceeded",
+      "information": "ATM withdrawal declined due to insufficient funds in account or linked Balance Connect accounts.",
+      "actions": [
+        "Transfer funds if applicable",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "F4",
+      "description": "NSF matrix needed for approval",
+      "information": "ATM withdrawal declined due to insufficient funds in account or linked Balance Connect accounts.",
+      "actions": [
+        "Transfer funds if applicable",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "H1",
+      "description": "Out of sync condition",
+      "information": "No action required. The transaction was approved.",
+      "actions": [
+        "No action required - transaction approved"
+      ]
+    },
+    {
+      "code": "H4",
+      "description": "Out of sync condition",
+      "information": "No action required. The transaction was approved.",
+      "actions": [
+        "No action required - transaction approved"
+      ]
+    },
+    {
+      "code": "K1",
+      "description": "Client lock",
+      "information": "Client placed a lock on the card using Mobile or Online Banking.",
+      "actions": [
+        "Suggest client remove the lock"
+      ]
+    },
+    {
+      "code": "L2",
+      "description": "Chip duplicate trans. counter",
+      "information": "Chip verification failed.",
+      "actions": [
+        "Retry transaction",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "L3",
+      "description": "Chip invalid DCVV/CVC3",
+      "information": "Chip verification failed.",
+      "actions": [
+        "Retry transaction",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "L4",
+      "description": "chip trans. counter out of range",
+      "information": "Chip verification failed.",
+      "actions": [
+        "Retry transaction",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "L5",
+      "description": "Chip verification failed",
+      "information": "Chip verification failed.",
+      "actions": [
+        "Retry transaction",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "M1",
+      "description": "Expired card",
+      "information": "Card is expired. If using digital wallet, delete then re-add the active debit card.",
+      "actions": [
+        "Replace card",
+        "Use another payment method",
+        "Re-add to digital wallet"
+      ],
+      "script_refs": [
+        "expired_card_explain_and_offer_reissue"
+      ],
+      "orchestrator_actions": [
+        "ORDER_REPLACEMENT_CARD",
+        "OFFER_DIGITAL_INSTANT_ISSUANCE"
+      ],
+      "contextual_rules": [
+        {
+          "if": {
+            "isDigitalWallet": true
+          },
+          "add_script_refs": [
+            "wallet_delete_readd_tip"
+          ]
+        },
+        {
+          "if": {
+            "blockedStatusIn": [
+              "Fraud",
+              "Base24 Velocity",
+              "AML"
+            ]
+          },
+          "escalation": {
+            "required": true,
+            "target": "FRAUD_SERVICING"
+          }
+        }
+      ],
+      "escalation": {
+        "required": false
+      }
+    },
+    {
+      "code": "M2",
+      "description": "Statement cancelled",
+      "information": "Client cancelled statement request at ATM. No charges should apply.",
+      "actions": [
+        "Comment account that statement cancelled",
+        "Monitor for any fees"
+      ]
+    },
+    {
+      "code": "NA",
+      "description": "CVV verification failed",
+      "information": "CVV value did not pass through verification.",
+      "actions": [
+        "Verify CVV is correct",
+        "Retry transaction"
+      ]
+    },
+    {
+      "code": "N0",
+      "description": "System unavailable",
+      "information": "Transaction not making it through network. Issue may be with merchant, network, or bank system.",
+      "actions": [
+        "Perform transaction later",
+        "Try another payment method"
+      ]
+    },
+    {
+      "code": "N2",
+      "description": "System limit reached",
+      "information": "Exceeds the daily withdrawal limit for the 24-hour calendar day.",
+      "actions": [
+        "Offer Individualized Limits"
+      ]
+    },
+    {
+      "code": "N3",
+      "description": "Exceeded Daily Limit",
+      "information": "Daily merchandise return limit, including money transfer credits, was exceeded. Resets at end of night.",
+      "actions": [
+        "Wait until end of day for limit reset"
+      ]
+    },
+    {
+      "code": "N5",
+      "description": "Exceeded Daily Limit",
+      "information": "Daily merchandise return limit, including money transfer credits, was exceeded. Resets at end of night.",
+      "actions": [
+        "Wait until end of day for limit reset"
+      ]
+    },
+    {
+      "code": "O2",
+      "description": "Amount below minimum",
+      "information": "Client requested cash withdrawal amount that was not whole dollars or smaller than minimum requirement.",
+      "actions": [
+        "Attempt another amount"
+      ]
+    },
+    {
+      "code": "O5",
+      "description": "PIN not activated",
+      "information": "Card not activated, or merchant inputting expiration date incorrectly.",
+      "actions": [
+        "Activate card",
+        "Verify expiration date",
+        "Replace card if needed"
+      ]
+    },
+    {
+      "code": "P1",
+      "description": "Exceeds daily purchase limit or exceeds daily withdraw limit",
+      "information": "Exceeds the daily withdrawal limit for the 24-hour calendar day.",
+      "actions": [
+        "Offer Individualized Limits"
+      ],
+      "orchestrator_actions": [
+        "OFFER_INDIVIDUALIZED_LIMITS"
+      ],
+      "escalation": {
+        "required": false
+      }
+    },
+    {
+      "code": "P9",
+      "description": "Amount exceeds limit available",
+      "information": "ATM does not have funds to cover withdrawal, or bank system in stand-in mode.",
+      "actions": [
+        "Use different ATM",
+        "Retry later"
+      ],
+      "orchestrator_actions": [
+        "OFFER_ATM_LOCATOR"
+      ],
+      "escalation": {
+        "required": false
+      }
+    },
+    {
+      "code": "PA",
+      "description": "Card has been PIN activated",
+      "information": "Client activated card by making a PIN based transaction.",
+      "actions": [
+        "No action required - card activated"
+      ]
+    },
+    {
+      "code": "PN",
+      "description": "Card failed automated PIN activation",
+      "information": "Activation attempt failed with PIN transaction.",
+      "actions": [
+        "Retry activation"
+      ]
+    },
+    {
+      "code": "PS",
+      "description": "Recurring debit card payment - one time stop",
+      "information": "Client requested a one-time stop on a recurring payment.",
+      "actions": [
+        "Confirm one-time stop intended",
+        "Assist with recurring debit stop if needed"
+      ]
+    },
+    {
+      "code": "PR",
+      "description": "Recurring debit card payment - stop future payments",
+      "information": "Client requested a future stop on all recurring payments.",
+      "actions": [
+        "Confirm stop all future payments intended",
+        "Delete stop payment if one-time only"
+      ]
+    },
+    {
+      "code": "Q1",
+      "description": "Invalid expiration date",
+      "information": "Merchant inputting expiration date incorrectly.",
+      "actions": [
+        "Verify expiration date",
+        "Retry transaction",
+        "Replace card if error continues"
+      ]
+    },
+    {
+      "code": "Q3",
+      "description": "Amount below minimum",
+      "information": "Client requested cash withdrawal amount that was not whole dollars or smaller than minimum requirement.",
+      "actions": [
+        "Attempt another amount"
+      ]
+    },
+    {
+      "code": "QA-QZ",
+      "description": "Fraud protection - quick resp",
+      "information": "Fraud protection quick response triggered.",
+      "actions": [
+        "Transfer to Fraud ATM Debit Card Servicing"
+      ],
+      "escalation": {
+        "required": true,
+        "target": "FRAUD_SERVICING"
+      }
+    },
+    {
+      "code": "R1",
+      "description": "Balance hold exists",
+      "information": "Hold on account balance exists; no funds available. Check alerts for fraud or liability risk remarks.",
+      "actions": [
+        "Review alerts",
+        "Transfer to Fraud if needed",
+        "Service hold inquiry"
+      ]
+    },
+    {
+      "code": "R2",
+      "description": "Line of Credit (LOC) block exists",
+      "information": "The LOC is blocked.",
+      "actions": [
+        "Transfer to Loan/LOC Service Center"
+      ],
+      "escalation": {
+        "required": true,
+        "target": "LOAN_LOC_SERVICE_CENTER"
+      }
+    },
+    {
+      "code": "R3",
+      "description": "LOC debits not valid for ElectCHK",
+      "information": "Client presented LOC debit to merchant for POS. LOC debits not valid for ElectCHK.",
+      "actions": [
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "R9",
+      "description": "Communication lost between merchant and bank",
+      "information": "Communication lost between merchant and bank.",
+      "actions": [
+        "Retry transaction later"
+      ]
+    },
+    {
+      "code": "RR",
+      "description": "Referral",
+      "information": "Merchant was referred to the bank to obtain authorization.",
+      "actions": [
+        "Merchant should contact bank for authorization"
+      ]
+    },
+    {
+      "code": "RT",
+      "description": "Fraud protection scoring",
+      "information": "Fraud protection scoring triggered. Do not transfer if Blocked Status shows Card Not Restricted.",
+      "actions": [
+        "Transfer to Fraud ATM Debit Card Servicing",
+        "Try again if Card Not Restricted"
+      ],
+      "script_refs": [
+        "rt_card_not_restricted_retry"
+      ],
+      "contextual_rules": [
+        {
+          "if": {
+            "blockedStatus": "Card Not Restricted"
+          },
+          "escalation": {
+            "required": false
+          },
+          "orchestrator_actions": [
+            "ADVISE_RETRY_LATER"
+          ]
+        },
+        {
+          "if": {
+            "blockedStatusNotIn": [
+              "Card Not Restricted"
+            ]
+          },
+          "escalation": {
+            "required": true,
+            "target": "FRAUD_SERVICING"
+          }
+        }
+      ]
+    },
+    {
+      "code": "S1",
+      "description": "Account status frozen",
+      "information": "Client's account in frozen status, allowing only deposits at financial center.",
+      "actions": [
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "S2",
+      "description": "Account status: No debit/debit activity allowed",
+      "information": "Account status displays No Debit Activity. No withdrawal activity allowed.",
+      "actions": [
+        "Review account alerts",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "S3",
+      "description": "Account status closing",
+      "information": "Account status displays Closing.",
+      "actions": [
+        "Review account notes",
+        "Reopen if eligible",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "S4",
+      "description": "Account status closed",
+      "information": "Account status displays Closed.",
+      "actions": [
+        "Review account alerts",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "S5",
+      "description": "Account status purged",
+      "information": "Account status displays Purged.",
+      "actions": [
+        "Review account alerts",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "S6",
+      "description": "Account status dormant",
+      "information": "Account status displays Dormant.",
+      "actions": [
+        "Review account alerts",
+        "Reactivate if applicable",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "S8",
+      "description": "Account is terminated",
+      "information": "Account status displays Terminated.",
+      "actions": [
+        "Review account alerts",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "S9",
+      "description": "Account status credits only",
+      "information": "Account status displays Credits Only.",
+      "actions": [
+        "Review account alerts",
+        "Use another payment method",
+        "Handle 09F restriction"
+      ]
+    },
+    {
+      "code": "SA",
+      "description": "Account status abandoned",
+      "information": "Account status displays Abandoned.",
+      "actions": [
+        "Review account alerts",
+        "Reactivate if applicable",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "SB",
+      "description": "LOC account status in progress",
+      "information": "LOC account is new and still in progress. Not yet available on bank system.",
+      "actions": [
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "SC",
+      "description": "LOC account status paid off",
+      "information": "LOC account has been paid off, waiting on closing statement.",
+      "actions": [
+        "Review account status",
+        "Change linkage if applicable"
+      ]
+    },
+    {
+      "code": "SD",
+      "description": "LOC account status closed",
+      "information": "LOC account has been closed.",
+      "actions": [
+        "Review account status",
+        "Change linkage if applicable"
+      ]
+    },
+    {
+      "code": "SE",
+      "description": "Invalid account status",
+      "information": "Account status is not open or unrestricted.",
+      "actions": [
+        "Review account status",
+        "Change linkage if applicable"
+      ]
+    },
+    {
+      "code": "SF",
+      "description": "LOC divested DI",
+      "information": "LOC was transferred to another financial institution.",
+      "actions": [
+        "Review account status",
+        "Change linkage",
+        "Transfer to Loan/LOC Service Center"
+      ]
+    },
+    {
+      "code": "SG",
+      "description": "Account owner initiated cash-no-debits block",
+      "information": "Decline on ElectCHK transactions only. Account has cash-no-debits block. No ATM withdrawals allowed.",
+      "actions": [
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "SH",
+      "description": "Related account not found",
+      "information": "Debit converted to ElectCHK. Account number not found on bank system.",
+      "actions": [
+        "Merchant retry transaction",
+        "Use another payment method"
+      ]
+    },
+    {
+      "code": "T4",
+      "description": "Amount exceeds daily limit",
+      "information": "Exceeds the daily withdrawal limit for the 24-hour calendar day.",
+      "actions": [
+        "Offer Individualized Limits"
+      ],
+      "orchestrator_actions": [
+        "OFFER_INDIVIDUALIZED_LIMITS"
+      ],
+      "escalation": {
+        "required": false
+      }
+    },
+    {
+      "code": "T5",
+      "description": "Inactive/closed card",
+      "information": "Card not open on CAF system. Check card status.",
+      "actions": [
+        "Check card status",
+        "Contact Fraud if needed",
+        "Offer new card"
+      ]
+    },
+    {
+      "code": "T7",
+      "description": "Cash back exceeds limit",
+      "information": "Exceeds the daily withdrawal limit for the 24-hour calendar day.",
+      "actions": [
+        "Offer Individualized Limits"
+      ],
+      "orchestrator_actions": [
+        "OFFER_INDIVIDUALIZED_LIMITS"
+      ],
+      "escalation": {
+        "required": false
+      }
+    },
+    {
+      "code": "T8",
+      "description": "Cash back purchase = total",
+      "information": "Client attempting to get cash back without making a purchase.",
+      "actions": [
+        "Make a purchase",
+        "Find nearest ATM"
+      ]
+    },
+    {
+      "code": "X1",
+      "description": "Invalid transaction - ATM card",
+      "information": "ATM card cannot be used at location as POS transaction.",
+      "actions": [
+        "Order debit card",
+        "Change card type",
+        "Offer Individualized Limits"
+      ]
+    }
+  ],
+  "version": "2026-01-28",
+  "scripts": {
+    "no_transaction_posted_generic": {
+      "title": "No Transaction Posted (General)",
+      "channels": [
+        "chat",
+        "voice",
+        "sms"
+      ],
+      "text": "Mr./Ms. Client, I understand how frustrating it is when your card gets declined. Upon reviewing your account, I do not see where a charge was presented to us for authorization, and I do not see any current block on your card. I have confirmed that your account is open and active for use. If you are using the card in person, please attempt to authorize the transaction by selecting the Credit option on the terminal. You may also attempt to swipe the card instead of inserting the card by the chip. If you are attempting the transaction electronically, kindly try the transaction again or at later time. If the issue persists, please contact the merchant directly for resolution.",
+      "notes": "From SOP: No Transaction Posted guidance."
+    },
+    "fraud_alert_block_removed_thanks": {
+      "title": "Fraud Alert Resolved - Thank You",
+      "channels": [
+        "chat",
+        "voice",
+        "sms"
+      ],
+      "text": "Mr./Ms. Client, thank you for responding to the alert. I can confirm that the block has been removed and your card is ready for use. You may attempt your transaction again.",
+      "notes": "From SOP: After client verifies fraud alert transactions."
+    },
+    "card_not_activated_how_to_activate": {
+      "title": "Card Not Activated - How to Activate",
+      "channels": [
+        "chat",
+        "voice",
+        "sms"
+      ],
+      "text": "I see that the ATM/Debit card you are attempting to use has not been activated. You can activate it in mobile or online banking, through the automated phone service or by making a PIN based transaction at an ATM or point of sale merchant.",
+      "notes": "From SOP: Activation guidance."
+    },
+    "rt_card_not_restricted_retry": {
+      "title": "RT Fraud Score but Card Not Restricted - Retry",
+      "channels": [
+        "chat",
+        "voice",
+        "sms"
+      ],
+      "text": "I'm not seeing any restrictions on your card. Please try the transaction again or at a later time.",
+      "notes": "SOP rule: Do not transfer to Fraud if Blocked Status shows Card Not Restricted."
+    },
+    "expired_card_explain_and_offer_reissue": {
+      "title": "Expired Card - Explain & Offer Reissue",
+      "channels": [
+        "chat",
+        "voice",
+        "sms"
+      ],
+      "text": "Your debit card ending in {{last4}} is expired{{expiry_suffix}} which caused the decline. I can order your replacement card now. While waiting, please use another payment method.",
+      "notes": "Synthesized from Job Aid actions; {{expiry_suffix}} may be formatted like ' ({{expiryMMYY}})'."
+    },
+    "wallet_delete_readd_tip": {
+      "title": "Wallet - Delete & Re-add",
+      "channels": [
+        "chat",
+        "voice",
+        "sms"
+      ],
+      "text": "If you use a mobile wallet, after you receive and activate the new card, please delete the old card from the wallet and re-add the new card to ensure payments work.",
+      "notes": "From Job Aid: wallet guidance for expired cards."
+    },
+    "atm_invalid_non_bofa": {
+      "title": "Invalid ATM Selected - Use BofA ATM",
+      "channels": [
+        "chat",
+        "voice",
+        "sms"
+      ],
+      "text": "This decline occurred because the ATM isn't a Bank of America ATM. Please try a different ATM. I can help you find the nearest Bank of America ATM.",
+      "notes": "From Job Aid: Code 31 guidance."
+    },
+    "invalid_pin_options": {
+      "title": "Invalid PIN - Options",
+      "channels": [
+        "chat",
+        "voice",
+        "sms"
+      ],
+      "text": "It looks like the PIN entered wasn't correct. I can mail a PIN reminder, or you can visit a financial center to select a new PIN. If available, you may also try the Credit option to complete the purchase.",
+      "notes": "From Job Aid: Code 55 guidance."
+    },
+    "txn_type_not_allowed_linkage": {
+      "title": "Transaction Type Not Allowed / Linkage",
+      "channels": [
+        "chat",
+        "voice",
+        "sms"
+      ],
+      "text": "That transaction type isn't allowed for this card/account linkage. I'll check the linked accounts and update the linkage if needed; then please try again.",
+      "notes": "From Job Aid: Codes 12/57/76/A1/A2 guidance."
+    }
+  },
+  "global_rules": [
+    {
+      "id": "fraud_rt_card_not_restricted",
+      "if": {
+        "code": "RT",
+        "blockedStatus": "Card Not Restricted"
+      },
+      "then": {
+        "script_ref": "rt_card_not_restricted_retry",
+        "orchestrator_actions": [
+          "ADVISE_RETRY_LATER"
+        ],
+        "escalation": {
+          "required": false
+        }
+      }
+    },
+    {
+      "id": "no_txn_posted",
+      "if": {
+        "transaction_present": false
+      },
+      "then": {
+        "script_ref": "no_transaction_posted_generic",
+        "escalation": {
+          "required": false
+        }
+      }
+    }
+  ]
+}

@@ -69,6 +69,7 @@ if TYPE_CHECKING:
     from src.stateful.state_managment import MemoManager
 
 from apps.artagent.backend.registries.agentstore.base import UnifiedAgent
+from apps.artagent.backend.src.orchestration.naming import agent_key, find_agent_by_name
 
 from apps.artagent.backend.src.utils.tracing import (
     create_service_dependency_attrs,
@@ -260,6 +261,17 @@ class LiveOrchestrator:
         self._greeting_tasks: set[asyncio.Task] = set()
         self._active_response_id: str | None = None
         self._system_vars: dict[str, Any] = {}
+        # Flag to prevent SESSION_UPDATED from cancelling handoff-triggered responses
+        self._handoff_response_pending: bool = False
+
+        # Scenario switch flag — prevents _sync_from_memo_manager from overwriting
+        # self.active with stale MemoManager data after an explicit scenario switch
+        self._scenario_switch_pending: bool = False
+
+        # Track pending tool outputs to batch them before calling response.create()
+        # When model makes multiple tool calls, we queue results and trigger ONE response
+        self._pending_tool_outputs: list[tuple[str, str]] = []  # [(call_id, output_json), ...]
+        self._response_had_tool_calls: bool = False
 
         # MemoManager for session state continuity (consistent with CascadeOrchestratorAdapter)
         self._memo_manager: MemoManager | None = memo_manager
@@ -282,8 +294,12 @@ class LiveOrchestrator:
             except AttributeError:
                 logger.debug("Messenger does not support set_active_agent", exc_info=True)
 
-        if self.active not in self.agents:
+        # Use case-insensitive lookup for start agent validation
+        actual_key, _ = find_agent_by_name(self.agents, self.active)
+        if actual_key is None:
             raise ValueError(f"Start agent '{self.active}' not found in registry")
+        # Normalize active to the actual key in agents dict
+        self.active = actual_key
 
         # Initialize the tool registry
         initialize_tools()
@@ -367,7 +383,16 @@ class LiveOrchestrator:
 
         # Apply synced state - but NOT visited_agents for VoiceLive
         # VoiceLive conversation history is per-connection, so we always treat as first visit
-        if state.active_agent:
+        if self._scenario_switch_pending:
+            # Scenario switch is authoritative — write adapter's active agent to MemoManager
+            logger.info(
+                "[LiveOrchestrator] Scenario switch pending — writing active to MemoManager | active=%s memo_active=%s",
+                self.active,
+                state.active_agent,
+            )
+            sync_state_to_memo(self._memo_manager, active_agent=self.active)
+            self._scenario_switch_pending = False
+        elif state.active_agent:
             self.active = state.active_agent
             logger.debug("[LiveOrchestrator] Synced active_agent: %s", self.active)
 
@@ -525,6 +550,12 @@ class LiveOrchestrator:
         # Clear cached HandoffService so it's recreated with new scenario
         self._handoff_service = None
 
+        # Clear cached orchestrator config so it's resolved with new scenario
+        # CRITICAL: Without this, _update_session_context() uses the OLD cached config
+        # and injects the wrong handoff instructions for the new scenario
+        if hasattr(self, "_cached_orchestrator_config"):
+            delattr(self, "_cached_orchestrator_config")
+
         # Clear visited agents for fresh scenario experience
         self.visited_agents.clear()
 
@@ -562,6 +593,10 @@ class LiveOrchestrator:
             scenario_name or "(unknown)",
         )
 
+        # Mark scenario switch pending so _sync_from_memo_manager doesn't
+        # overwrite self.active with stale data from a previous MemoManager snapshot
+        self._scenario_switch_pending = True
+
         # CRITICAL: Trigger a session update to apply the new agent's instructions
         # This ensures VoiceLive uses the correct system prompt for the new agent
         if needs_session_update:
@@ -569,19 +604,53 @@ class LiveOrchestrator:
 
     def _schedule_scenario_session_update(self) -> None:
         """
-        Schedule a session update after scenario change.
-        
+        Schedule a full agent session update after scenario change.
+
+        This applies the new agent's complete session configuration (voice, tools,
+        VAD, instructions) - not just instructions. This is critical for scenario
+        switches to take effect properly in VoiceLive.
+
         This runs in the background to avoid blocking the scenario update call.
         """
         async def _do_update():
             try:
-                # Refresh context with new agent
-                self._refresh_session_context()
-                # Update VoiceLive session with new instructions
-                await self._update_session_context()
+                agent = self.agents.get(self.active)
+                if not agent:
+                    logger.warning(
+                        "🔄 VoiceLive scenario update failed - agent not found | agent=%s",
+                        self.active,
+                    )
+                    return
+
+                # Build system vars for the new agent
+                system_vars = dict(self._system_vars)
+                system_vars["active_agent"] = self.active
+
+                # Get session_id for the apply call
+                session_id = self._session_id
+
+                # CRITICAL: Apply the FULL agent session config, not just instructions
+                # This includes voice, tools, VAD settings, etc.
+                # This is the same as what _switch_to() does during handoffs
+                await agent.apply_voicelive_session(
+                    self.conn,
+                    system_vars=system_vars,
+                    say=None,  # Don't trigger a greeting on scenario switch
+                    session_id=session_id,
+                    call_connection_id=self.call_connection_id,
+                )
+
+                # Update messenger's active agent
+                if self.messenger:
+                    try:
+                        self.messenger.set_active_agent(self.active)
+                    except AttributeError:
+                        pass
+
                 logger.info(
-                    "🔄 VoiceLive session updated for new agent | agent=%s",
+                    "🔄 VoiceLive session fully updated for scenario change | agent=%s session=%s",
                     self.active,
+                    session_id,
                 )
             except Exception:
                 logger.warning("Failed to update session after scenario change", exc_info=True)
@@ -928,9 +997,77 @@ class LiveOrchestrator:
             start_span.set_attribute("voicelive.start_agent", self.active)
             start_span.set_attribute("voicelive.agent_count", len(self.agents))
             logger.info("[Orchestrator] Starting with agent: %s", self.active)
+            orch_start_ts = time.perf_counter()
             self._system_vars = dict(system_vars or {})
+            
+            # Initialize MCP servers for the active agent (non-blocking)
+            t0 = time.perf_counter()
+            await self._init_mcp_for_agent(self.active)
+            mcp_ms = (time.perf_counter() - t0) * 1000
+            
+            t0 = time.perf_counter()
             await self._switch_to(self.active, self._system_vars)
+            switch_ms = (time.perf_counter() - t0) * 1000
+            
+            total_ms = (time.perf_counter() - orch_start_ts) * 1000
+            logger.info(
+                "[VoiceLive Startup] orchestrator.start total_ms=%.1f | mcp_init_ms=%.1f switch_to_ms=%.1f | agent=%s",
+                total_ms, mcp_ms, switch_ms, self.active,
+            )
+            start_span.set_attribute("voicelive.orch_start_ms", round(total_ms, 2))
             start_span.set_status(trace.StatusCode.OK)
+
+    async def _init_mcp_for_agent(self, agent_name: str) -> None:
+        """
+        Initialize MCP server connections for an agent's configured servers.
+        
+        Connects to MCP servers listed in the agent's mcp_servers field.
+        Tools from connected servers become available for the session.
+        
+        Args:
+            agent_name: Name of the agent to initialize MCP for
+        """
+        if not self._memo_manager:
+            return
+            
+        agent = self.agents.get(agent_name)
+        if not agent or not agent.mcp_servers:
+            return
+            
+        try:
+            from apps.artagent.backend.registries.toolstore.mcp import get_mcp_configs_for_agent
+            
+            configs = get_mcp_configs_for_agent(agent.mcp_servers)
+            if not configs:
+                logger.debug(
+                    "[LiveOrchestrator] No MCP servers configured for agent %s",
+                    agent_name,
+                )
+                return
+                
+            results = await self._memo_manager.init_mcp_servers(configs)
+            
+            connected = [name for name, success in results.items() if success]
+            failed = [name for name, success in results.items() if not success]
+            
+            if connected:
+                logger.info(
+                    "[LiveOrchestrator] MCP servers connected for %s: %s",
+                    agent_name,
+                    connected,
+                )
+            if failed:
+                logger.warning(
+                    "[LiveOrchestrator] MCP servers failed for %s: %s",
+                    agent_name,
+                    failed,
+                )
+        except Exception as exc:
+            logger.warning(
+                "[LiveOrchestrator] MCP initialization failed for %s: %s",
+                agent_name,
+                exc,
+            )
 
     async def handle_event(self, event):
         """Route VoiceLive events to audio + handoff logic."""
@@ -994,6 +1131,15 @@ class LiveOrchestrator:
                 )
             except Exception:
                 logger.debug("Failed to emit session update envelope", exc_info=True)
+
+        # If a handoff response was just triggered, DON'T cancel it
+        # The handoff code already called response.create() with the appropriate instructions
+        if self._handoff_response_pending:
+            logger.debug("[Session Updated] Skipping response.cancel() - handoff response pending")
+            self._handoff_response_pending = False
+            if self.audio:
+                await self.audio.start_capture()
+            return
 
         if self.audio:
             await self.audio.stop_playback()
@@ -1164,13 +1310,69 @@ class LiveOrchestrator:
                     self._active_response_id = None
 
     async def _handle_response_done(self, event) -> None:
-        """Handle response complete."""
+        """Handle response complete.
+
+        CRITICAL: When the model makes multiple tool calls in a single response,
+        each tool is executed but we defer response.create() until ALL tools finish.
+        This handler flushes pending tool outputs and triggers ONE response.
+        """
         logger.debug("Response complete")
         response_id = self._response_id_from_event(event)
         if response_id and response_id == self._active_response_id:
             self._active_response_id = None
 
         self._emit_model_metrics(event)
+
+        # Flush pending tool outputs if any and trigger ONE model response
+        # This prevents duplicate messages when model makes multiple tool calls
+        if self._pending_tool_outputs:
+            logger.debug(
+                "[Response Done] Flushing %d pending tool outputs",
+                len(self._pending_tool_outputs),
+            )
+
+            # Create all tool output items
+            for call_id, output_json in self._pending_tool_outputs:
+                try:
+                    output_item = FunctionCallOutputItem(
+                        call_id=call_id,
+                        output=output_json,
+                    )
+                    await self.conn.conversation.item.create(item=output_item)
+                    logger.debug("Created function_call_output item for call_id=%s", call_id)
+                except Exception:
+                    logger.warning(
+                        "Failed to create tool output item for call_id=%s", call_id, exc_info=True
+                    )
+
+            # Clear pending outputs
+            self._pending_tool_outputs = []
+
+            # Update session context with collected information BEFORE response
+            await self._update_session_context()
+
+            # Advance turn_id once for all tool calls combined
+            if self.messenger:
+                self.messenger.advance_turn_for_tool()
+
+            # Trigger ONE response for all tool outputs
+            with tracer.start_as_current_span(
+                "voicelive.response.create_batched",
+                kind=trace.SpanKind.SERVER,
+                attributes=create_service_dependency_attrs(
+                    source_service="voicelive_orchestrator",
+                    target_service="azure_voicelive",
+                    call_connection_id=self.call_connection_id,
+                    session_id=(
+                        getattr(self.messenger, "session_id", None) if self.messenger else None
+                    ),
+                ),
+            ):
+                await self.conn.response.create()
+            logger.info("[Response Done] Triggered single response for batched tool outputs")
+
+        # Reset the tool calls flag
+        self._response_had_tool_calls = False
 
         # Sync state to MemoManager in background to avoid hot path latency
         self._schedule_background_sync()
@@ -1278,6 +1480,14 @@ class LiveOrchestrator:
                 has_handoff = bool(system_vars.get("handoff_context"))
                 switch_span.set_attribute("voicelive.is_handoff", has_handoff)
 
+                # For handoffs, clear the last assistant message to prevent the new agent
+                # from thinking IT said the old agent's handoff statement (e.g., "I'll connect you
+                # to our card specialist"). This prevents the new agent from trying to repeat
+                # or complete the handoff.
+                if has_handoff:
+                    self._last_assistant_message = None
+                    logger.debug("[Agent Switch] Cleared last assistant message for handoff")
+
                 # For handoffs, DON'T use the handoff_message as a greeting.
                 # The handoff_message is meant for the OLD agent to say ("I'll connect you to...")
                 # but by the time we're here, the session has switched to the NEW agent.
@@ -1300,6 +1510,7 @@ class LiveOrchestrator:
                     session_id = (
                         getattr(self.messenger, "session_id", None) if self.messenger else None
                     )
+                    t_apply = time.perf_counter()
                     await agent.apply_voicelive_session(
                         self.conn,
                         system_vars=system_vars,
@@ -1307,11 +1518,23 @@ class LiveOrchestrator:
                         session_id=session_id,
                         call_connection_id=self.call_connection_id,
                     )
+                    apply_ms = (time.perf_counter() - t_apply) * 1000
+                    logger.info(
+                        "[VoiceLive Startup] apply_session_ms=%.1f | agent=%s",
+                        apply_ms, agent_name,
+                    )
 
                 # CRITICAL: Inject conversation history as text items for context retention
                 # VoiceLive audio models can "forget" context - explicit text items help
                 # This must happen AFTER session update but BEFORE first response
+                t_hist = time.perf_counter()
                 await self._inject_conversation_history()
+                hist_ms = (time.perf_counter() - t_hist) * 1000
+                if hist_ms > 5:
+                    logger.info(
+                        "[VoiceLive Startup] inject_history_ms=%.1f | items=%d",
+                        hist_ms, len(self._user_message_history),
+                    )
 
                 # Schedule greeting fallback if we have a pending greeting
                 # This applies to both handoffs and normal agent switches
@@ -1401,6 +1624,18 @@ class LiveOrchestrator:
                     sess_id = getattr(self.messenger, "session_id", None)
                     if sess_id:
                         args.setdefault("session_id", sess_id)
+
+            # Inject session context into tool args (same pattern as SpeechCascade)
+            # This allows tools to use already-loaded session data
+            if self._memo_manager:
+                session_profile = self._memo_manager.get_value_from_corememory("session_profile")
+                if session_profile:
+                    args["_session_profile"] = session_profile
+                # Always inject _client_id so tools can use the verified value
+                # Tools should prefer _client_id over client_id when present
+                client_id = self._memo_manager.get_value_from_corememory("client_id")
+                if client_id:
+                    args["_client_id"] = client_id
 
             logger.info("Executing tool: %s with args: %s", name, args)
 
@@ -1669,21 +1904,16 @@ class LiveOrchestrator:
                     except Exception:
                         logger.debug("Tool end messenger notification failed", exc_info=True)
 
-                # After handoff, send tool result back to model
-                # The session update from _switch_to already applied the new agent's config
-                try:
-                    handoff_output = FunctionCallOutputItem(
-                        call_id=call_id,
-                        output=(
-                            json.dumps(result)
-                            if isinstance(result, dict)
-                            else json.dumps({"success": True})
-                        ),
-                    )
-                    await self.conn.conversation.item.create(item=handoff_output)
-                    logger.debug("Created handoff tool output for call_id=%s", call_id)
-                except Exception as item_err:
-                    logger.warning("Failed to create handoff tool output: %s", item_err)
+                # NOTE: We intentionally do NOT send the handoff tool output back to the model.
+                # The old agent's tool call was an internal action that triggered the switch.
+                # Sending the output to the new agent's session would confuse it - the new
+                # agent would see a tool call it didn't make and might try to "complete" it.
+                # Instead, we trigger the new agent's response cleanly via additional_instructions.
+                logger.debug(
+                    "[Handoff] Skipping tool output injection | "
+                    "call_id=%s | The new agent will respond via additional_instructions",
+                    call_id,
+                )
 
                 # Trigger the new agent to respond naturally as itself
                 # Build context about the handoff for the new agent's instruction
@@ -1702,100 +1932,118 @@ class LiveOrchestrator:
                 # Get handoff mode from context (set by build_handoff_system_vars)
                 greet_on_switch = ctx.get("greet_on_switch", True)
 
-                # Schedule response trigger after a brief delay to let session settle.
-                # The new agent will respond naturally to the context.
-                # NOTE: For announced handoffs, the greeting is already handled by
-                # _select_pending_greeting() which renders the agent's greeting template.
-                # This response trigger just prompts the agent to address the user's request.
-                async def _trigger_handoff_response():
-                    await asyncio.sleep(0.25)
-                    try:
-                        from azure.ai.voicelive.models import (
-                            ClientEventResponseCreate,
-                            ResponseCreateParams,
+                # Trigger the new agent to respond immediately (no background task)
+                # The agent's system prompt already contains discrete/announced handoff instructions
+                # via is_handoff and greet_on_switch template variables.
+                #
+                # CRITICAL: Use additional_instructions (which APPENDS to system prompt)
+                # instead of ResponseCreateParams(instructions=...) which OVERRIDES it!
+                # The agent's prompt template has discrete handoff behavior built in.
+                try:
+                    # Build additional instruction to append (not override) the system prompt
+                    if greet_on_switch:
+                        # Announced mode: greeting will be spoken, then address request
+                        additional_instruction = (
+                            f'The customer\'s request: "{user_question}". '
+                            f"Address their request directly after your greeting."
+                        )
+                        if handoff_summary:
+                            additional_instruction += f" Context: {handoff_summary}"
+                    else:
+                        # Discrete mode: system prompt already has discrete handoff instructions
+                        # Just provide the user's question as context - don't override behavior
+                        additional_instruction = (
+                            f'The customer\'s request: "{user_question}". '
+                            f"Respond immediately without any greeting or introduction."
                         )
 
-                        # Build instruction based on handoff mode
-                        # NOTE: Greeting is handled separately by _select_pending_greeting()
-                        # which uses the agent's greeting/return_greeting from agent.yaml.
-                        # Here we just instruct the agent on how to handle the conversation.
-                        if greet_on_switch:
-                            # Announced mode: greeting already rendered from agent.yaml
-                            # Just instruct agent to address the request after greeting
-                            handoff_instruction = (
-                                f'The customer\'s request: "{user_question}". '
-                                f"Address their request directly after your greeting."
-                            )
-                            if handoff_summary:
-                                handoff_instruction += f" Context: {handoff_summary}"
-                        else:
-                            # Discrete mode: silent handoff, no announcement, no greeting
-                            handoff_instruction = (
-                                f'The customer\'s request: "{user_question}". '
-                                f"Address their request directly. "
-                                f"Do NOT announce that you are a different agent or mention any transfer. "
-                                f"Continue the conversation naturally as if seamless."
-                            )
-                            if handoff_summary:
-                                handoff_instruction += f" Context: {handoff_summary}"
-
-                        await self.conn.send(
-                            ClientEventResponseCreate(
-                                response=ResponseCreateParams(
-                                    instructions=handoff_instruction,
+                        # CRITICAL FIX: For discrete handoffs, inject the user's question as
+                        # an explicit conversation item. This gives the model a concrete user
+                        # message to respond to, not just additional_instructions context.
+                        # Without this, the model may not generate a response because there's
+                        # no actual user turn in the conversation to respond to.
+                        if user_question and user_question != "general inquiry":
+                            try:
+                                text_part = InputTextContentPart(text=user_question)
+                                user_item = UserMessageItem(content=[text_part])
+                                await self.conn.conversation.item.create(item=user_item)
+                                logger.debug(
+                                    "[Handoff] Injected user question as conversation item: %s",
+                                    user_question[:50] if user_question else "none"
                                 )
-                            )
-                        )
-                        logger.info(
-                            "[Handoff] Triggered new agent '%s' | greet=%s", target, greet_on_switch
-                        )
-                    except Exception as e:
-                        logger.warning("[Handoff] Failed to trigger response: %s", e)
+                            except Exception:
+                                logger.debug(
+                                    "[Handoff] Failed to inject user question item", exc_info=True
+                                )
 
-                asyncio.create_task(_trigger_handoff_response(), name=f"handoff-response-{target}")
+                    # Trigger response synchronously - no fire-and-forget background task
+                    # This ensures the handoff response is reliably triggered
+                    #
+                    # Use conn.response.create() with additional_instructions parameter
+                    # This APPENDS to the session's system prompt rather than overriding it
+                    #
+                    # Advance turn_id to create a new message segment for the new agent
+                    # This ensures the handoff response appears as a fresh message
+                    if self.messenger:
+                        self.messenger.advance_turn_for_tool()
+
+                    # CRITICAL: Clear pending greeting state BEFORE calling response.create()
+                    # The _switch_to() method sets _pending_greeting, and when session_ready
+                    # event arrives (from session.update()), _handle_session_ready() would try
+                    # to trigger another response via trigger_voicelive_response(). This causes
+                    # "Conversation already has an active response" error.
+                    # We handle the handoff response here with additional_instructions, so we
+                    # must prevent the competing greeting mechanism from also triggering.
+                    self._cancel_pending_greeting_tasks()
+                    self._pending_greeting = None
+                    self._pending_greeting_agent = None
+
+                    # CRITICAL: Set flag to prevent _handle_session_updated from cancelling
+                    # this response. The SESSION_UPDATED event from session.update() arrives
+                    # async and would cancel our handoff response without this guard.
+                    self._handoff_response_pending = True
+
+                    with tracer.start_as_current_span(
+                        "voicelive.handoff.response_create",
+                        kind=trace.SpanKind.SERVER,
+                        attributes=create_service_dependency_attrs(
+                            source_service="voicelive_orchestrator",
+                            target_service="azure_voicelive",
+                            call_connection_id=self.call_connection_id,
+                            session_id=(
+                                getattr(self.messenger, "session_id", None) if self.messenger else None
+                            ),
+                        ),
+                    ):
+                        await self.conn.response.create(
+                            additional_instructions=additional_instruction
+                        )
+                    logger.info(
+                        "[Handoff] Triggered new agent '%s' | greet=%s | question=%s",
+                        target, greet_on_switch, user_question[:50] if user_question else "none"
+                    )
+                except Exception as e:
+                    logger.warning("[Handoff] Failed to trigger response: %s", e)
+                    self._handoff_response_pending = False  # Reset flag on failure
 
                 tool_span.set_status(trace.StatusCode.OK)
                 return True
 
             else:
-                # Business tool - send result back to model
-                output_item = FunctionCallOutputItem(
-                    call_id=call_id,
-                    output=json.dumps(result),
+                # Business tool - queue output for batched response at RESPONSE_DONE
+                # This prevents duplicate messages when model makes multiple tool calls
+                #
+                # CRITICAL: Do NOT call response.create() here! The model may have
+                # multiple tool calls in a single response. We queue all outputs and
+                # trigger ONE response in _handle_response_done().
+                output_json = json.dumps(result)
+                self._pending_tool_outputs.append((call_id, output_json))
+                self._response_had_tool_calls = True
+                logger.debug(
+                    "[Business Tool] Queued output for call_id=%s | pending_count=%d",
+                    call_id, len(self._pending_tool_outputs)
                 )
 
-                with tracer.start_as_current_span(
-                    "voicelive.conversation.item_create",
-                    kind=trace.SpanKind.SERVER,
-                    attributes=create_service_dependency_attrs(
-                        source_service="voicelive_orchestrator",
-                        target_service="azure_voicelive",
-                        call_connection_id=self.call_connection_id,
-                        session_id=(
-                            getattr(self.messenger, "session_id", None) if self.messenger else None
-                        ),
-                    ),
-                ):
-                    await self.conn.conversation.item.create(item=output_item)
-                logger.debug("Created function_call_output item for call_id=%s", call_id)
-
-                # Update session instructions with new context BEFORE triggering response
-                # This ensures the model sees collected slots/tool outputs when formulating its reply
-                await self._update_session_context()
-
-                with tracer.start_as_current_span(
-                    "voicelive.response.create",
-                    kind=trace.SpanKind.SERVER,
-                    attributes=create_service_dependency_attrs(
-                        source_service="voicelive_orchestrator",
-                        target_service="azure_voicelive",
-                        call_connection_id=self.call_connection_id,
-                        session_id=(
-                            getattr(self.messenger, "session_id", None) if self.messenger else None
-                        ),
-                    ),
-                ):
-                    await self.conn.response.create()
                 if self.messenger:
                     try:
                         await self.messenger.notify_tool_end(

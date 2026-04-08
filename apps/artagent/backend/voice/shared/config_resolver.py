@@ -46,6 +46,8 @@ except ImportError:
 
     logger = logging.getLogger("voice.shared.config_resolver")
 
+from apps.artagent.backend.src.orchestration.naming import agent_key, find_agent_by_name
+
 
 # ─────────────────────────────────────────────────────────────────────
 # Default Configuration
@@ -93,12 +95,14 @@ class OrchestratorConfigResult:
         return self.scenario is not None
 
     def get_agent(self, name: str) -> Any | None:
-        """Get an agent by name."""
-        return self.agents.get(name)
+        """Get an agent by name (case-insensitive)."""
+        actual_key, agent = find_agent_by_name(self.agents, name)
+        return agent
 
     def get_start_agent_config(self) -> Any | None:
         """Get the starting agent configuration."""
-        return self.agents.get(self.start_agent)
+        actual_key, agent = find_agent_by_name(self.agents, self.start_agent)
+        return agent
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -168,15 +172,18 @@ def _build_agents_from_session_scenario(scenario: ScenarioConfig) -> dict[str, A
         # scenario.agents is list[str] of agent names to include
         filtered_agents = {}
         for agent_name in scenario.agents:
-            if agent_name in base_agents:
+            # Use case-insensitive lookup
+            actual_key, agent = find_agent_by_name(base_agents, agent_name)
+            if actual_key is not None:
                 # Preserve the UnifiedAgent object directly
-                filtered_agents[agent_name] = base_agents[agent_name]
+                filtered_agents[actual_key] = agent
             else:
                 # Agent not found in base - log warning but skip
                 logger.warning(
                     "Scenario agent '%s' not found in base agents, skipping",
                     agent_name,
                 )
+        base_agents = filtered_agents
         base_agents = filtered_agents
     
     logger.debug(

@@ -173,6 +173,19 @@ _MOCK_USERS = {
         "phone_last_4": "4441",
         "email": "bob.williams@example.com",
     },
+    # Test scenario users
+    ("john smith", "5678"): {
+        "client_id": "john_smith_js",
+        "full_name": "John Smith",
+        "phone_last_4": "1234",
+        "email": "john.smith.test@example.com",
+    },
+    ("sarah johnson", "4321"): {
+        "client_id": "sarah_johnson_sj",
+        "full_name": "Sarah Johnson",
+        "phone_last_4": "7890",
+        "email": "sarah.johnson@example.com",
+    },
 }
 
 _PENDING_MFA: dict[str, str] = {}  # client_id -> code
@@ -577,7 +590,8 @@ async def verify_client_identity(args: dict[str, Any]) -> dict[str, Any]:
 
 async def send_mfa_code(args: dict[str, Any]) -> dict[str, Any]:
     """Send MFA code to customer."""
-    client_id = (args.get("client_id") or "").strip()
+    # Prefer session-injected _client_id over LLM-provided client_id
+    client_id = (args.get("_client_id") or args.get("client_id") or "").strip()
     method = (args.get("method") or "sms").strip()
 
     if not client_id:
@@ -601,7 +615,8 @@ async def send_mfa_code(args: dict[str, Any]) -> dict[str, Any]:
 
 async def verify_mfa_code(args: dict[str, Any]) -> dict[str, Any]:
     """Verify MFA code provided by customer."""
-    client_id = (args.get("client_id") or "").strip()
+    # Prefer session-injected _client_id over LLM-provided client_id
+    client_id = (args.get("_client_id") or args.get("client_id") or "").strip()
     code = (args.get("code") or "").strip()
 
     if not client_id or not code:

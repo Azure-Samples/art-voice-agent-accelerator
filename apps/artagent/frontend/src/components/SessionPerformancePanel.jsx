@@ -17,6 +17,7 @@ import MemoryRoundedIcon from '@mui/icons-material/MemoryRounded';
 import TrendingUpRoundedIcon from '@mui/icons-material/TrendingUpRounded';
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded';
 import RecordVoiceOverRoundedIcon from '@mui/icons-material/RecordVoiceOverRounded';
+import SwapCallsRoundedIcon from '@mui/icons-material/SwapCallsRounded';
 
 const PanelCard = ({ title, icon, children, collapsible, defaultOpen = true, alert = null }) => {
   const [expanded, setExpanded] = useState(defaultOpen);
@@ -190,6 +191,7 @@ const SessionPerformancePanel = ({
   coreMemory = null,
   sessionMeta = null,
   sessionMetrics = null,
+  scenarioConfig = null,
 }) => {
   // Parse core memory data
   const performanceData = useMemo(() => {
@@ -206,6 +208,24 @@ const SessionPerformancePanel = ({
     };
     return data;
   }, [coreMemory]);
+
+  // Get handoffs from the active scenario
+  const activeScenarioHandoffs = useMemo(() => {
+    if (!scenarioConfig?.scenarios) return [];
+    const activeScenario = sessionMeta?.scenarios?.find(scenario => scenario.is_active)?.name;
+    const activeScenarioName = performanceData?.scenario || activeScenario;
+    if (!activeScenarioName) return [];
+    
+    // Find matching scenario (could be custom or standard, case-insensitive)
+    const scenario = scenarioConfig.scenarios.find(s => {
+      const normalizedName = s.name?.toLowerCase();
+      const customName = `custom_${s.name?.replace(/\s+/g, '_').toLowerCase()}`;
+      const targetLower = activeScenarioName.toLowerCase();
+      return normalizedName === targetLower || customName === activeScenarioName || s.name === activeScenarioName;
+    });
+    
+    return scenario?.handoffs || [];
+  }, [scenarioConfig, performanceData?.scenario, sessionMeta]);
 
   const latencyBreakdown = sessionMetrics?.latency_breakdown || [];
   const insights = sessionMetrics?.insights || [];
@@ -343,6 +363,133 @@ const SessionPerformancePanel = ({
             </Box>
           )}
         </PanelCard>
+
+        {/* Handoff Conditions */}
+        {activeScenarioHandoffs.length > 0 && (
+          <PanelCard
+            title="Handoff Conditions"
+            icon={<SwapCallsRoundedIcon sx={{ fontSize: 16, color: '#8b5cf6' }} />}
+            collapsible
+            defaultOpen={true}
+          >
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+              {activeScenarioHandoffs.map((handoff, idx) => {
+                const fromAgent = handoff.from_agent || handoff.from || '?';
+                const toAgent = handoff.to_agent || handoff.to || '?';
+                const condition = handoff.handoff_condition || handoff.condition;
+                const toolName = handoff.tool;
+                const handoffType = handoff.type;
+                const shareContext = handoff.share_context;
+
+                return (
+                  <Box
+                    key={idx}
+                    sx={{
+                      p: 1.5,
+                      bgcolor: '#f8fafc',
+                      borderRadius: '8px',
+                      border: '1px solid rgba(226,232,240,0.6)',
+                    }}
+                  >
+                    {/* Agent chips row */}
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                      <Chip
+                        label={fromAgent}
+                        size="small"
+                        sx={{
+                          fontSize: '10px',
+                          height: 18,
+                          bgcolor: '#e0f2fe',
+                          color: '#0369a1',
+                          fontWeight: 600,
+                        }}
+                      />
+                      <Typography sx={{ fontSize: '10px', color: '#94a3b8' }}>→</Typography>
+                      <Chip
+                        label={toAgent}
+                        size="small"
+                        sx={{
+                          fontSize: '10px',
+                          height: 18,
+                          bgcolor: '#dcfce7',
+                          color: '#166534',
+                          fontWeight: 600,
+                        }}
+                      />
+                    </Box>
+
+                    {/* Tool and type info */}
+                    {(toolName || handoffType) && (
+                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1 }}>
+                        {toolName && (
+                          <Chip
+                            label={`🔧 ${toolName}`}
+                            size="small"
+                            sx={{
+                              fontSize: '9px',
+                              height: 16,
+                              bgcolor: '#fef3c7',
+                              color: '#92400e',
+                              fontWeight: 500,
+                            }}
+                          />
+                        )}
+                        {handoffType && (
+                          <Chip
+                            label={handoffType}
+                            size="small"
+                            sx={{
+                              fontSize: '9px',
+                              height: 16,
+                              bgcolor: handoffType === 'discrete' ? '#dbeafe' : '#fae8ff',
+                              color: handoffType === 'discrete' ? '#1e40af' : '#86198f',
+                              fontWeight: 500,
+                            }}
+                          />
+                        )}
+                        {shareContext && (
+                          <Chip
+                            label="shares context"
+                            size="small"
+                            sx={{
+                              fontSize: '9px',
+                              height: 16,
+                              bgcolor: '#d1fae5',
+                              color: '#065f46',
+                              fontWeight: 500,
+                            }}
+                          />
+                        )}
+                      </Box>
+                    )}
+
+                    {/* Condition text */}
+                    {condition ? (
+                      <Typography
+                        sx={{
+                          fontSize: '10px',
+                          color: '#475569',
+                          lineHeight: 1.5,
+                          whiteSpace: 'pre-wrap',
+                          bgcolor: '#fff',
+                          p: 1,
+                          borderRadius: '6px',
+                          border: '1px solid #e2e8f0',
+                        }}
+                      >
+                        {condition.length > 300 ? `${condition.slice(0, 300)}...` : condition}
+                      </Typography>
+                    ) : (
+                      <Typography sx={{ fontSize: '10px', color: '#94a3b8', fontStyle: 'italic' }}>
+                        No condition specified
+                      </Typography>
+                    )}
+                  </Box>
+                );
+              })}
+            </Box>
+          </PanelCard>
+        )}
 
         {/* Token Usage */}
         <PanelCard

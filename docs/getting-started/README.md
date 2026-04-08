@@ -35,7 +35,7 @@ flowchart TD
 | Step | Guide | Time | Description |
 |:----:|-------|:----:|-------------|
 | 0️⃣ | [**Prerequisites**](prerequisites.md) | 5 min | Install required tools (one-time setup) |
-| 1️⃣ | [**Quickstart**](quickstart.md) | 15 min | Deploy to Azure with `azd up` |
+| 1️⃣ | [**Quickstart**](quickstart.md) | 25 min | Deploy to Azure with `azd up` |
 | 2️⃣ | [**Local Development**](local-development.md) | 10 min | Run backend/frontend on your machine |
 | 3️⃣ | [**Demo Guide**](demo-guide.md) | 10 min | Create profiles, test agents, explore features |
 
@@ -44,7 +44,7 @@ flowchart TD
 ## :material-frequently-asked-questions: Quick Answers
 
 ??? question "How long does deployment take?"
-    **~15 minutes** for complete infrastructure + application deployment via `azd up`.
+    **~25 minutes** total via `azd up` (15-20 min infra + 5-10 min app container build/push).
 
 ??? question "Do I need a phone number?"
     **No** — browser-based voice works without a phone number.
@@ -154,4 +154,3 @@ After getting started, explore these areas:
 | **Customize agents** | [Agent Framework](../architecture/agents/README.md) |
 | **Production deployment** | [Deployment Guide](../deployment/README.md) |
 | **Add phone support** | [Phone Number Setup](../deployment/phone-number-setup.md) |
-

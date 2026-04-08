@@ -193,13 +193,50 @@ Always use E.164 format:
 
 ---
 
+---
+
+## Configuring Event Grid Webhook
+
+For inbound calls to reach your backend, configure an Event Grid subscription:
+
+### Azure Portal
+
+1. Go to [Azure Portal](https://portal.azure.com) → your **ACS resource**
+2. Select **Events** in the left navigation
+3. Click **+ Event Subscription**
+4. Configure:
+
+| Field | Value |
+|-------|-------|
+| **Name** | `inbound-calls` (any name) |
+| **Event Schema** | Event Grid Schema |
+| **Event Types** | `Incoming Call` only |
+| **Endpoint Type** | Webhook |
+| **Endpoint URL** | `https://<backend-url>/api/v1/calls/answer` |
+
+5. Click **Create**
+
+### Azure CLI
+
+```bash
+ACS_RESOURCE_ID=$(az communication show --name $ACS_NAME --resource-group $RESOURCE_GROUP --query id -o tsv)
+
+az eventgrid event-subscription create \
+  --name "inbound-calls" \
+  --source-resource-id $ACS_RESOURCE_ID \
+  --endpoint "https://<backend-url>/api/v1/calls/answer" \
+  --included-event-types "Microsoft.Communication.IncomingCall"
+```
+
+!!! warning "Local Development"
+    When using dev tunnels, the URL changes each time you create a new tunnel. **Update the Event Grid subscription endpoint** whenever your tunnel URL changes.
+
+---
+
 ## Next Steps
 
-After configuring your phone number:
+After configuring your phone number and webhook:
 
-1. **Configure inbound webhook** - See [Deployment Guide](README.md#configure-inbound-call-webhook)
-2. **Test voice calls** - Use the frontend UI or API
+1. **Configure email** (optional) - See [Email Setup](email-setup.md) for agent email tools
+2. **Test voice calls** - Use the frontend UI or dial the number
 3. **Monitor call logs** - Check Application Insights
-
-!!! tip "Local Development"
-    For local development with dev tunnels, ensure your webhook URL is updated in the ACS Event Grid subscription.

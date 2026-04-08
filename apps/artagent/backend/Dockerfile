@@ -16,9 +16,10 @@ RUN groupadd -r appuser && useradd -r -g appuser appuser
 # Set the working directory in the container
 WORKDIR /app
 
-# Install build dependencies
+# Install build dependencies (gcc needed for some Azure SDK native extensions)
+# Note: portaudio19-dev NOT installed - pyaudio/sounddevice are optional [audio] extras for local dev only
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends gcc build-essential portaudio19-dev && \
+    apt-get install -y --no-install-recommends gcc build-essential && \
     rm -rf /var/lib/apt/lists/*
 
 # Set up virtual environment

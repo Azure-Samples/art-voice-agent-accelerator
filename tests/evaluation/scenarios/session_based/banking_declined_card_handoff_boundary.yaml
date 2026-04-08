@@ -1,0 +1,209 @@
+# yaml-language-server: $schema=../scenario.schema.json
+# ═══════════════════════════════════════════════════════════════════════════════
+# Banking Declined Card - Handoff Boundary Evaluation
+# ═══════════════════════════════════════════════════════════════════════════════
+# Targets: Post-handoff agent behavior - immediate response vs waiting
+#
+# Problem Being Captured:
+# - Concierge hands off AND DeclineSpecialist immediately responds
+# - User gets a "wall of text" combining handoff announcement + specialist greeting
+# - Specialist assumes context and starts explaining without user inquiry
+#
+# Success Criteria:
+# - Handoff announcement is clean and brief
+# - Specialist greets and WAITS for user to speak
+# - Specialist doesn't assume what user wants to know
+# ═══════════════════════════════════════════════════════════════════════════════
+
+scenario_name: banking_declined_card_handoff_boundary
+description: |
+  Test handoff boundaries: when Concierge hands off to DeclineSpecialist,
+  the specialist should GREET and WAIT, not immediately start explaining
+  decline codes, recommendations, or asking questions.
+
+# Demo user with banking profile for realistic tool responses
+demo_user:
+  full_name: "John Smith"
+  email: "john.smith@example.com"
+  phone_number: "+18885559999"
+  scenario: banking
+  seed: 123
+  persist: false
+
+session_config:
+  agents:
+    - BankingConcierge
+    - DeclineSpecialist
+
+  start_agent: BankingConcierge
+  handoff_type: announced
+
+  handoffs:
+    - from: BankingConcierge
+      to: DeclineSpecialist
+      tool: handoff_decline_specialist
+      type: announced
+      share_context: true
+      handoff_condition: |
+        Transfer to DeclineSpecialist when the customer:
+        - Reports a declined card transaction
+
+    - from: DeclineSpecialist
+      to: BankingConcierge
+      tool: handoff_concierge
+      type: announced
+      share_context: true
+
+  generic_handoff:
+    enabled: true
+    allowed_targets:
+      - DeclineSpecialist
+      - BankingConcierge
+    default_type: announced
+    share_context: true
+
+  agent_defaults:
+    institution_name: "Contoso Bank"
+    industry: "banking"
+
+agent_overrides:
+  - agent: BankingConcierge
+    model_override:
+      deployment_id: gpt-4o
+      temperature: 0.7
+      max_tokens: 500
+
+  - agent: DeclineSpecialist
+    model_override:
+      deployment_id: gpt-4o
+      temperature: 0.6
+      max_tokens: 500
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Handoff Boundary Test Turns
+# ═══════════════════════════════════════════════════════════════════════════════
+# Focus: The moment of handoff and immediate post-handoff behavior.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+turns:
+  # Turn 1: Setup - user identifies as having a decline issue
+  - turn_id: turn_1_setup
+    user_input: "Hi, my Marketplace card was just declined. My name is John Smith, last four of SSN is 1234."
+    expectations:
+      tools_called:
+        - verify_client_identity
+      tools_optional:
+        - get_user_profile
+      # At this point, agent COULD hand off, but should acknowledge first
+      no_handoff: true
+      response_constraints:
+        max_tokens: 80
+
+  # Turn 2: Trigger handoff - this is the CRITICAL boundary test
+  - turn_id: turn_2_trigger_handoff
+    user_input: "Can you help me understand why it was declined?"
+    expectations:
+      tools_optional:
+        - handoff_decline_specialist
+        - handoff_to_agent
+      handoff:
+        to_agent: DeclineSpecialist
+      response_constraints:
+        # Concierge's handoff announcement should be BRIEF
+        max_tokens: 50
+        # Should NOT include specialist's greeting or explanation
+        must_not_include:
+          - "decline code"
+          - "transaction"
+          - "I can see"
+          - "looking at your account"
+          - "let me check"
+
+  # Turn 3: First turn with DeclineSpecialist - specialist should WAIT
+  # This tests the POST-HANDOFF greeting behavior
+  - turn_id: turn_3_post_handoff_greeting
+    user_input: "Hello?"
+    expectations:
+      # Specialist should greet, maybe ask what they'd like to know
+      # Should NOT immediately look up codes
+      tools_called: []
+      tools_forbidden:
+        - lookup_decline_code
+        - get_recent_transactions
+        - search_knowledge_base
+      no_handoff: true
+      response_constraints:
+        # Brief acknowledgment/greeting
+        max_tokens: 60
+        # Should NOT dump information unprompted
+        must_not_include:
+          - "decline code"
+          - "your transaction"
+          - "I can see that"
+          - "was declined because"
+
+  # Turn 4: NOW user asks for information - specialist should act
+  - turn_id: turn_4_user_requests_info
+    user_input: "What happened with my card?"
+    expectations:
+      tools_optional:
+        - lookup_decline_code
+        - get_recent_transactions
+      no_handoff: true
+      response_constraints:
+        max_tokens: 120
+
+  # Turn 5: Test handoff BACK to concierge - same boundary rules apply
+  - turn_id: turn_5_request_return_handoff
+    user_input: "That's helpful. Can I go back to the main assistant?"
+    expectations:
+      tools_optional:
+        - handoff_concierge
+        - handoff_to_agent
+      handoff:
+        to_agent: BankingConcierge
+      response_constraints:
+        # Brief handoff message
+        max_tokens: 50
+
+  # Turn 6: Post-return - Concierge should acknowledge return, WAIT
+  - turn_id: turn_6_post_return_greeting
+    user_input: "Hi again."
+    expectations:
+      tools_called: []
+      # Should NOT immediately offer new services or ask questions
+      tools_forbidden:
+        - search_knowledge_base
+        - get_user_profile
+      no_handoff: true
+      response_constraints:
+        max_tokens: 50
+        must_not_include:
+          - "anything else"
+          - "how can I help"
+          - "is there"
+
+thresholds:
+  min_tool_precision: 0.50
+  min_tool_recall: 0.30  # Lower recall - many turns expect NO tools
+  min_grounded_ratio: 0.3
+  max_latency_p95_ms: 10000
+
+foundry_export:
+  enabled: true
+  output_filename: declined_card_handoff_boundary_eval.jsonl
+  context_source: evidence
+  evaluators:
+    - id: builtin.relevance
+      init_params:
+        deployment_name: gpt-4o
+      data_mapping:
+        query: "${data.query}"
+        response: "${data.response}"
+        context: "${data.context}"
+    - id: builtin.coherence
+      init_params:
+        deployment_name: gpt-4o
+      data_mapping:
+        query: "${data.query}"
+        response: "${data.response}"

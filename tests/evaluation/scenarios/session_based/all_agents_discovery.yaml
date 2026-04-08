@@ -1,0 +1,101 @@
+# yaml-language-server: $schema=../scenario.schema.json
+# All Agents Discovery Scenario
+# ============================
+#
+# This scenario demonstrates using all discovered agents with pattern filtering.
+# Useful when you want to test the full agent ecosystem or a category of agents.
+
+scenario_name: all_agents_discovery
+description: Test with all discovered agents, demonstrating dynamic agent discovery
+
+session_config:
+  # Use ALL discovered agents from agentstore
+  agents: all
+
+  # Optional: Filter with regex patterns (uncomment to use)
+  # agent_patterns:
+  #   - ".*Agent$"      # Match agents ending in "Agent"
+  #   - ".*Advisor$"    # Match agents ending in "Advisor"
+
+  # Exclude specific agents (useful for removing test/debug agents)
+  exclude_agents:
+    - CustomAgent  # Template agent, not meant for production
+
+  # Starting agent
+  start_agent: BankingConcierge
+
+  # Default handoff type
+  handoff_type: announced
+
+  # No explicit handoffs - rely on agent handoff.trigger declarations
+  # and generic handoff for routing
+  handoffs: []
+
+  # Enable generic handoff to allow dynamic routing to any agent
+  generic_handoff:
+    enabled: true
+    allowed_targets: []  # All agents allowed
+    default_type: announced
+    share_context: true
+
+  # Global template variables
+  agent_defaults:
+    institution_name: "Contoso Services"
+
+# Test turns - user inputs must be explicit enough to trigger expected tools
+# CRITICAL: For verify_client_identity, user must provide name + SSN/last4
+# For handoffs, user must express clear intent that maps to specialist expertise
+turns:
+  - turn_id: turn_1
+    user_input: "Hello, I need help with my account. My name is John Smith and my last four SSN digits are 5678."
+    expectations:
+      tools_called:
+        - verify_client_identity
+
+  - turn_id: turn_2
+    user_input: "I noticed a charge I didn't make on my account. This might be fraud - can you transfer me to someone who handles fraud cases?"
+    expectations:
+      # Agent may either:
+      # 1. Use handoff_to_agent to transfer to FraudAgent
+      # 2. Use escalate_human to escalate to fraud department (human team)
+      # Both are valid responses for fraud concerns
+      tools_called: []  # No strict requirement - either escalation path is valid
+      tools_optional:
+        - handoff_to_agent
+        - escalate_human
+
+  - turn_id: turn_3
+    user_input: "Please analyze my recent transactions to find any suspicious activity."
+    expectations:
+      # BankingConcierge has get_recent_transactions tool
+      # analyze_recent_transactions is a FraudAgent-specific tool
+      # If agent stays on BankingConcierge (escalation/handoff didn't complete),
+      # it will use get_recent_transactions to show transactions
+      tools_called:
+        - get_recent_transactions
+
+# Relaxed thresholds for discovery testing
+thresholds:
+  min_tool_precision: 0.4
+  min_tool_recall: 0.4
+  max_latency_p95_ms: 15000
+
+# Foundry export configuration
+foundry_export:
+  enabled: true
+  output_filename: foundry_eval.jsonl
+  context_source: evidence
+  evaluators:
+    - id: builtin.relevance
+      init_params:
+        deployment_name: gpt-4o
+      data_mapping:
+        query: "${data.query}"
+        response: "${data.response}"
+        context: "${data.context}"
+    - id: builtin.coherence
+      init_params:
+        deployment_name: gpt-4o
+      data_mapping:
+        query: "${data.query}"
+        response: "${data.response}"

@@ -102,9 +102,12 @@ class EmailService:
                 "content": message_content,
             }
 
-            # Send email
-            poller = self.client.begin_send(message)
-            result = poller.result()
+            # Send email (offload blocking SDK calls to thread pool)
+            def _blocking_send():
+                poller = self.client.begin_send(message)
+                return poller.result()
+
+            result = await asyncio.to_thread(_blocking_send)
 
             # Extract message ID
             message_id = getattr(result, "id", None) or getattr(result, "message_id", "unknown")

@@ -425,7 +425,12 @@ class AzureRedisManager:
 
         def _hset_operation():
             with self._redis_span("Redis.HSET"):
-                return bool(self.redis_client.hset(session_id, mapping=data))
+                # HSET returns the number of *new* fields added, not a
+                # success indicator.  Updating existing fields returns 0,
+                # which is perfectly normal.  If the call raises, the retry
+                # wrapper handles it; reaching this point means success.
+                self.redis_client.hset(session_id, mapping=data)
+                return True
 
         return self._execute_with_retry("HSET", _hset_operation)
 

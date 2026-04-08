@@ -14,8 +14,8 @@ output "endpoint" {
 }
 
 output "project_endpoint" {
-  description = "Endpoint for the AI Foundry project."
-  value       = try(azapi_resource.ai_foundry_project.output.properties.endpoint, null)
+  description = "Endpoint for the AI Foundry project (derived from account name and project name)."
+  value       = "https://${azapi_resource.ai_foundry_account.name}.services.ai.azure.com/api/projects/${azapi_resource.ai_foundry_project.name}"
 }
 
 output "openai_endpoint" {

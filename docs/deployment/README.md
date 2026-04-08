@@ -129,11 +129,11 @@ The post-provisioning script (`devops/scripts/azd/postprovision.sh`) runs after 
 
 | Task | Description |
 |------|-------------|
-| **Cosmos DB Init** | Seeds database with initial data |
+| **CardAPI Data Provision** | Seeds Cosmos DB with decline code data |
 | **Phone Number Config** | Interactive prompt for ACS phone number |
 | **URL Updates** | Configures backend/WebSocket URLs in App Configuration |
-| **Settings Sync** | Syncs config/appconfig.json to Azure App Configuration |
 | **Local Dev Setup** | Generates .env.local for local development |
+| **EasyAuth** | Optional Microsoft Entra ID authentication for frontend |
 
 ### Environment Variables & Flags
 

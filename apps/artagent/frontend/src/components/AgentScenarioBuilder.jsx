@@ -108,6 +108,10 @@ export default function AgentScenarioBuilder({
   onScenarioUpdated,
   existingScenarioConfig = null,
   scenarioEditMode = false,
+  // Shared scenario state (single source of truth from App.jsx)
+  sharedScenarioConfig = null,
+  onRefreshScenarios = null,
+  onActivateScenario = null,
   // Initial mode
   initialMode = 'agents',
 }) {
@@ -134,6 +138,8 @@ export default function AgentScenarioBuilder({
       if (newMode === 'scenarios') {
         setEditingAgentFromScenario(null);
         setEditingAgentSessionId(null);
+        // Force remount of scenario builder to show blank canvas
+        setRefreshKey((prev) => prev + 1);
       }
       setMode(newMode);
     }
@@ -166,6 +172,8 @@ export default function AgentScenarioBuilder({
     // Clear editing state after creation
     setEditingAgentFromScenario(null);
     setEditingAgentSessionId(null);
+    // Trigger refresh so scenario builder sees updated agents
+    setRefreshKey((prev) => prev + 1);
   }, [onAgentCreated]);
 
   const handleAgentUpdatedInternal = useCallback((config) => {
@@ -173,6 +181,8 @@ export default function AgentScenarioBuilder({
     // Clear editing state after update
     setEditingAgentFromScenario(null);
     setEditingAgentSessionId(null);
+    // Trigger refresh so scenario builder sees updated agents
+    setRefreshKey((prev) => prev + 1);
   }, [onAgentUpdated]);
 
   // Determine if we're in agent edit mode (either from prop or from scenario navigation)
@@ -306,6 +316,9 @@ export default function AgentScenarioBuilder({
             editMode={scenarioEditMode}
             onEditAgent={handleEditAgentFromScenario}
             onCreateAgent={handleCreateAgentFromScenario}
+            sharedScenarioConfig={sharedScenarioConfig}
+            onRefreshScenarios={onRefreshScenarios}
+            onActivateScenario={onActivateScenario}
           />
         )}
       </Box>

@@ -155,6 +155,12 @@ class ModelConfig:
             return "gpt-5"
         return "unknown"
 
+    @property
+    def is_reasoning_model(self) -> bool:
+        """Check if this is a reasoning model (o1/o3/o4) that supports reasoning-specific params."""
+        family = self.model_family or self._detect_model_family()
+        return family in ("o1", "o3", "o4")
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ModelConfig:
         """Create ModelConfig from dict."""
@@ -362,7 +368,7 @@ class UnifiedAgent:
     # Model Settings
     # ─────────────────────────────────────────────────────────────────
     model: ModelConfig = field(default_factory=ModelConfig)
-    
+
     # Mode-specific model overrides (if both are set, orchestrator picks)
     cascade_model: ModelConfig | None = None
     voicelive_model: ModelConfig | None = None
@@ -391,6 +397,11 @@ class UnifiedAgent:
     # Tools
     # ─────────────────────────────────────────────────────────────────
     tool_names: list[str] = field(default_factory=list)
+
+    # ─────────────────────────────────────────────────────────────────
+    # MCP Servers (external tool providers)
+    # ─────────────────────────────────────────────────────────────────
+    mcp_servers: list[str] = field(default_factory=list)
 
     # ─────────────────────────────────────────────────────────────────
     # Template Variables (for prompt rendering)
@@ -659,10 +670,10 @@ class UnifiedAgent:
     def get_model_for_mode(self, mode: str) -> ModelConfig:
         """
         Get the appropriate model config for the given orchestration mode.
-        
+
         Args:
             mode: "cascade", "media" (alias for cascade), "voicelive", or "realtime" (alias for voicelive)
-            
+
         Returns:
             The mode-specific model if defined, otherwise falls back to self.model
         """
@@ -673,7 +684,7 @@ class UnifiedAgent:
         elif mode in ("voicelive", "realtime"):
             if self.voicelive_model is not None:
                 return self.voicelive_model
-        
+
         # Fall back to default model
         return self.model
 
@@ -787,7 +798,9 @@ class UnifiedAgent:
         # Check if we need to inject handoff_to_agent
         if "handoff_to_agent" not in tool_names and session_id:
             try:
-                from apps.artagent.backend.voice.shared.config_resolver import resolve_orchestrator_config
+                from apps.artagent.backend.voice.shared.config_resolver import (
+                    resolve_orchestrator_config,
+                )
 
                 # Use already-resolved scenario (supports both file-based and session-scoped)
                 config = resolve_orchestrator_config(session_id=session_id)
@@ -812,7 +825,11 @@ class UnifiedAgent:
                             )
 
                     if should_add:
-                        from apps.artagent.backend.registries.toolstore import get_tools_for_agent, initialize_tools
+                        from apps.artagent.backend.registries.toolstore import (
+                            get_tools_for_agent,
+                            initialize_tools,
+                        )
+
                         initialize_tools()
                         handoff_tool_schemas = get_tools_for_agent(["handoff_to_agent"])
                         tool_schemas = list(tool_schemas) + handoff_tool_schemas
@@ -848,6 +865,7 @@ class UnifiedAgent:
         """
         try:
             from azure.ai.voicelive.models import AzureStandardVoice
+
             try:
                 from azure.ai.voicelive.models import AzureCustomVoice
             except ImportError:

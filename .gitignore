@@ -432,3 +432,10 @@ tests/load/results/
 infra/terraform/main.tfvars.json
 provider.conf.json
 .archive
+
+runs/
+
+# CardAPI Copilot instructions
+apps/CardDeclineAPI.md
+apps/DeclineCodes.md
+decline_codes_policy_pack.json

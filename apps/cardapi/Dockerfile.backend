@@ -1,0 +1,24 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Ensure shared modules (src, utils) are importable
+ENV PYTHONPATH="/app"
+
+# Copy requirements first (from repo root context)
+COPY apps/cardapi/backend/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy shared utils and src modules
+COPY utils/ /app/utils/
+COPY src/ /app/src/
+
+# Copy backend code and database
+COPY apps/cardapi/backend/ /app/backend/
+COPY apps/cardapi/database/ /app/database/
+
+WORKDIR /app/backend
+
+EXPOSE 8000
+
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]

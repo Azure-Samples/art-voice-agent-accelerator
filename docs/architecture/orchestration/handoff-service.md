@@ -196,20 +196,28 @@ if greeting:
 
 ```mermaid
 flowchart TD
-    A["Tool Call: handoff_fraud_agent"] --> B{"Is Generic Handoff?"}
-    
-    B -->|Yes| C["Extract target from tool_args"]
-    B -->|No| D["Lookup target in handoff_map"]
-    
-    C --> E{"Target Agent Valid?"}
-    D --> E
-    
-    E -->|No| F["Return HandoffResolution(success=False)"]
+    A["Tool Call: handoff_fraud_agent"] --> B{"Is Generic Handoff?<br/>(tool_name == handoff_to_agent)"}
+
+    B -->|Yes| C["Extract target from tool_args/tool_result"]
+    B -->|No| D["Resolve target:<br/>1. handoff_map<br/>2. Infer from tool name<br/>3. Scenario edges"]
+
+    C --> C2{"Target found?"}
+    C2 -->|No| F1["Return error:<br/>missing target_agent"]
+    C2 -->|Yes| C3{"Generic handoff allowed?<br/>(_get_generic_handoff_config)"}
+    C3 -->|No| F2["Return error:<br/>not allowed in scenario"]
+    C3 -->|Yes| E
+
+    D --> D2{"Target found?"}
+    D2 -->|No| F3["Return error:<br/>no target configured"]
+    D2 -->|Yes| E
+
+    E{"Agent exists in registry?<br/>(find_agent_by_name)"} -->|No| F4["Return error:<br/>agent not found"]
     E -->|Yes| G["Get HandoffConfig from Scenario"]
-    
-    G --> H["Build system_vars with context"]
-    H --> I["Return HandoffResolution(success=True)"]
-    
+
+    G --> H["Build system_vars<br/>(build_handoff_system_vars)"]
+    H --> H2["Apply context_vars<br/>with Jinja rendering"]
+    H2 --> I["Return HandoffResolution(success=True)"]
+
     subgraph Resolution["HandoffResolution"]
         I --> J["target_agent: FraudAgent"]
         I --> K["handoff_type: announced/discrete"]

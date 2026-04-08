@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from apps.artagent.backend.src.orchestration.naming import find_agent_by_name
 from utils.ml_logging import get_logger
 
 if TYPE_CHECKING:
@@ -30,14 +31,16 @@ _session_agents: dict[str, dict[str, UnifiedAgent]] = {}
 
 # Callback for notifying the orchestrator adapter of updates
 # Set by the unified orchestrator module at import time
-_adapter_update_callback: Callable[[str, UnifiedAgent], bool] | None = None
+# Signature: (session_id: str, agent: UnifiedAgent, set_active: bool) -> bool
+_adapter_update_callback: Callable[[str, UnifiedAgent, bool], bool] | None = None
 
 
-def register_adapter_update_callback(callback: Callable[[str, UnifiedAgent], bool]) -> None:
+def register_adapter_update_callback(callback: Callable[[str, UnifiedAgent, bool], bool]) -> None:
     """
     Register a callback to be invoked when a session agent is updated.
 
     This is called by the unified orchestrator to inject updates into live adapters.
+    The callback signature is: (session_id, agent, set_active) -> bool
     """
     global _adapter_update_callback
     _adapter_update_callback = callback
@@ -51,6 +54,7 @@ def get_session_agent(session_id: str, agent_name: str | None = None) -> Unified
     Args:
         session_id: The session ID
         agent_name: Optional agent name. If not provided, returns the first/default agent.
+                    Lookup is case-insensitive.
     
     Returns:
         The UnifiedAgent if found, None otherwise.
@@ -60,7 +64,9 @@ def get_session_agent(session_id: str, agent_name: str | None = None) -> Unified
         return None
     
     if agent_name:
-        return session_agents.get(agent_name)
+        # Use case-insensitive lookup
+        _, agent = find_agent_by_name(session_agents, agent_name)
+        return agent
     
     # Return first agent if no name specified (backwards compatibility)
     return next(iter(session_agents.values()), None)
@@ -71,7 +77,7 @@ def get_session_agents(session_id: str) -> dict[str, UnifiedAgent]:
     return dict(_session_agents.get(session_id, {}))
 
 
-def set_session_agent(session_id: str, agent: UnifiedAgent) -> None:
+def set_session_agent(session_id: str, agent: UnifiedAgent, set_active: bool = False) -> None:
     """
     Set dynamic agent for a session.
 
@@ -81,6 +87,12 @@ def set_session_agent(session_id: str, agent: UnifiedAgent) -> None:
 
     All downstream components (voice, model, prompt) will automatically
     use the updated configuration.
+
+    Args:
+        session_id: The session ID
+        agent: The UnifiedAgent to store
+        set_active: If True, also set this agent as the active agent in the orchestrator.
+                    Default False to prevent unintended scenario state changes.
     """
     if session_id not in _session_agents:
         _session_agents[session_id] = {}
@@ -91,14 +103,15 @@ def set_session_agent(session_id: str, agent: UnifiedAgent) -> None:
     adapter_updated = False
     if _adapter_update_callback:
         try:
-            adapter_updated = _adapter_update_callback(session_id, agent)
+            adapter_updated = _adapter_update_callback(session_id, agent, set_active)
         except Exception as e:
             logger.warning("Failed to update adapter: %s", e)
 
     logger.info(
-        "Session agent set | session=%s agent=%s voice=%s adapter_updated=%s",
+        "Session agent set | session=%s agent=%s set_active=%s voice=%s adapter_updated=%s",
         session_id,
         agent.name,
+        set_active,
         agent.voice.name if agent.voice else None,
         adapter_updated,
     )

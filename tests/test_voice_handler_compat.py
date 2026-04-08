@@ -30,10 +30,11 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from fastapi.websockets import WebSocketState
 
-# Import from unified handlers module (MediaHandler is now an alias to VoiceHandler)
-from apps.artagent.backend.api.v1.handlers import (
-    MediaHandler,
-    MediaHandlerConfig,
+# Import VoiceHandler and related items from voice module
+# Note: MediaHandler was previously an alias but has been removed
+from apps.artagent.backend.voice import (
+    VoiceHandler,
+    VoiceHandlerConfig,
     TransportType,
     pcm16le_rms,
     BROWSER_PCM_SAMPLE_RATE,
@@ -41,12 +42,9 @@ from apps.artagent.backend.api.v1.handlers import (
     RMS_SILENCE_THRESHOLD,
 )
 
-# Import VoiceHandler directly for Phase 3 testing
-from apps.artagent.backend.voice.handler import (
-    VoiceHandler,
-    VoiceHandlerConfig,
-    pcm16le_rms as voice_pcm16le_rms,
-)
+# Aliases for backward compatibility in tests (will be phased out)
+MediaHandler = VoiceHandler
+MediaHandlerConfig = VoiceHandlerConfig
 
 # Constants for testing
 SILENCE_BYTES = b"\x00" * 320  # 160 samples of silence
@@ -838,21 +836,6 @@ class TestVoiceHandlerConfig:
         )
         assert config.transport == TransportType.ACS
         assert config.call_connection_id == "call-123"
-
-
-class TestVoiceHandlerRms:
-    """Test RMS calculation in VoiceHandler module."""
-
-    def test_voice_rms_matches_media_rms(self):
-        """Both modules should have identical RMS calculation."""
-        test_data = struct.pack("<160h", *([5000] * 160))
-        assert voice_pcm16le_rms(test_data) == pcm16le_rms(test_data)
-
-    def test_silence_returns_zero(self):
-        """Silence should return ~0 RMS."""
-        silence = b"\x00" * 320
-        assert voice_pcm16le_rms(silence) < 10
-
 
 class TestVoiceHandlerInterface:
     """Test that VoiceHandler has the same interface as MediaHandler."""

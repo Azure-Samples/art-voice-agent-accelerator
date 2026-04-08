@@ -237,7 +237,15 @@ def register_aoai_step(manager: LifecycleManager, app: FastAPI) -> None:
 
 
 def register_warmup_step(manager: LifecycleManager, app: FastAPI) -> None:
-    """Register the connection warmup step (non-blocking)."""
+    """Register the connection warmup step (deferred - runs in background).
+    
+    This step warms OpenAI and speech connections to reduce first-request latency.
+    Since it's deferred, the app starts accepting requests immediately while
+    warmup continues in the background.
+    """
+    # Initialize state so /ready endpoint can check before deferred task runs
+    app.state.warmup_completed = False
+    app.state.warmup_results = {}
 
     async def start() -> None:
         warmup_tasks = []
@@ -291,7 +299,7 @@ def register_warmup_step(manager: LifecycleManager, app: FastAPI) -> None:
         app.state.warmup_completed = True
         app.state.warmup_results = warmup_results
 
-    manager.add_step("warmup", start)
+    manager.add_step("warmup", start, deferred=True)
 
 
 # ============================================================================
@@ -427,7 +435,276 @@ def register_agents_step(manager: LifecycleManager, app: FastAPI) -> None:
 
 
 # ============================================================================
-# Step 7: Event Handlers
+# Step 7: MCP Server Validation and Tool Registration
+# ============================================================================
+
+
+def register_mcp_servers_step(manager: LifecycleManager, app: FastAPI) -> None:
+    """Register the MCP server validation and tool discovery step (deferred).
+    
+    Validates that configured MCP servers are reachable,
+    discovers their tools, and registers them in the central tool registry
+    so agents can reference them by name.
+    
+    For EasyAuth-protected servers, acquires tokens using Managed Identity.
+    
+    Since this is a deferred step, MCP tool availability is not guaranteed
+    immediately at startup. Required servers are still validated but failures
+    are logged as errors rather than blocking startup.
+    """
+    import httpx
+    from apps.artagent.backend.config.settings import (
+        MCP_ENABLED_SERVERS,
+        MCP_REQUIRED_SERVERS,
+        MCP_SERVER_TIMEOUT,
+        get_enabled_mcp_servers,
+    )
+    from apps.artagent.backend.registries.toolstore.mcp import (
+        MCPClientSession,
+        MCPServerConfig,
+        MCPTransport,
+    )
+    from apps.artagent.backend.registries.toolstore.mcp.auth import (
+        get_mcp_auth_headers,
+    )
+    from apps.artagent.backend.registries.toolstore.registry import (
+        register_mcp_tool,
+        unregister_mcp_tools,
+    )
+
+    # Initialize state so /ready endpoint can check before deferred task runs
+    app.state.mcp_servers_status = {}
+    app.state.mcp_ready = False
+
+    async def start() -> None:
+        if not MCP_ENABLED_SERVERS:
+            logger.info("No MCP servers configured, skipping MCP validation")
+            app.state.mcp_servers_status = {}
+            app.state.mcp_ready = True
+            return
+
+        servers = get_enabled_mcp_servers()
+        if not servers:
+            logger.info("No MCP servers with valid URLs configured")
+            app.state.mcp_servers_status = {}
+            app.state.mcp_ready = True
+            return
+
+        logger.info(f"Validating {len(servers)} MCP server(s): {[s['name'] for s in servers]}")
+        
+        mcp_status: dict[str, dict] = {}
+        total_tools_registered = 0
+        
+        for server in servers:
+            name = server["name"]
+            url = server["url"]
+            transport = server.get("transport", "streamable-http")
+            timeout = server.get("timeout", 30.0)
+            auth_enabled = server.get("auth_enabled", False)
+            app_id = server.get("app_id", "")
+            
+            # Get auth headers if server requires authentication
+            auth_headers: dict[str, str] = {}
+            if auth_enabled:
+                if not app_id:
+                    logger.error(f"MCP server '{name}' has auth enabled but no app_id configured")
+                else:
+                    auth_headers = await get_mcp_auth_headers(app_id)
+                    if auth_headers:
+                        logger.info(f"Acquired auth token for MCP server '{name}'")
+                    else:
+                        logger.warning(f"Failed to acquire auth token for MCP server '{name}'")
+            
+            # First check health endpoint
+            # Strip /mcp suffix - health endpoints are at root /health, not /mcp/health
+            base_url = url.rstrip("/")
+            if base_url.endswith("/mcp"):
+                base_url = base_url[:-4]
+            health_url = f"{base_url}/health"
+            is_healthy = False
+            tools_count = 0
+            tool_names: list[str] = []
+            error_msg = None
+            
+            try:
+                async with httpx.AsyncClient(timeout=MCP_SERVER_TIMEOUT) as client:
+                    response = await client.get(health_url, headers=auth_headers)
+                    is_healthy = response.status_code == 200
+                    
+                    if is_healthy:
+                        try:
+                            health_data = response.json()
+                            tools_count = health_data.get("tools_count", 0)
+                            tool_names = health_data.get("tool_names", [])
+                        except Exception:
+                            pass
+                    else:
+                        error_msg = f"HTTP {response.status_code}"
+                        
+            except httpx.ConnectError as e:
+                error_msg = f"Connection failed: {e}"
+                logger.warning(f"MCP server '{name}' unreachable at {url}: {e}")
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"MCP server '{name}' health check failed: {e}")
+            
+            # If healthy, connect via MCP client to discover and register tools
+            if is_healthy:
+                try:
+                    config = MCPServerConfig(
+                        name=name,
+                        url=url,
+                        transport=MCPTransport(transport),
+                        timeout=timeout,
+                    )
+                    session = MCPClientSession(config)
+                    
+                    if await session.connect():
+                        # Discover tools from MCP server
+                        discovered_tools = await session.list_tools()
+                        tools_count = len(discovered_tools)
+                        tool_names = [f"{name}_{t.name}" for t in discovered_tools]
+                        
+                        # Register each tool in the central registry
+                        for tool_info in discovered_tools:
+                            prefixed_name = f"{name}_{tool_info.name}"
+                            original_name = tool_info.name
+                            server_url = url
+                            server_timeout = timeout
+                            
+                            # Create executor that calls the MCP server's HTTP tool endpoint
+                            def make_executor(
+                                tool_original_name: str,
+                                tool_prefixed_name: str,
+                                mcp_url: str,
+                                mcp_timeout: float,
+                                mcp_auth_enabled: bool,
+                                mcp_app_id: str,
+                            ):
+                                async def executor(args: dict) -> dict:
+                                    """Execute MCP tool via HTTP endpoint."""
+                                    import httpx
+                                    from apps.artagent.backend.registries.toolstore.mcp.auth import (
+                                        get_mcp_auth_headers,
+                                    )
+                                    
+                                    # Acquire fresh auth headers if needed
+                                    exec_headers: dict[str, str] = {}
+                                    if mcp_auth_enabled and mcp_app_id:
+                                        exec_headers = await get_mcp_auth_headers(mcp_app_id)
+                                        if not exec_headers:
+                                            return {
+                                                "success": False,
+                                                "error": "Failed to acquire auth token for MCP server",
+                                            }
+                                    
+                                    # Try the /tools/{tool_name} endpoint with GET params
+                                    # Strip /mcp suffix - REST endpoints are at /tools/*, MCP protocol at /mcp
+                                    base_url = mcp_url.rstrip("/")
+                                    if base_url.endswith("/mcp"):
+                                        base_url = base_url[:-4]
+                                    tool_endpoint = f"{base_url}/tools/{tool_original_name}"
+                                    
+                                    try:
+                                        async with httpx.AsyncClient(timeout=mcp_timeout) as client:
+                                            # Most MCP tool endpoints use GET with query params
+                                            response = await client.get(tool_endpoint, params=args, headers=exec_headers)
+                                            
+                                            if response.status_code == 200:
+                                                data = response.json()
+                                                # Return the result, handling both wrapped and direct responses
+                                                if "result" in data:
+                                                    return {"success": True, "result": data["result"]}
+                                                return {"success": True, "result": data}
+                                            else:
+                                                return {
+                                                    "success": False,
+                                                    "error": f"MCP tool returned HTTP {response.status_code}: {response.text[:200]}",
+                                                }
+                                    except httpx.ConnectError as e:
+                                        return {
+                                            "success": False,
+                                            "error": f"Failed to connect to MCP server: {e}",
+                                        }
+                                    except Exception as e:
+                                        return {
+                                            "success": False,
+                                            "error": f"MCP tool execution failed: {e}",
+                                        }
+                                return executor
+                            
+                            executor = make_executor(
+                                original_name,
+                                prefixed_name,
+                                server_url,
+                                server_timeout,
+                                auth_enabled,
+                                app_id,
+                            )
+                            
+                            schema = {
+                                "name": prefixed_name,
+                                "description": tool_info.description or f"MCP tool from {name}",
+                                "parameters": tool_info.input_schema or {"type": "object", "properties": {}},
+                            }
+                            
+                            register_mcp_tool(
+                                name=prefixed_name,
+                                schema=schema,
+                                mcp_server=name,
+                                mcp_transport=transport,
+                                executor=executor,
+                                override=True,
+                            )
+                            total_tools_registered += 1
+                        
+                        await session.disconnect()
+                        logger.info(f"MCP server '{name}' healthy at {url}, registered {tools_count} tools: {tool_names}")
+                    else:
+                        error_msg = "MCP client connection failed"
+                        is_healthy = False
+                        logger.warning(f"MCP server '{name}' health OK but client connection failed")
+                        
+                except Exception as e:
+                    error_msg = f"Tool discovery failed: {e}"
+                    logger.error(f"MCP server '{name}' tool discovery failed: {e}")
+            
+            mcp_status[name] = {
+                "status": "healthy" if is_healthy and not error_msg else "unhealthy",
+                "url": url,
+                "transport": transport,
+                "tools_count": tools_count,
+                "tool_names": tool_names,
+                "error": error_msg,
+            }
+
+        # Store status for health endpoint
+        app.state.mcp_servers_status = mcp_status
+        
+        if total_tools_registered > 0:
+            logger.info(f"Registered {total_tools_registered} MCP tool(s) in central registry")
+
+        # Check required servers (log errors but don't block since this is deferred)
+        required_set = set(s.lower() for s in MCP_REQUIRED_SERVERS)
+        mcp_all_required_healthy = True
+        if required_set:
+            for name, status in mcp_status.items():
+                if name.lower() in required_set and status["status"] != "healthy":
+                    mcp_all_required_healthy = False
+                    logger.error(
+                        f"Required MCP server '{name}' is not healthy: {status.get('error', 'unknown error')}. "
+                        f"MCP tools from this server will be unavailable."
+                    )
+            if mcp_all_required_healthy:
+                logger.info(f"All required MCP servers healthy: {list(required_set)}")
+
+        app.state.mcp_ready = True
+
+    manager.add_step("mcp", start, deferred=True)
+
+
+# ============================================================================
+# Step 8: Event Handlers
 # ============================================================================
 
 

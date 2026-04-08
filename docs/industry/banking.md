@@ -6,16 +6,14 @@
 
 ## Architecture
 
-```
-         ┌──────────────────┐
-         │ BankingConcierge │ ← Handles 80% of requests
-         └────────┬─────────┘
-                  │
-        ┌─────────┴─────────┐
-        ▼                   ▼
-  ┌───────────┐      ┌──────────────┐
-  │   Cards   │ ◄──► │ Investments  │
-  └───────────┘      └──────────────┘
+```mermaid
+flowchart TB
+    BC[BankingConcierge<br/>Entry Point] --> CR[CardRecommendation]
+    BC --> IA[InvestmentAdvisor]
+    CR <--> IA
+    CR --> BC
+    IA --> BC
+    BC --> H[Human Agent]
 ```
 
 **All handoffs are discrete** — feels like one continuous conversation.
@@ -24,11 +22,13 @@
 
 ## Agents
 
-| Agent | Purpose | Key Tools |
-|:------|:--------|:----------|
-| **BankingConcierge** | Entry point, general banking | `get_account_summary`, `refund_fee` |
-| **CardRecommendation** | Credit cards, e-signature | `search_card_products`, `finalize_card_application` |
-| **InvestmentAdvisor** | 401k, retirement, tax | `get_rollover_options`, `calculate_tax_impact` |
+| Agent | Purpose | Key Tools | Reference |
+|:------|:--------|:----------|:----------|
+| **BankingConcierge** | Entry point, general banking | `get_account_summary`, `refund_fee` | [→ Details](../architecture/agents/reference/banking-concierge.md) |
+| **CardRecommendation** | Credit cards, e-signature | `search_card_products`, `finalize_card_application` | [→ Details](../architecture/agents/reference/card-recommendation.md) |
+| **InvestmentAdvisor** | 401k, retirement, tax | `get_rollover_options`, `calculate_tax_impact` | [→ Details](../architecture/agents/reference/investment-advisor.md) |
+
+> **Related:** [FraudAgent](../architecture/agents/reference/fraud-agent.md) handles post-auth fraud scenarios
 
 ---
 

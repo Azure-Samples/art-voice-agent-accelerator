@@ -3,7 +3,7 @@
 !!! info "Prerequisite: Azure Resources"
     This guide assumes you've already deployed infrastructure via [Quickstart](quickstart.md).
     
-    If you haven't deployed yet, run `azd up` first—it only takes 15 minutes.
+    If you haven't deployed yet, run `azd up` first—plan for ~25 minutes total (15-20 min infra + 5-10 min app container build/push).
 
 ---
 
@@ -71,9 +71,63 @@ Choose **one** of these options:
     uv sync  # or: pip install -e .[dev]
     ```
 
+!!! tip "Local Audio Capture (Optional)"
+    If you need local microphone capture/playback features (e.g., for testing with `pyaudio`), install the `audio` extra:
+    
+    ```bash
+    # First install the system portaudio library
+    # macOS: brew install portaudio
+    # Ubuntu/Debian: apt-get install portaudio19-dev
+    
+    # Then install with audio extras
+    pip install -e ".[dev-all]"  # or: pip install -e ".[dev,audio]"
+    ```
+    
+    This is **not required** for the main voice pipeline which uses Azure Communication Services.
+
 ---
 
 ## :material-numeric-2-circle: Environment Configuration
+
+### How Config Loading Works
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  .env.local (bootstrap only)                                │
+│  ├── AZURE_APPCONFIG_ENDPOINT  ───┐                        │
+│  ├── AZURE_APPCONFIG_LABEL        │  ← Your environment    │
+│  └── AZURE_TENANT_ID              ↓                        │
+│                        ┌─────────────────────┐             │
+│                        │  Azure App Config   │             │
+│                        │  (28+ shared keys)  │             │
+│                        └─────────────────────┘             │
+│                                   ↓                        │
+│  Pulls: phone number, OpenAI, Speech, Redis, etc.          │
+│                                                             │
+│  .env.local OVERRIDES (local-specific only)                │
+│  └── BASE_URL (your tunnel URL)                            │
+│  └── AZURE_EMAIL_* (optional)                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+!!! info "What is `AZURE_APPCONFIG_LABEL`?"
+    It's like a **namespace** in App Configuration. Same key can have different values per label:
+    
+    ```
+    azure/acs/source-phone-number
+    ├── label: "artagentv2"  → +18663687875  (your env)
+    ├── label: "dev"         → +1555...      (dev team)
+    └── label: "prod"        → +1800...      (production)
+    ```
+    
+    Your app only loads keys matching its label. **The phone number is stored in App Config, not `.env.local`.**
+
+!!! info "What goes where?"
+    | Config | Location | Why |
+    |--------|----------|-----|
+    | Phone number, OpenAI, Speech, Redis | **App Configuration** | Shared across team/deployments |
+    | Tunnel URL (`BASE_URL`) | **`.env.local`** | Different per developer machine |
+    | Email credentials | **`.env.local`** | Optional, local override |
 
 ### Option A: Use App Configuration (Recommended)
 
@@ -87,12 +141,49 @@ cat .env.local
 **Expected contents:**
 ```bash
 AZURE_APPCONFIG_ENDPOINT=https://<your-appconfig>.azconfig.io
-AZURE_APPCONFIG_LABEL=dev
+AZURE_APPCONFIG_LABEL=<your-environment>   # e.g., artagentv2, dev, prod
 AZURE_TENANT_ID=<your-tenant-id>
 ```
 
-!!! success "That's all you need!"
-    The backend automatically fetches all settings (OpenAI, Speech, ACS, Redis, etc.) from Azure App Configuration at startup.
+At startup, the backend:
+
+1. Reads `.env.local` for App Config connection info
+2. Connects to Azure App Configuration
+3. Pulls all keys with matching label (e.g., `artagentv2`)
+4. Merges with any local overrides in `.env.local`
+
+!!! success "Shared config is automatic!"
+    Phone number, OpenAI endpoints, Speech keys, Redis, etc. are all in App Config. You don't need to copy them locally.
+
+### Local Overrides in `.env.local`
+
+Add these to `.env.local` for local-specific values:
+
+```bash
+# Dev tunnel URL (REQUIRED for phone calls)
+BASE_URL=https://your-tunnel-8010.devtunnels.ms
+
+# Email service (OPTIONAL)
+AZURE_COMMUNICATION_EMAIL_CONNECTION_STRING=endpoint=https://...
+AZURE_EMAIL_SENDER_ADDRESS=DoNotReply@xxx.azurecomm.net
+```
+
+!!! tip "You can override ANY App Config value"
+    `.env.local` values take precedence over App Configuration. If you need a different phone number for local testing:
+    
+    ```bash
+    # Override the phone number locally
+    ACS_SOURCE_PHONE_NUMBER=+1234567890
+    ```
+    
+    This is useful for:
+    
+    - Testing with a different phone number
+    - Debugging with custom endpoints
+    - Working offline without App Config access
+
+!!! warning "Don't commit secrets to .env.local"
+    `.env.local` is gitignored. Keep shared secrets in App Configuration so the team uses the same values.
 
 ### Option B: Legacy — Full `.env` File (Manual Setup)
 
@@ -324,23 +415,93 @@ docker-compose up --build
 !!! note "Optional"
     Only needed if you want to make/receive actual phone calls.
 
-1. **Purchase a phone number** via Azure Portal or:
+### Step 1: Purchase a Phone Number
+
+📚 **See:** [Phone Number Setup Guide](../deployment/phone-number-setup.md) for full instructions on:
+
+- Purchasing via Azure Portal or CLI
+- Configuring in App Configuration
+- Troubleshooting
+
+**Quick option:**
+```bash
+make purchase_acs_phone_number
+```
+
+### Step 2: Add Phone Number to `.env.local`
+
+After purchasing, add the phone number to your `.env.local`:
+
+```bash
+# ACS Phone Number (E.164 format)
+ACS_SOURCE_PHONE_NUMBER=+18663687875
+```
+
+!!! info "App Config vs .env.local"
+    The phone number can be stored in either location:
+    
+    - **App Configuration** → Shared across team (recommended for deployed environments)
+    - **`.env.local`** → Local override (useful for personal testing)
+    
+    If set in both, `.env.local` takes precedence.
+
+### Step 3: Configure Event Grid Webhook
+
+For **inbound calls** to reach your local machine, you must configure Event Grid.
+
+📚 **See:** [Phone Number Setup - Event Grid](../deployment/phone-number-setup.md#configuring-event-grid-webhook) for full instructions.
+
+**Quick steps:**
+
+1. Go to [Azure Portal](https://portal.azure.com) → your **ACS resource**
+2. Select **Events** → **+ Event Subscription**
+3. Configure:
+   - **Event Types**: `Incoming Call` only
+   - **Endpoint Type**: Webhook
+   - **Endpoint URL**: `https://<your-tunnel>/api/v1/calls/answer`
+4. Click **Create**
+
+!!! warning "Dev Tunnel URL Changes"
+    Each time you create a new dev tunnel, you get a new URL. You must **update the Event Grid subscription endpoint** with the new URL, or incoming calls won't reach your local machine.
+
+### Step 4: Test It
+
+Dial your ACS phone number and talk to your AI agent!
+
+---
+
+## :material-email: Email Service Setup
+
+!!! note "Optional"
+    Only needed if your agents use email tools (claim confirmations, notifications).
+
+1. Go to [Azure Portal](https://portal.azure.com) → your **ACS resource** → **Settings** → **Keys**
+2. Copy the **Connection string**
+3. Go to **Email** → **Try Email** to find your sender domain
+4. Add to `.env.local`:
    ```bash
-   make purchase_acs_phone_number
+   AZURE_COMMUNICATION_EMAIL_CONNECTION_STRING=endpoint=https://...
+   AZURE_EMAIL_SENDER_ADDRESS=DoNotReply@<domain>.azurecomm.net
    ```
+5. Restart backend
 
-2. **Configure Event Grid** subscription:
-   - Event: `Microsoft.Communication.IncomingCall`
-   - Endpoint: `https://<tunnel-url>/api/v1/calls/answer`
-
-3. **Dial the number** and talk to your AI agent!
-
-📚 **Full guide:** [Phone Number Setup](../deployment/phone-number-setup.md)
+📚 **Full guide:** [Email Setup](../deployment/email-setup.md)
 
 | Configuration | What It Does |
 |---------------|--------------|
 | `[RT Agent] Python Debugger: FastAPI` | Debug backend with breakpoints |
 | `[RT Agent] React App: Browser Debug` | Debug frontend in browser |
+
+## :material-console: Makefile Commands
+
+| Command | Description |
+|---------|-------------|
+| `make start_backend` | Start FastAPI backend on port 8010 |
+| `make start_frontend` | Start Vite frontend on port 5173 |
+| `make start_tunnel` | Start dev tunnel for ACS callbacks |
+| `make purchase_acs_phone_number` | Purchase toll-free number from ACS |
+
+---
 
 ## :material-bug: Troubleshooting
 
@@ -351,6 +512,7 @@ docker-compose up --build
 | WebSocket closes | Wrong backend URL | Verify `VITE_BACKEND_BASE_URL` |
 | Import errors | Missing deps | Re-run `uv sync` |
 | Phone call no events | Event Grid not configured | Update subscription endpoint |
+| Phone call no events | Tunnel URL changed | Update Event Grid webhook URL |
 
 📚 **More help:** [Troubleshooting Guide](../operations/troubleshooting.md)
 
@@ -367,3 +529,17 @@ uv run pytest tests/ -v
 ```
 
 📚 **Full guide:** [Testing Guide](../operations/testing.md)
+
+---
+
+## :material-cog: Customizing Agents, Tools, and Scenarios
+
+Now that you're running locally, you can modify agent behavior, add custom tools, and create new scenarios directly in code.
+
+| What to Customize | Location | Guide |
+|-------------------|----------|-------|
+| Add a new tool | `apps/artagent/backend/registries/toolstore/` | [Tools Guide](../architecture/registries/tools.md) |
+| Create/modify an agent | `apps/artagent/backend/registries/agentstore/` | [Agents Guide](../architecture/registries/agents.md) |
+| Define a scenario | `apps/artagent/backend/registries/scenariostore/` | [Scenarios Guide](../architecture/registries/scenarios.md) |
+
+📚 **Full guide:** [Registries Overview](../architecture/registries/index.md)

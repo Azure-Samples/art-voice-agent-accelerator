@@ -62,9 +62,10 @@ from .constants import (  # API Paths; Voice; Messages; Audio; Languages
     SUPPORTED_LANGUAGES,
     TTS_END,
 )
-from .settings import (  # Azure Communication Services; Security; Azure Identity; Azure OpenAI; Azure Speech; Azure Storage & Cosmos; Voice & TTS (per-agent voice is defined in agent.yaml); Feature Flags; Documentation; Monitoring; Connection Management; Pool Settings; Session Management; Speech Recognition; Warm Pool Settings; Validation
+from .settings import (  # Azure Communication Services; Security; Azure Identity; Azure OpenAI; Azure Speech; Azure Storage & Cosmos; Azure AI Foundry; Voice & TTS (per-agent voice is defined in agent.yaml); Feature Flags; Documentation; Monitoring; Connection Management; Pool Settings; Session Management; Speech Recognition; Warm Pool Settings; Validation
     ACS_AUDIENCE,
     ACS_CONNECTION_STRING,
+    AZURE_AI_FOUNDRY_PROJECT_ENDPOINT,
     ACS_ENDPOINT,
     ACS_ISSUER,
     ACS_JWKS_URL,
@@ -229,6 +230,7 @@ __all__ = [
     "DEFAULT_TTS_VOICE",
     "AOAI_REQUEST_TIMEOUT",
     "AZURE_OPENAI_ENDPOINT",
+    "AZURE_AI_FOUNDRY_PROJECT_ENDPOINT",
     "AZURE_SPEECH_REGION",
     "BASE_URL",
     "DEBUG_MODE",

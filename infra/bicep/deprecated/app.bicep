@@ -241,6 +241,7 @@ module backendAudioAgent './modules/app/container-app.bicep' = {
     secrets: backendSecrets
     corsPolicy: updatedBackendCors
 
+    stickySessionsAffinity: 'sticky'
     ingressExternal: true // Limit to VNet, setting to false will limit network to Container App Environment
     customDomains: [
       // {

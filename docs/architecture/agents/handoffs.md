@@ -16,11 +16,12 @@ This document explains the **agent handoff system** in the ART Voice Agent Accel
 2. [Architecture: Scenario-Driven Handoffs](#architecture-scenario-driven-handoffs)
 3. [How Scenarios Define Handoffs](#how-scenarios-define-handoffs)
 4. [Handoff Types](#handoff-types)
-5. [Agent Configuration (Simplified)](#agent-configuration-simplified)
-6. [Orchestrator Integration](#orchestrator-integration)
-7. [Flow Diagrams](#flow-diagrams)
-8. [Implementation Guide](#implementation-guide)
-9. [Configuration Reference](#configuration-reference)
+5. [Advanced Features](#advanced-features) *(NEW)*
+6. [Agent Configuration (Simplified)](#agent-configuration-simplified)
+7. [Orchestrator Integration](#orchestrator-integration)
+8. [Flow Diagrams](#flow-diagrams)
+9. [Implementation Guide](#implementation-guide)
+10. [Configuration Reference](#configuration-reference)
 
 ---
 
@@ -30,30 +31,29 @@ In multi-agent voice systems, **handoffs** allow specialized agents to transfer 
 - A concierge agent routes to a fraud specialist when the customer reports suspicious activity
 - An investment advisor escalates to compliance for regulatory questions
 
-### The New Model: Scenario-Driven Handoffs
+### The Current Model: Unified Handoffs
 
-Previously, handoff routing was embedded within each agent's configuration. This created tight coupling—changing handoff behavior required modifying multiple agent files.
-
-**Now, handoffs are defined at the scenario level**, providing:
+All handoffs use a **single `handoff_to_agent` tool** and a **unified `HandoffService`**:
 
 | Benefit | Description |
 |---------|-------------|
-| **Modularity** | Agents focus on capabilities; scenarios handle orchestration |
-| **Reusability** | Same agent behaves differently in banking vs. insurance scenarios |
-| **Contextual Behavior** | Handoff can be "announced" or "discrete" depending on scenario |
-| **Single Source of Truth** | One file defines all handoff routes for a use case |
+| **Single Tool** | One `handoff_to_agent(target_agent, reason)` for all transfers |
+| **Scenario-Driven** | Routes defined in YAML, validated at runtime |
+| **Auto-Prompts** | `handoff_condition` auto-generates agent instructions |
+| **Context Passing** | `context_vars` with Jinja2 templating for dynamic data |
+| **Unified Service** | `HandoffService` works identically for both orchestrators |
 
 ```mermaid
 flowchart LR
-    subgraph Before["❌ Before: Agent-Embedded"]
-        A1[Agent A] -->|"hardcoded routes"| A2[Agent B]
-        A1 -->|"hardcoded routes"| A3[Agent C]
+    subgraph Before["❌ Before: Multiple Tools"]
+        A1[handoff_fraud_agent] 
+        A2[handoff_concierge]
+        A3[handoff_auth]
     end
     
-    subgraph After["✅ After: Scenario-Driven"]
-        S[Scenario] -->|"defines routes"| B1[Agent A]
-        S -->|"defines routes"| B2[Agent B]
-        S -->|"defines routes"| B3[Agent C]
+    subgraph After["✅ After: Unified Tool"]
+        S["handoff_to_agent(target, reason)"] --> HS["HandoffService"]
+        HS --> Val["Validates route<br/>in scenario"]
     end
 ```
 
@@ -68,47 +68,62 @@ flowchart LR
 | **Scenario YAML** | Defines handoff routes as directed graph edges | `registries/scenariostore/<name>/` |
 | **`ScenarioConfig`** | Parses scenario and builds handoff configurations | `scenariostore/loader.py` |
 | **`HandoffConfig`** | Represents a single handoff route (from → to) | `scenariostore/loader.py` |
-| **`build_handoff_map_from_scenario()`** | Creates tool→agent routing map from scenario | `scenariostore/loader.py` |
-| **`get_handoff_config()`** | Looks up handoff behavior for a specific route | `scenariostore/loader.py` |
+| **`HandoffService`** | **Unified handoff resolution for all orchestrators** | `voice/shared/handoff_service.py` |
+| **`HandoffResolution`** | Result of handoff resolution with all metadata | `voice/shared/handoff_service.py` |
+| **`GenericHandoffConfig`** | Enables dynamic `handoff_to_agent` routing | `scenariostore/loader.py` |
 
 ### Architecture Diagram
 
 ```mermaid
 flowchart TB
     subgraph Scenario["Scenario Configuration"]
-        yaml["orchestration.yaml<br/>handoffs: [from, to, tool, type]"]
+        yaml["scenario.yaml<br/>handoffs: [from, to, type]"]
     end
     
-    subgraph Loader["Scenario Loader"]
-        config["ScenarioConfig"]
-        handoffMap["build_handoff_map()<br/>tool → agent"]
-        handoffLookup["get_handoff_config()<br/>from + tool → behavior"]
+    subgraph Runtime["Runtime Services"]
+        HS["HandoffService<br/>resolve_handoff()"]
+        GS["GreetingService<br/>select_greeting()"]
+    end
+    
+    subgraph Tool["Unified Tool"]
+        HT["handoff_to_agent<br/>target_agent, reason"]
     end
     
     subgraph Orchestrators["Orchestrator Layer"]
         VLO["LiveOrchestrator"]
         SCO["CascadeOrchestrator"]
     end
-    
-    subgraph Agents["Agent Layer"]
-        AgentA["Agent A<br/>(no routing logic)"]
-        AgentB["Agent B<br/>(no routing logic)"]
-    end
 
-    yaml --> config
-    config --> handoffMap
-    config --> handoffLookup
-    handoffMap --> VLO
-    handoffMap --> SCO
-    handoffLookup --> VLO
-    handoffLookup --> SCO
-    VLO --> AgentA
-    VLO --> AgentB
-    SCO --> AgentA
-    SCO --> AgentB
+    yaml --> HS
+    HT --> HS
+    HS --> GS
+    HS --> VLO
+    HS --> SCO
 ```
 
-> **Key Insight**: Agents no longer contain routing logic—they simply declare their `handoff.trigger` (the tool name that activates them). The scenario defines which agents can call which handoff tools and how the transition should behave.
+### Key Runtime Classes
+
+```python
+@dataclass
+class HandoffResolution:
+    """Result of HandoffService.resolve_handoff()"""
+    success: bool
+    target_agent: str | None
+    source_agent: str | None
+    tool_name: str | None
+    system_vars: dict[str, Any]      # Includes handoff_context
+    greet_on_switch: bool
+    share_context: bool
+    handoff_type: str                 # "announced" or "discrete"
+    
+    @property
+    def is_discrete(self) -> bool: ...
+    
+    @property
+    def is_announced(self) -> bool: ...
+```
+
+> **Key Insight**: All handoffs flow through a **unified `handoff_to_agent` tool** and **`HandoffService`**. Agents no longer need separate handoff tools—the scenario's `handoffs:` section defines valid routes.
 
 ---
 
@@ -123,7 +138,7 @@ Scenarios define handoffs as **directed edges** in an agent graph. Each edge spe
 ### Example: Banking Scenario
 
 ```yaml
-# registries/scenariostore/banking/orchestration.yaml
+# registries/scenariostore/banking/scenario.yaml
 
 name: banking
 description: Private banking customer service
@@ -144,31 +159,32 @@ handoff_type: announced
 # Handoff configurations - directed edges in the agent graph
 handoffs:
   # Concierge routes to specialists
-  - from: Concierge
-    to: AuthAgent
-    tool: handoff_to_auth
+  - from_agent: Concierge
+    to_agent: AuthAgent
     type: announced           # Auth is sensitive - always greet
-
-  - from: Concierge
-    to: InvestmentAdvisor
-    tool: handoff_investment_advisor
+    handoff_condition: "User needs authentication or identity verification"
+    
+  - from_agent: Concierge
+    to_agent: InvestmentAdvisor
     type: discrete            # Seamless handoff
     share_context: true
+    handoff_condition: "User asks about investments, portfolios, or retirement"
+    context_vars:
+      portfolio_focus: "{{ session.profile.investment_tier }}"
 
-  - from: Concierge
-    to: CardRecommendation
-    tool: handoff_card_recommendation
+  - from_agent: Concierge
+    to_agent: CardRecommendation
     type: discrete            # Seamless handoff
+    handoff_condition: "User interested in credit cards or card recommendations"
 
   # Specialists return to Concierge
-  - from: InvestmentAdvisor
-    to: Concierge
-    tool: handoff_concierge
+  - from_agent: InvestmentAdvisor
+    to_agent: Concierge
     type: discrete            # Returning - seamless
+    handoff_condition: "Investment query completed or user changes topic"
 
-  - from: CardRecommendation
-    to: Concierge
-    tool: handoff_concierge
+  - from_agent: CardRecommendation
+    to_agent: Concierge
     type: discrete            # Returning - seamless
 
 # Template variables applied to all agents
@@ -176,6 +192,9 @@ agent_defaults:
   company_name: "Private Banking"
   industry: "banking"
 ```
+
+!!! tip "The Unified Tool"
+    All agents use the same **`handoff_to_agent(target_agent, reason)`** tool. The `handoffs:` section validates that the route is allowed.
 
 ### Example: Insurance Scenario
 
@@ -194,15 +213,15 @@ agents:
   - FraudAgent
 
 handoffs:
-  - from: AuthAgent
-    to: FraudAgent
-    tool: handoff_fraud_agent
+  - from_agent: AuthAgent
+    to_agent: FraudAgent
     type: announced           # Fraud is sensitive - announce
+    handoff_condition: "User reports suspicious activity or potential fraud"
 
-  - from: FraudAgent
-    to: AuthAgent
-    tool: handoff_to_auth
+  - from_agent: FraudAgent
+    to_agent: AuthAgent
     type: discrete            # Returning - seamless
+    handoff_condition: "Fraud investigation complete"
 
 agent_defaults:
   company_name: "Insurance Services"
@@ -238,10 +257,10 @@ Scenarios support two handoff types that control the user experience:
 The target agent **greets the user**, making the transition explicit:
 
 ```yaml
-- from: Concierge
-  to: AuthAgent
-  tool: handoff_to_auth
+- from_agent: Concierge
+  to_agent: AuthAgent
   type: announced
+  handoff_condition: "User needs identity verification"
 ```
 
 **User Experience:**
@@ -258,10 +277,10 @@ The target agent **greets the user**, making the transition explicit:
 The target agent **continues naturally** without an explicit greeting:
 
 ```yaml
-- from: Concierge
-  to: InvestmentAdvisor
-  tool: handoff_investment_advisor
+- from_agent: Concierge
+  to_agent: InvestmentAdvisor
   type: discrete
+  handoff_condition: "User asks about investments or portfolios"
 ```
 
 **User Experience:**
@@ -278,9 +297,8 @@ The target agent **continues naturally** without an explicit greeting:
 The `share_context` flag controls whether conversation context flows to the target:
 
 ```yaml
-- from: Concierge
-  to: FraudAgent
-  tool: handoff_fraud_agent
+- from_agent: Concierge
+  to_agent: FraudAgent
   type: announced
   share_context: true    # Default: true
 ```
@@ -293,12 +311,64 @@ When `true`, the target agent receives:
 
 ---
 
+## Advanced Features
+
+### Automatic Prompt Injection (`handoff_condition`)
+
+The `handoff_condition` field **auto-generates handoff instructions** in the agent's system prompt:
+
+```yaml
+handoffs:
+  - from_agent: Concierge
+    to_agent: InvestmentAdvisor
+    type: discrete
+    handoff_condition: "User asks about investments, portfolios, or retirement"
+    
+  - from_agent: Concierge
+    to_agent: FraudAgent
+    type: announced
+    handoff_condition: "User reports suspicious transactions"
+```
+
+This generates instructions like:
+```
+When the following condition is met: "User asks about investments, portfolios, or retirement"
+→ Call handoff_to_agent(target_agent="InvestmentAdvisor", reason="...")
+
+When the following condition is met: "User reports suspicious transactions"
+→ Call handoff_to_agent(target_agent="FraudAgent", reason="...")
+```
+
+!!! tip "No Manual Prompt Editing"
+    With `handoff_condition`, you don't need to manually add handoff instructions to agent prompts. The `HandoffService` builds them automatically from the scenario.
+
+### Context Variables (`context_vars`)
+
+Pass extra context to the target agent using `context_vars` with **Jinja2 templating**:
+
+```yaml
+handoffs:
+  - from_agent: Concierge
+    to_agent: InvestmentAdvisor
+    type: discrete
+    context_vars:
+      portfolio_tier: "{{ session.profile.investment_level }}"
+      account_type: "{{ session.profile.account_type }}"
+      priority_customer: "{{ session.profile.is_vip }}"
+```
+
+The target agent receives these as additional context variables in their prompt. Jinja2 templates are rendered at handoff time with access to:
+- `session` — Current session data
+- `profile` — User profile information
+- `handoff_reason` — Why handoff was triggered
+
+---
+
 ## Agent Configuration (Simplified)
 
 With scenario-driven handoffs, **agents become simpler**. They only need to declare:
-1. Their `handoff.trigger` — the tool name that activates them
-2. Their greeting/return_greeting — what to say on arrival
-3. Their tools — including handoff tools they can call
+1. Their greeting/return_greeting — what to say on arrival
+2. Their tools — business logic tools (handoffs are automatic)
 
 ### Example: Simplified Agent YAML
 
@@ -312,18 +382,12 @@ description: Post-authentication fraud detection specialist
 greeting: "You are now speaking with the Fraud Prevention desk. How can I help?"
 return_greeting: "Welcome back to the Fraud Prevention desk."
 
-# Handoff trigger - how other agents route TO this agent
-handoff:
-  trigger: handoff_fraud_agent
-
-# Tools this agent can use (including handoffs to other agents)
+# Tools this agent can use (business logic only)
 tools:
   - analyze_recent_transactions
   - check_suspicious_activity
   - block_card_emergency
   - create_fraud_case
-  - handoff_concierge        # Can return to concierge
-  - handoff_to_auth          # Can route to auth if needed
   - escalate_human
 
 # Voice, model, prompt configuration...
@@ -333,71 +397,100 @@ voice:
 prompt: prompt.jinja
 ```
 
+!!! note "Handoff Tool is Automatic"
+    The `handoff_to_agent` tool is **automatically injected** based on the scenario's `handoffs:` section. You don't need to list it in the agent's tools.
+
 ### What Changed?
 
-| Before (Agent-Embedded) | After (Scenario-Driven) |
+| Before (Old Model) | After (Current Model) |
 |------------------------|------------------------|
-| Agent defines WHERE it can route | Agent lists tools it CAN call |
+| Agent lists specific handoff tools | Handoff tool auto-injected |
+| Agent defines WHERE it can route | Scenario defines valid routes |
 | Agent defines HOW handoffs behave | Scenario defines handoff behavior |
 | Changing routes = edit agent YAML | Changing routes = edit scenario YAML |
-| Same agent, same behavior everywhere | Same agent, contextual behavior |
 
 ### Agents Focus on Capabilities
 
 Agents now focus on:
 
 - ✅ What they're good at (description, prompt)
-- ✅ What tools they need (tools list)
+- ✅ What business tools they need (tools list)
 - ✅ How they sound (voice, greetings)
-- ✅ Their identity (handoff.trigger)
 
 Agents don't need to know:
 
 - ❌ Which agents they'll work with
 - ❌ Whether handoffs should be announced or discrete
 - ❌ The overall conversation flow
+- ❌ Which handoff tools to define
 
 ---
 
 ## Orchestrator Integration
 
-Both orchestrators use the scenario-based handoff map and configuration:
+Both orchestrators use the **`HandoffService`** for unified handoff resolution:
 
 ### Initialization
 
 ```python
-from registries.scenariostore.loader import (
-    build_handoff_map_from_scenario,
-    get_handoff_config,
-)
+from voice.shared.handoff_service import HandoffService
 
-# Build handoff routing from scenario
-handoff_map = build_handoff_map_from_scenario(scenario_name)
-# → {"handoff_fraud_agent": "FraudAgent", "handoff_concierge": "Concierge", ...}
+# Create handoff service (once per session)
+handoff_service = HandoffService(
+    scenario_config=scenario_config,  # From ScenarioStore
+    session_id=session_id,
+)
+```
+
+### The Unified Handoff Tool
+
+All agents use a single `handoff_to_agent` tool:
+
+```python
+# Tool definition (auto-injected based on scenario)
+def handoff_to_agent(target_agent: str, reason: str) -> str:
+    """Transfer the conversation to another agent.
+    
+    Args:
+        target_agent: Name of the agent to transfer to
+        reason: Why this handoff is needed (for context)
+    """
+    pass  # Orchestrator intercepts this
 ```
 
 ### During Tool Execution
 
 ```python
-async def _execute_tool_call(self, name: str, args: Dict[str, Any]) -> None:
-    # Check if this is a handoff tool
-    target_agent = self._handoff_map.get(name)
-    if target_agent:
-        # Get handoff configuration from scenario
-        handoff_cfg = get_handoff_config(
-            scenario_name=self._scenario_name,
-            from_agent=self._active_agent_name,
-            tool_name=name,
+async def _execute_tool_call(self, name: str, args: dict) -> None:
+    # Check if this is the handoff tool
+    if name == "handoff_to_agent":
+        target_agent = args.get("target_agent")
+        reason = args.get("reason", "")
+        
+        # Resolve handoff through service
+        resolution = self._handoff_service.resolve_handoff(
+            source_agent=self._active_agent_name,
+            target_agent=target_agent,
+            handoff_reason=reason,
         )
         
-        # Determine greeting behavior
-        should_greet = handoff_cfg.greet_on_switch  # True if "announced"
+        if not resolution.success:
+            # Invalid route - not allowed in scenario
+            return {"error": f"Cannot handoff to {target_agent}"}
         
-        # Execute the switch with appropriate behavior
+        # Select appropriate greeting
+        greeting = self._handoff_service.select_greeting(
+            target_agent=resolution.target_agent,
+            is_return=...,  # Has user talked to this agent before?
+            handoff_type=resolution.handoff_type,
+        )
+        
+        # Execute the switch
         await self._switch_to(
-            target_agent,
-            system_vars,
-            greet=should_greet,
+            resolution.target_agent,
+            resolution.system_vars,
+            greet=resolution.is_announced,
+            greeting_text=greeting,
         )
         return
     
@@ -407,20 +500,21 @@ async def _execute_tool_call(self, name: str, args: Dict[str, Any]) -> None:
 
 ### VoiceLive vs Cascade
 
-Both orchestrators share the same handoff infrastructure:
+Both orchestrators share the same `HandoffService`:
 
 | Aspect | VoiceLive | Cascade |
 |--------|-----------|---------|
-| Detection | Event loop intercepts tool calls | Tool-call loop checks handoff_map |
-| Context | `build_handoff_system_vars()` | Same helper function |
-| Switch | `await self._switch_to()` | State stored, applied next turn |
-| Greeting | Session update triggers TTS | TTS queue receives greeting |
+| Detection | Event loop intercepts `handoff_to_agent` | Tool-call loop checks tool name |
+| Resolution | `handoff_service.resolve_handoff()` | Same |
+| Greeting | `handoff_service.select_greeting()` | Same |
+| Switch | Immediate via RealtimeAPI | State stored, applied next turn |
+| TTS | Session update triggers playback | TTS queue receives greeting |
 
 ---
 
 ## Flow Diagrams
 
-### Complete Handoff Lifecycle (Scenario-Driven)
+### Complete Handoff Lifecycle
 
 ```mermaid
 flowchart TD
@@ -429,21 +523,25 @@ flowchart TD
     end
     
     subgraph Agent["Active Agent (Concierge)"]
-        B["LLM selects handoff_fraud_agent tool"]
+        B["LLM calls handoff_to_agent(target='FraudAgent')"]
+    end
+    
+    subgraph Service["HandoffService"]
+        C["1. resolve_handoff(source, target, reason)"]
+        D["2. Validate route exists in scenario"]
+        E["3. Build HandoffResolution with metadata"]
+        F["4. select_greeting(target, type)"]
     end
     
     subgraph Orch["Orchestrator"]
-        C["1. Lookup: handoff_map['handoff_fraud_agent']"]
-        D["2. Config: get_handoff_config(scenario, from, tool)"]
-        E["3. Build: HandoffContext with shared data"]
-        F["4. Switch: load FraudAgent + inject context"]
-        G{"type == 'announced'?"}
+        G["5. Switch to FraudAgent + inject context"]
+        H{"is_announced?"}
     end
     
     subgraph Target["Target Agent (FraudAgent)"]
-        H["Receives full context"]
         I["Greets: 'You're now speaking with...'"]
         J["Responds naturally (no greeting)"]
+        K["Receives full context"]
     end
 
     A --> B
@@ -452,10 +550,11 @@ flowchart TD
     D --> E
     E --> F
     F --> G
-    G -->|Yes| I
-    G -->|No| J
-    I --> H
-    J --> H
+    G --> H
+    H -->|Yes| I
+    H -->|No| J
+    I --> K
+    J --> K
 ```
 
 **Context preserved through handoffs:**
@@ -463,7 +562,7 @@ flowchart TD
 - `handoff_reason` — Why the transfer occurred  
 - `user_last_utterance` — What the user just said
 - `handoff_context` — Custom data from source agent
-- `customer_intelligence` — Personalization data
+- `context_vars` — Scenario-defined extra variables
 
 ### Barge-In During Handoff
 
@@ -496,7 +595,7 @@ sequenceDiagram
 
 ### Adding a New Agent to a Scenario
 
-With scenario-driven handoffs, adding a new agent involves three steps:
+Adding a new agent involves **two simple steps**:
 
 #### Step 1: Create the Agent
 
@@ -509,14 +608,10 @@ description: Specialist for new domain
 greeting: "Hi, I'm the new specialist. How can I help?"
 return_greeting: "Welcome back. What else can I help with?"
 
-# Define how other agents route TO this agent
-handoff:
-  trigger: handoff_new_specialist
-
-# Tools this agent can use
+# Business tools only - handoffs are automatic
 tools:
   - some_specialist_tool
-  - handoff_concierge        # Can return to main agent
+  - another_business_tool
 
 voice:
   name: en-US-ShimmerTurboMultilingualNeural
@@ -524,28 +619,13 @@ voice:
 prompt: prompt.jinja
 ```
 
-#### Step 2: Register the Handoff Tool
+!!! note "No Handoff Tools Required"
+    You don't need to list `handoff_to_agent` or create custom handoff tools. The scenario's `handoffs:` section handles routing automatically.
 
-```python
-# registries/toolstore/handoffs.py
-
-@register_tool(
-    name="handoff_new_specialist",
-    description="Transfer to the new specialist for domain expertise",
-    is_handoff=True,
-)
-async def handoff_new_specialist(reason: str, details: str = "") -> Dict[str, Any]:
-    return {
-        "success": True,
-        "handoff_context": {"reason": reason, "details": details},
-        "handoff_summary": f"Transferring to specialist: {reason}",
-    }
-```
-
-#### Step 3: Add to Scenario
+#### Step 2: Add to Scenario
 
 ```yaml
-# registries/scenariostore/banking/orchestration.yaml
+# registries/scenariostore/banking/scenario.yaml
 
 agents:
   - Concierge
@@ -555,26 +635,18 @@ handoffs:
   # ... existing handoffs ...
   
   # Add handoff routes for new agent
-  - from: Concierge
-    to: NewSpecialistAgent
-    tool: handoff_new_specialist
-    type: announced            # Or "discrete" for seamless
+  - from_agent: Concierge
+    to_agent: NewSpecialistAgent
+    type: announced
+    handoff_condition: "User asks about the new specialist domain"
 
-  - from: NewSpecialistAgent
-    to: Concierge
-    tool: handoff_concierge
+  - from_agent: NewSpecialistAgent
+    to_agent: Concierge
     type: discrete             # Returning - usually seamless
+    handoff_condition: "Specialist query completed"
 ```
 
-#### Step 4: Update Source Agent's Tools
-
-```yaml
-# registries/agentstore/concierge/agent.yaml
-
-tools:
-  # ... existing tools ...
-  - handoff_new_specialist   # Now Concierge can route here
-```
+**That's it!** The `handoff_to_agent` tool is automatically available to Concierge with NewSpecialistAgent as a valid target.
 
 ### Creating a New Scenario
 
@@ -597,26 +669,28 @@ handoff_type: announced     # Default for all handoffs
 
 handoffs:
   # Reception routes to specialists
-  - from: ReceptionAgent
-    to: NurseAgent
-    tool: handoff_nurse
+  - from_agent: ReceptionAgent
+    to_agent: NurseAgent
     type: announced
+    handoff_condition: "Patient has medical questions"
     
-  - from: ReceptionAgent
-    to: BillingAgent
-    tool: handoff_billing
+  - from_agent: ReceptionAgent
+    to_agent: BillingAgent
+  - from_agent: ReceptionAgent
+    to_agent: BillingAgent
     type: discrete          # Billing is less formal
+    handoff_condition: "Patient has billing or payment questions"
     
   # Specialists return to reception
-  - from: NurseAgent
-    to: ReceptionAgent
-    tool: handoff_reception
+  - from_agent: NurseAgent
+    to_agent: ReceptionAgent
     type: discrete
+    handoff_condition: "Medical questions answered"
     
-  - from: BillingAgent
-    to: ReceptionAgent
-    tool: handoff_reception
+  - from_agent: BillingAgent
+    to_agent: ReceptionAgent
     type: discrete
+    handoff_condition: "Billing questions resolved"
 
 agent_defaults:
   company_name: "City Health Clinic"
@@ -624,44 +698,62 @@ agent_defaults:
   hipaa_compliant: true
 ```
 
-### Testing Scenario-Based Handoffs
+### Testing Handoffs
 
 ```python
 # tests/test_scenario_handoffs.py
 import pytest
-from registries.scenariostore.loader import (
-    load_scenario,
-    build_handoff_map_from_scenario,
-    get_handoff_config,
-)
+from voice.shared.handoff_service import HandoffService
+from registries.scenariostore.loader import load_scenario
 
-def test_scenario_handoff_map():
-    handoff_map = build_handoff_map_from_scenario("banking")
-    
-    assert handoff_map["handoff_fraud_agent"] == "FraudAgent"
-    assert handoff_map["handoff_concierge"] == "Concierge"
-
-def test_handoff_config_lookup():
-    cfg = get_handoff_config(
-        scenario_name="banking",
-        from_agent="Concierge",
-        tool_name="handoff_investment_advisor",
+def test_handoff_resolution():
+    scenario_config = load_scenario("banking")
+    handoff_service = HandoffService(
+        scenario_config=scenario_config,
+        session_id="test-session",
     )
     
-    assert cfg.to_agent == "InvestmentAdvisor"
-    assert cfg.type == "discrete"
-    assert cfg.greet_on_switch == False
+    # Valid route should succeed
+    resolution = handoff_service.resolve_handoff(
+        source_agent="Concierge",
+        target_agent="InvestmentAdvisor",
+        handoff_reason="User wants investment advice",
+    )
+    
+    assert resolution.success == True
+    assert resolution.target_agent == "InvestmentAdvisor"
+    assert resolution.is_discrete == True  # Type was "discrete"
+
+def test_invalid_route():
+    scenario_config = load_scenario("banking")
+    handoff_service = HandoffService(
+        scenario_config=scenario_config,
+        session_id="test-session",
+    )
+    
+    # Invalid route should fail
+    resolution = handoff_service.resolve_handoff(
+        source_agent="Concierge",
+        target_agent="NonExistentAgent",
+        handoff_reason="Test",
+    )
+    
+    assert resolution.success == False
 
 def test_announced_vs_discrete():
-    # Auth handoff should be announced
-    auth_cfg = get_handoff_config("banking", "Concierge", "handoff_to_auth")
-    assert auth_cfg.type == "announced"
-    assert auth_cfg.greet_on_switch == True
+    scenario_config = load_scenario("banking")
+    handoff_service = HandoffService(
+        scenario_config=scenario_config,
+        session_id="test-session",
+    )
     
-    # Investment handoff should be discrete
-    invest_cfg = get_handoff_config("banking", "Concierge", "handoff_investment_advisor")
-    assert invest_cfg.type == "discrete"
-    assert invest_cfg.greet_on_switch == False
+    # Auth should be announced
+    auth_resolution = handoff_service.resolve_handoff("Concierge", "AuthAgent", "")
+    assert auth_resolution.is_announced == True
+    
+    # Investment should be discrete
+    invest_resolution = handoff_service.resolve_handoff("Concierge", "InvestmentAdvisor", "")
+    assert invest_resolution.is_discrete == True
 ```
 
 ---
@@ -694,9 +786,11 @@ Represents a single handoff route (directed edge):
 class HandoffConfig:
     from_agent: str = ""           # Source agent initiating handoff
     to_agent: str = ""             # Target agent receiving handoff
-    tool: str = ""                 # Tool name that triggers this route
+    tool: str = ""                 # Tool name (auto-set to "handoff_to_agent")
     type: str = "announced"        # "discrete" or "announced"
     share_context: bool = True     # Pass conversation context?
+    handoff_condition: str = ""    # Auto-generates prompt instructions
+    context_vars: dict = field(default_factory=dict)  # Extra context (Jinja2)
 
     @property
     def greet_on_switch(self) -> bool:
@@ -708,14 +802,15 @@ class HandoffConfig:
 |-------|------|---------|-------------|
 | `from_agent` | `str` | `""` | Agent initiating the handoff |
 | `to_agent` | `str` | `""` | Agent receiving the handoff |
-| `tool` | `str` | `""` | Tool name that triggers this route |
 | `type` | `str` | `"announced"` | Handoff behavior: `"announced"` or `"discrete"` |
 | `share_context` | `bool` | `True` | Whether to pass conversation context |
+| `handoff_condition` | `str` | `""` | **NEW**: Condition for auto-prompt injection |
+| `context_vars` | `dict` | `{}` | **NEW**: Extra context with Jinja2 templating |
 
 ### Scenario YAML Schema
 
 ```yaml
-# scenario.yaml or orchestration.yaml
+# scenario.yaml
 
 name: string                    # Required: unique identifier
 description: string             # Optional: human-readable description
@@ -726,11 +821,13 @@ agents: [string]                # Optional: list of agent names (empty = all)
 handoff_type: string            # Optional: default "announced" or "discrete"
 
 handoffs:                       # List of handoff route definitions
-  - from: string                # Required: source agent name
-    to: string                  # Required: target agent name
-    tool: string                # Required: handoff tool name
+  - from_agent: string          # Required: source agent name
+    to_agent: string            # Required: target agent name
     type: string                # Optional: "announced" (default) or "discrete"
     share_context: boolean      # Optional: true (default) or false
+    handoff_condition: string   # Optional: auto-generates agent instructions
+    context_vars:               # Optional: extra context (Jinja2 templates)
+      key: "{{ jinja_expression }}"
 
 agent_defaults:                 # Optional: applied to all agents
   company_name: string
@@ -741,82 +838,100 @@ template_vars:                  # Optional: global template variables
   key: value
 ```
 
-### HandoffContext Dataclass
+### HandoffResolution Dataclass
+
+The result of `HandoffService.resolve_handoff()`:
 
 ```python
 @dataclass
-class HandoffContext:
-    """
-    Context passed during agent handoffs.
+class HandoffResolution:
+    """Result from handoff resolution."""
+    success: bool                           # Whether route is valid
+    target_agent: str | None = None         # Agent to switch to
+    source_agent: str | None = None         # Agent that initiated
+    tool_name: str | None = None            # Tool that triggered
+    system_vars: dict[str, Any] = field(...)  # Context for target agent
+    greet_on_switch: bool = True            # Should target greet?
+    share_context: bool = True              # Pass conversation history?
+    handoff_type: str = "announced"         # "announced" or "discrete"
     
-    Captures all relevant information for smooth agent transitions.
-    """
-    source_agent: str                           # Agent initiating the handoff
-    target_agent: str                           # Agent receiving the handoff
-    reason: str = ""                            # Why the handoff is occurring
-    user_last_utterance: str = ""               # User's most recent speech
-    context_data: Dict[str, Any] = field(...)   # Additional context (caller info)
-    session_overrides: Dict[str, Any] = field(...)  # Config for new agent
-    greeting: Optional[str] = None              # Explicit greeting override
+    @property
+    def is_discrete(self) -> bool:
+        return self.handoff_type == "discrete"
     
-    def to_system_vars(self) -> Dict[str, Any]:
-        """Convert to system_vars dict for agent session application."""
+    @property
+    def is_announced(self) -> bool:
+        return self.handoff_type == "announced"
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `success` | `bool` | Whether the handoff route is valid |
+| `target_agent` | `str \| None` | The agent to switch to |
+| `source_agent` | `str \| None` | The agent that initiated the handoff |
+| `system_vars` | `dict` | Context passed to target agent |
+| `greet_on_switch` | `bool` | Whether target should greet |
+| `share_context` | `bool` | Whether to share conversation history |
+| `handoff_type` | `str` | `"announced"` or `"discrete"` |
+
+### HandoffService
+
+Unified service for handoff resolution:
+
+```python
+class HandoffService:
+    """Unified handoff resolution for all orchestrators."""
+    
+    def __init__(
+        self,
+        scenario_config: ScenarioConfig,
+        session_id: str,
+    ): ...
+    
+    def resolve_handoff(
+        self,
+        source_agent: str,
+        target_agent: str,
+        handoff_reason: str = "",
+        **kwargs,
+    ) -> HandoffResolution:
+        """Resolve a handoff request against the scenario config."""
+        ...
+    
+    def select_greeting(
+        self,
+        target_agent: str,
+        is_return: bool = False,
+        handoff_type: str = "announced",
+    ) -> str | None:
+        """Select appropriate greeting for target agent."""
+        ...
+    
+    def is_handoff(self, tool_name: str) -> bool:
+        """Check if a tool name is the handoff tool."""
+        return tool_name == "handoff_to_agent"
+    
+    def get_handoff_target(
+        self,
+        source_agent: str,
+        target_agent: str,
+    ) -> str | None:
+        """Get valid target agent if route exists in scenario."""
         ...
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `source_agent` | `str` | Name of the agent initiating the handoff |
-| `target_agent` | `str` | Name of the agent receiving the handoff |
-| `reason` | `str` | Why the handoff is occurring |
-| `user_last_utterance` | `str` | User's most recent speech for context |
-| `context_data` | `Dict[str, Any]` | Additional structured context (caller info, etc.) |
-| `session_overrides` | `Dict[str, Any]` | Configuration to apply to the new agent |
-| `greeting` | `Optional[str]` | Explicit greeting for the new agent |
-
-### HandoffResult Dataclass
-
-```python
-@dataclass
-class HandoffResult:
-    """
-    Result from a handoff operation.
-    
-    This is a **signal** returned by execute_handoff() that tells the
-    orchestrator what to do next. The actual agent switch happens in
-    the orchestrator based on this result.
-    """
-    success: bool                           # Whether handoff completed
-    target_agent: Optional[str] = None      # Agent to switch to
-    message: Optional[str] = None           # Message to speak after handoff
-    error: Optional[str] = None             # Error if handoff failed
-    should_interrupt: bool = True           # Cancel current TTS playback?
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `success` | `bool` | Whether the handoff completed successfully |
-| `target_agent` | `Optional[str]` | The agent to switch to (if success=True) |
-| `message` | `Optional[str]` | Message to speak after handoff |
-| `error` | `Optional[str]` | Error message if handoff failed |
-| `should_interrupt` | `bool` | Whether to cancel current TTS playback |
-
 ### Helper Functions
 
-```python title="apps/artagent/backend/voice/handoffs/context.py"
-def sanitize_handoff_context(raw: Any) -> Dict[str, Any]:
+```python title="apps/artagent/backend/voice/shared/handoff_service.py"
+def build_handoff_instructions(
+    scenario_config: ScenarioConfig,
+    agent_name: str,
+) -> str:
     """
-    Remove control flags from raw handoff context.
+    Build handoff instructions from scenario's handoff_condition fields.
     
-    Control flags like 'success', 'target_agent', 'handoff_summary' are
-    internal signaling mechanisms and should not appear in agent prompts.
+    Injects into agent prompt automatically based on valid outbound routes.
     """
-
-def build_handoff_system_vars(
-    *,
-    source_agent: str,
-    target_agent: str,
-    tool_result: Dict[str, Any],
     tool_args: Dict[str, Any],
     current_system_vars: Dict[str, Any],
     user_last_utterance: Optional[str] = None,

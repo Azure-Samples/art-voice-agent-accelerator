@@ -165,6 +165,7 @@ azd provision
 |--------|------|--------------|
 | `preprovision.sh` | Before Terraform | Sets up state storage, TF_VAR_* |
 | `postprovision.sh` | After Terraform | Generates `.env.local` |
+| `postdown.sh` | After `azd down` | Optional cleanup of remote state storage; reminds about `azd down --purge` |
 
 ---
 

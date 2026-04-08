@@ -1,0 +1,270 @@
+# yaml-language-server: $schema=../scenario.schema.json
+# ═══════════════════════════════════════════════════════════════════════════════
+# Banking Declined Card → Fraud Investigation Flow
+# ═══════════════════════════════════════════════════════════════════════════════
+# Tests the complete flow when a customer reports declined transactions and then
+# discovers potentially fraudulent activity. Validates:
+# 1. Concierge handles initial decline inquiry with lookups
+# 2. Handoff to DeclineSpecialist for investigation
+# 3. DeclineSpecialist looks up decline codes and provides analysis
+# 4. DeclineSpecialist sends email summary when requested
+# 5. Handoff to FraudAgent when user reports unrecognized transactions
+# ═══════════════════════════════════════════════════════════════════════════════
+
+scenario_name: banking_declined_card_fraud_investigation
+description: |
+  Multi-agent flow testing the complete journey from declined card inquiry
+  through fraud investigation. Tests two handoffs: Concierge → DeclineSpecialist
+  (for decline investigation) and DeclineSpecialist → FraudAgent (for fraud inquiry).
+  Validates tool calling at each stage and proper context handoff.
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Demo User Configuration
+# ═══════════════════════════════════════════════════════════════════════════════
+demo_user:
+  full_name: "Michael Chen"
+  email: "michael.chen@example.com"
+  phone_number: "+18885559876"
+  scenario: banking
+  seed: 101  # Fixed seed for reproducible test data
+  persist: false
+
+session_config:
+  agents:
+    - BankingConcierge
+    - DeclineSpecialist
+    - FraudAgent
+
+  start_agent: BankingConcierge
+
+  handoff_type: announced
+
+  handoffs:
+    - from: BankingConcierge
+      to: DeclineSpecialist
+      tool: handoff_decline_specialist
+      type: discrete
+      share_context: true
+      handoff_condition: |
+        Transfer to DeclineSpecialist when the customer:
+        - Reports declined card transactions
+        - Wants to investigate decline history
+        - Asks about decline codes or reasons
+
+    - from: DeclineSpecialist
+      to: FraudAgent
+      tool: handoff_fraud_agent
+      type: discrete
+      share_context: true
+      handoff_condition: |
+        Transfer to FraudAgent when the customer:
+        - Reports unrecognized transactions
+        - Suspects fraud or unauthorized activity
+        - Requests fraud investigation
+
+    - from: DeclineSpecialist
+      to: BankingConcierge
+      tool: handoff_concierge
+      type: discrete
+      share_context: true
+
+    - from: FraudAgent
+      to: BankingConcierge
+      tool: handoff_concierge
+      type: discrete
+      share_context: true
+
+  generic_handoff:
+    enabled: true
+    allowed_targets:
+      - DeclineSpecialist
+      - FraudAgent
+      - BankingConcierge
+    default_type: announced
+    share_context: true
+
+  agent_defaults:
+    institution_name: "Contoso Bank"
+    industry: "banking"
+
+# Model overrides for consistent evaluation
+agent_overrides:
+  - agent: BankingConcierge
+    model_override:
+      deployment_id: gpt-4o
+      temperature: 0.7
+      max_tokens: 500
+
+  - agent: DeclineSpecialist
+    model_override:
+      deployment_id: gpt-4o
+      temperature: 0.6
+      max_tokens: 500
+
+  - agent: FraudAgent
+    model_override:
+      deployment_id: gpt-4o
+      temperature: 0.6
+      max_tokens: 500
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test Turns
+# ═══════════════════════════════════════════════════════════════════════════════
+# Flow under test:
+# 1. User reports declined card → Concierge looks up account
+# 2. User asks to investigate all declines → Handoff to DeclineSpecialist
+# 3. Specialist looks up decline codes and explains
+# 4. User requests email summary → Specialist sends email
+# 5. User reports unrecognized transaction → Handoff to FraudAgent
+# ═══════════════════════════════════════════════════════════════════════════════
+
+turns:
+  # Turn 1: Initial decline report
+  - turn_id: turn_1
+    user_input: "Hey, my card appears to be getting declined."
+    expectations:
+      # Concierge should look up user profile and potentially recent transactions
+      tools_called:
+        - get_user_profile
+      tools_optional:
+        - verify_client_identity
+        - get_recent_transactions
+      # Should NOT hand off yet - need more context
+      tools_forbidden:
+        - handoff_decline_specialist
+        - handoff_to_agent
+      no_handoff: true
+      response_constraints:
+        # Should acknowledge and ask for more details or confirm which card
+        max_tokens: 100
+        must_not_include:
+          - "I'll transfer"
+          - "speaking with"
+
+  # Turn 2: User requests investigation of all declines
+  - turn_id: turn_2
+    user_input: "I need to investigate all instances where the card was declined."
+    expectations:
+      # Should trigger handoff to DeclineSpecialist
+      tools_called: []
+      tools_optional:
+        - handoff_decline_specialist
+        - handoff_to_agent
+      # Should NOT look up decline info - that's specialist's job
+      tools_forbidden:
+        - lookup_decline_code
+        - cardapi_lookup_decline_code
+      handoff:
+        to_agent: DeclineSpecialist
+      response_constraints:
+        # Brief handoff announcement
+        max_tokens: 80
+
+  # Turn 3: DeclineSpecialist provides analysis
+  # Note: This turn tests that the specialist responds AND looks up decline codes
+  - turn_id: turn_3
+    user_input: "What can you tell me about these declines?"
+    expectations:
+      # DeclineSpecialist should look up decline information
+      tools_called: []
+      tools_optional:
+        - lookup_decline_code
+        - cardapi_lookup_decline_code
+        - get_recent_transactions
+        - search_decline_codes
+      no_handoff: true
+      response_constraints:
+        # Should explain decline codes found
+        max_tokens: 200
+        must_not_include:
+          - "I'll transfer"
+          - "FraudAgent"
+
+  # Turn 4: User requests email summary
+  - turn_id: turn_4
+    user_input: "Could you email this summary to me?"
+    expectations:
+      # DeclineSpecialist should use email tool
+      tools_called:
+        - send_decline_summary_email
+      tools_optional: []
+      tools_forbidden:
+        - handoff_fraud_agent
+        - handoff_to_agent
+      no_handoff: true
+      response_constraints:
+        # Confirm email sent
+        max_tokens: 100
+        must_include_one_of:
+          - "email"
+          - "sent"
+          - "sending"
+
+  # Turn 5: User reports potential fraud
+  - turn_id: turn_5
+    user_input: "I'm concerned about potential fraud as I don't recognize one of those transactions."
+    expectations:
+      # Should trigger handoff to FraudAgent
+      tools_called: []
+      tools_optional:
+        - handoff_fraud_agent
+        - handoff_to_agent
+      # Should NOT try to investigate fraud - that's FraudAgent's job
+      tools_forbidden:
+        - analyze_recent_transactions
+        - check_suspicious_activity
+        - create_fraud_case
+      handoff:
+        to_agent: FraudAgent
+      response_constraints:
+        # Brief handoff announcement
+        max_tokens: 100
+
+  # Turn 6: FraudAgent takes over and begins investigation
+  - turn_id: turn_6
+    user_input: "Yes, there's a transaction I don't recognize. Can you help me investigate?"
+    expectations:
+      # FraudAgent should start investigation
+      tools_called: []
+      tools_optional:
+        - analyze_recent_transactions
+        - check_suspicious_activity
+        - get_recent_transactions
+      no_handoff: true
+      response_constraints:
+        # Should acknowledge and begin investigation
+        max_tokens: 150
+        must_not_include:
+          - "DeclineSpecialist"
+          - "Concierge"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Evaluation Thresholds
+# ═══════════════════════════════════════════════════════════════════════════════
+thresholds:
+  min_tool_precision: 0.55
+  min_tool_recall: 0.45
+  min_grounded_ratio: 0.4
+  max_latency_p95_ms: 12000
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Azure AI Foundry Export
+# ═══════════════════════════════════════════════════════════════════════════════
+foundry_export:
+  enabled: true
+  output_filename: declined_card_fraud_investigation_eval.jsonl
+  context_source: evidence
+  evaluators:
+    - id: builtin.relevance
+      init_params:
+        deployment_name: gpt-4o
+      data_mapping:
+        query: "${data.query}"
+        response: "${data.response}"
+        context: "${data.context}"
+    - id: builtin.coherence
+      init_params:
+        deployment_name: gpt-4o
+      data_mapping:
+        query: "${data.query}"
+        response: "${data.response}"
