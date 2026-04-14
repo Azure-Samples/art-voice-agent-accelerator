@@ -98,7 +98,7 @@ Tracker = "https://github.com/aiappsgbbfactory/art-voice-agent-accelerator/issue
 [project.optional-dependencies]
 dev = [
     # Testing
-    "pytest>=7.4.0",
+    "pytest>=9.0.3",
     "pytest-asyncio",
     "pytest-cov",
     "anyio",
@@ -142,7 +142,7 @@ audio = [
 # Duplicates dev deps to avoid self-reference issues with some tools
 dev-all = [
     # Testing
-    "pytest>=7.4.0",
+    "pytest>=9.0.3",
     "pytest-asyncio",
     "pytest-cov",
     "anyio",
