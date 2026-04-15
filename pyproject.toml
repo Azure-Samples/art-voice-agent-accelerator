@@ -37,7 +37,7 @@ dependencies = [
     "redis>=5.0.0",
     "redis-entraid>=1.0.0",
     "aiohttp>=3.13.3",
-    "python-multipart>=0.0.6",
+    "python-multipart>=0.0.26",
     "pyjwt",
     # Azure services
     "azure-cosmos>=4.5.0",
