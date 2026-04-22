@@ -56,7 +56,7 @@ def load_defaults(agents_dir: Path = AGENTS_DIR) -> dict[str, Any]:
     """Load default configuration from _defaults.yaml."""
     defaults_file = agents_dir / "_defaults.yaml"
     if defaults_file.exists():
-        with open(defaults_file) as f:
+        with open(defaults_file, encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
     return {}
 
@@ -74,7 +74,7 @@ def load_prompt(agent_dir: Path, prompt_value: str) -> str:
     if prompt_value.endswith((".jinja", ".md", ".txt")):
         prompt_file = agent_dir / prompt_value
         if prompt_file.exists():
-            return prompt_file.read_text()
+            return prompt_file.read_text(encoding="utf-8")
         logger.warning("Prompt file not found: %s", prompt_file)
         return ""
     return prompt_value
@@ -130,7 +130,7 @@ def load_agent(
     defaults: dict[str, Any],
 ) -> UnifiedAgent:
     """Load a single agent from its agent.yaml file."""
-    with open(agent_file) as f:
+    with open(agent_file, encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
 
     agent_dir = agent_file.parent

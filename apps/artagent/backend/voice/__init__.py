@@ -135,6 +135,10 @@ _VOICEHANDLER_EXPORTS = {
     "BROWSER_SILENCE_GAP_SECONDS",
 }
 
+_GENESYS_EXPORTS = {
+    "GenesysVoiceLiveHandler",
+}
+
 _MESSAGING_EXPORTS = {
     "BrowserBargeInController",
     "broadcast_session_envelope",
@@ -165,6 +169,9 @@ def __getattr__(name: str):
     if name in _VOICEHANDLER_EXPORTS:
         from . import handler as voice_handler_module
         return getattr(voice_handler_module, name)
+    if name in _GENESYS_EXPORTS:
+        from .genesys import handler as genesys_handler
+        return getattr(genesys_handler, name)
     if name in _MESSAGING_EXPORTS:
         from . import messaging
         return getattr(messaging, name)
@@ -243,4 +250,6 @@ __all__ = [
     "make_assistant_streaming_envelope",
     "make_event_envelope",
     "BrowserBargeInController",
+    # Genesys AudioConnector - lazy loaded
+    "GenesysVoiceLiveHandler",
 ]
