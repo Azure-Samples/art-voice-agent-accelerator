@@ -41,6 +41,41 @@ python genesys_client_simulator.py wss://<your-app>.azurecontainerapps.io/api/v1
 
 The URL can also be set via `SIMULATOR_SERVER_URL` in your `.env` file.
 
+## Connection Probe (diagnostic)
+
+`probe_connection.py` is a headless, no-microphone diagnostic that reproduces the
+**exact handshake Genesys Cloud performs when you activate an Audio Connector
+integration** (or toggle it Inactive → Active). Use it to verify any ART
+deployment's `/api/v1/genesys/stream` endpoint without a Genesys account or audio
+hardware — handy in CI or when triaging an activation failure.
+
+```bash
+# Local backend
+python probe_connection.py ws://localhost:8081/api/v1/genesys/stream
+
+# Deployed backend
+python probe_connection.py wss://<your-app>.azurecontainerapps.io/api/v1/genesys/stream
+```
+
+The probe sends an AudioHook `open` whose `conversationId`/`participant.id` are the
+null UUID (`00000000-0000-0000-0000-000000000000`) — the marker Genesys uses for
+its activation probe — then closes. It checks and prints PASS/FAIL for:
+
+| Check | What it verifies |
+|-------|------------------|
+| Subprotocol negotiation | The server does **not** select a `Sec-WebSocket-Protocol` the client never offered. Genesys offers none; selecting one (e.g. `audiohook-v2`) makes a strict client abort the handshake — surfacing as a generic "problem communicating with the AudioConnector Bot" error with empty server logs. |
+| `opened` within 5s | The server answers `open` with `opened` inside the Genesys activation window. |
+| No audio during probe | The activation probe is not a real call, so the server should stream no audio. |
+| Clean close | The server returns `closed`/`disconnect` after the client's `close`. |
+
+Exit code is `0` when all checks pass, `1` otherwise. By default the probe offers
+no subprotocol (mirroring Genesys exactly); pass `--offer-subprotocol audiohook`
+only to exercise negotiation behavior.
+
+> Note: "AudioHook v2" refers to the `version` field inside the JSON `open`
+> message — it is **not** a WebSocket subprotocol. Genesys negotiates no
+> subprotocol on the wire.
+
 ## Configuration
 
 All settings are optional and configured via `.env` (see `.env.sample`):
