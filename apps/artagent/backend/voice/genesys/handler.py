@@ -360,6 +360,20 @@ class GenesysVoiceLiveHandler:
             )
             return
 
+        # Connection probe: Genesys validates the integration with a synthetic
+        # session (null-UUID conversationId) on activate/save. Complete the
+        # open/opened handshake so the probe passes, but do NOT allocate VoiceLive
+        # or orchestrator resources for it (per AudioHook patterns-and-practices).
+        if self._protocol.is_connection_probe(msg):
+            logger.info(
+                "[Genesys] Connection probe detected — short-circuiting open "
+                "(no VoiceLive allocation) | session=%s",
+                self.session_id,
+            )
+            await self._enqueue_message(self._protocol.create_opened(media))
+            self._session_opened = True
+            return
+
         # Send opened response immediately
         await self._enqueue_message(self._protocol.create_opened(media))
         self._session_opened = True

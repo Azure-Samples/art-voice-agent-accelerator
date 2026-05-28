@@ -56,7 +56,16 @@ async def genesys_audiohook_stream(websocket: WebSocket):
 
     handler = GenesysVoiceLiveHandler(websocket=websocket, session_id=session_id)
 
-    await websocket.accept(subprotocol="audiohook-v2")
+    # Genesys AudioHook does NOT negotiate a WebSocket subprotocol — its handshake
+    # offers no ``Sec-WebSocket-Protocol`` header. Per RFC 6455 a server must only
+    # select a subprotocol the client offered; forcing one (the original
+    # ``"audiohook-v2"``) makes strict clients like Genesys abort the handshake with
+    # a generic error and empty server logs. Mirror only a subprotocol the client
+    # actually offered, otherwise select none.
+    offered = websocket.headers.get("sec-websocket-protocol", "")
+    offered_protocols = [p.strip() for p in offered.split(",") if p.strip()]
+    selected_subprotocol = "audiohook" if "audiohook" in offered_protocols else None
+    await websocket.accept(subprotocol=selected_subprotocol)
 
     try:
         await handler.start()
