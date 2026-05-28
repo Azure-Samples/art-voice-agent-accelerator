@@ -212,9 +212,11 @@ class GenesysProtocol:
     ) -> dict[str, Any]:
         """Create 'opened' response confirming media selection.
 
-        Includes ``startPaused`` to match the AudioHook v2 'opened' schema. Genesys's
-        strict client expects this field in the opened parameters; omitting it can
-        cause a "malformed server message" rejection during the connection probe.
+        Includes ``startPaused`` to match the AudioHook v2 'opened' schema example.
+        The field is *optional* per the schema, so its absence is not by itself a
+        protocol error (verified empirically: a deployment omitting it still passes
+        the Genesys connection probe). Emitting it explicitly is simply the
+        conformant shape every Genesys 'opened' example uses.
         """
         return self._create_server_message(
             SERVER_MSG_OPENED, {"startPaused": start_paused, "media": [media]}

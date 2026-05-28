@@ -5,8 +5,8 @@ regressions found while debugging an IBM AudioConnector integration that failed
 Genesys's activation connection probe:
 
 * Connection-probe detection (null-UUID conversationId).
-* ``opened`` message conformance — must carry ``startPaused`` per the AudioHook v2
-  schema, otherwise Genesys can reject it as a malformed server message.
+* ``opened`` message conformance — should carry ``startPaused`` to match the
+  AudioHook v2 'opened' schema example (the field is optional per the schema).
 * Media selection / open-transaction handling.
 * Sequence-number + session-id validation.
 
