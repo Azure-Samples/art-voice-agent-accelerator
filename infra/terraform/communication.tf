@@ -102,8 +102,15 @@ resource "azapi_resource" "acs" {
   }
 }
 
-# Retrieve ACS connection string using listKeys action (secure method)
-resource "azapi_resource_action" "acs_list_keys" {
+# Retrieve ACS connection string using listKeys action (secure method).
+#
+# Uses the DATA SOURCE form of azapi_resource_action (not the resource form).
+# The resource form triggers an azapi provider bug on 2.x where the computed
+# `.exist` attribute is null during plan but true after apply, causing
+# "Provider produced inconsistent result after apply" failures on every CI
+# deploy. The data source form is the official pattern for read-only actions
+# like listKeys / listSecrets and avoids stateful resource tracking entirely.
+data "azapi_resource_action" "acs_list_keys" {
   type        = "Microsoft.Communication/communicationServices@2025-05-01-preview"
   resource_id = azapi_resource.acs.id
   action      = "listKeys"
@@ -111,13 +118,11 @@ resource "azapi_resource_action" "acs_list_keys" {
   response_export_values = [
     "primaryConnectionString"
   ]
-
-  depends_on = [azapi_resource.acs]
 }
 
 # Mark ACS connection string as sensitive locally to prevent exposure in plan output
 locals {
-  acs_connection_string = sensitive(azapi_resource_action.acs_list_keys.output.primaryConnectionString)
+  acs_connection_string = sensitive(data.azapi_resource_action.acs_list_keys.output.primaryConnectionString)
 }
 
 # Store the ACS connection string in Azure Key Vault as a secret
@@ -129,7 +134,7 @@ resource "azurerm_key_vault_secret" "acs_connection_string" {
   expiration_date = timeadd(timestamp(), "720h") # 30 days
 
   depends_on = [
-    azapi_resource_action.acs_list_keys,
+    data.azapi_resource_action.acs_list_keys,
     azurerm_role_assignment.keyvault_backend_secrets,
     azurerm_role_assignment.keyvault_admin
   ]
