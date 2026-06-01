@@ -251,19 +251,24 @@ jobs:
       - name: 📊 Extract Safe Summary
         id: summary
         run: |
-          # Count resource operations without exposing values
-          CREATES=$(grep -ciE '^\s*create' preview-output.txt || echo "0")
-          UPDATES=$(grep -ciE '^\s*update' preview-output.txt || echo "0")
-          DELETES=$(grep -ciE '^\s*delete' preview-output.txt || echo "0")
-          REPLACES=$(grep -ciE '^\s*replace' preview-output.txt || echo "0")
-          NO_CHANGES=$(grep -ciE 'no changes|up-to-date|unchanged' preview-output.txt || echo "0")
-          
-          echo "creates=$CREATES" >> $GITHUB_OUTPUT
-          echo "updates=$UPDATES" >> $GITHUB_OUTPUT
-          echo "deletes=$DELETES" >> $GITHUB_OUTPUT
-          echo "replaces=$REPLACES" >> $GITHUB_OUTPUT
-          echo "no_changes=$NO_CHANGES" >> $GITHUB_OUTPUT
-          
+          # grep -c always prints a count AND exits 1 on zero matches; capture
+          # with `|| true` so the non-zero exit is swallowed without echoing a
+          # second "0" (which produced multi-line $GITHUB_OUTPUT and the
+          # "Invalid format '0'" runner error).
+          count() { grep -ciE "$1" preview-output.txt 2>/dev/null || true; }
+
+          CREATES=$(count '^\s*create')
+          UPDATES=$(count '^\s*update')
+          DELETES=$(count '^\s*delete')
+          REPLACES=$(count '^\s*replace')
+          NO_CHANGES=$(count 'no changes|up-to-date|unchanged')
+
+          echo "creates=${CREATES:-0}" >> "$GITHUB_OUTPUT"
+          echo "updates=${UPDATES:-0}" >> "$GITHUB_OUTPUT"
+          echo "deletes=${DELETES:-0}" >> "$GITHUB_OUTPUT"
+          echo "replaces=${REPLACES:-0}" >> "$GITHUB_OUTPUT"
+          echo "no_changes=${NO_CHANGES:-0}" >> "$GITHUB_OUTPUT"
+
           # Clean up — do not persist raw plan output as an artifact
           rm -f preview-output.txt
 

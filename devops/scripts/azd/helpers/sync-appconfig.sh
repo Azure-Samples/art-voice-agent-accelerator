@@ -182,7 +182,12 @@ set_kv "azure/speech/resource-id" "$(get_azd_value AZURE_SPEECH_RESOURCE_ID)" &&
 # Azure Communication Services
 set_kv "azure/acs/endpoint" "$(get_azd_value ACS_ENDPOINT)" && ((++count)) || errors+=("azure/acs/endpoint")
 set_kv "azure/acs/immutable-id" "$(get_azd_value ACS_IMMUTABLE_ID)" && ((++count)) || errors+=("azure/acs/immutable-id")
-set_kv_ref "azure/acs/connection-string" "acs-connection-string" && ((++count)) || errors+=("azure/acs/connection-string")
+# NOTE: ACS now authenticates Call Automation via the backend user-assigned managed
+# identity (Microsoft Entra ID), not the access-key connection string. The app uses
+# the endpoint + managed identity when ACS_CONNECTION_STRING is absent. We therefore
+# intentionally DO NOT sync azure/acs/connection-string. If you ever revert to
+# access-key auth, re-enable the line below AND grant the backend UAMI access removed.
+# set_kv_ref "azure/acs/connection-string" "acs-connection-string" && ((++count)) || errors+=("azure/acs/connection-string")
 set_kv "azure/acs/email-sender-address" "$(get_azd_value AZURE_EMAIL_SENDER_ADDRESS)" && ((++count)) || errors+=("azure/acs/email-sender-address")
 
 # Redis

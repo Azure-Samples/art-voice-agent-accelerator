@@ -129,6 +129,14 @@ class ScenarioExpectations(BaseModel):
         None,
         description="Maximum allowed E2E latency in milliseconds",
     )
+    max_tts_first_chunk_ms: Optional[int] = Field(
+        None,
+        description=(
+            "Maximum allowed time-to-first-audio-chunk in milliseconds. "
+            "Validates streaming TTS dispatch latency (lower = snappier "
+            "perceived response)."
+        ),
+    )
 
 
 __all__ = [

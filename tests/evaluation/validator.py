@@ -147,7 +147,7 @@ class ExpectationValidator:
         # Copy existing full-format fields (backward compat)
         for key in ["tools_called", "tools_optional", "tools_forbidden", "handoff",
                     "no_handoff", "response_constraints", "grounding_required",
-                    "min_grounded_ratio", "max_latency_ms"]:
+                    "min_grounded_ratio", "max_latency_ms", "max_tts_first_chunk_ms"]:
             if key in expectations:
                 normalized[key] = expectations[key]
 
@@ -201,6 +201,10 @@ class ExpectationValidator:
             # max_latency -> max_latency_ms
             if "max_latency" in expect:
                 normalized["max_latency_ms"] = expect["max_latency"]
+
+            # max_tts_first_chunk -> max_tts_first_chunk_ms
+            if "max_tts_first_chunk" in expect:
+                normalized["max_tts_first_chunk_ms"] = expect["max_tts_first_chunk"]
 
             # min_grounded -> min_grounded_ratio
             if "min_grounded" in expect:
@@ -389,6 +393,24 @@ class ExpectationValidator:
                     message=f"Latency {turn.e2e_ms:.0f}ms exceeds threshold {exp.max_latency_ms}ms" if not within_latency else f"Latency {turn.e2e_ms:.0f}ms within threshold",
                     expected=exp.max_latency_ms,
                     actual=turn.e2e_ms,
+                )
+            )
+
+        # 8. TTS first-chunk latency check (time-to-first-audio proxy)
+        if exp.max_tts_first_chunk_ms and turn.tts_first_chunk_ms is not None:
+            within_ttfa = turn.tts_first_chunk_ms <= exp.max_tts_first_chunk_ms
+            checks.append(
+                ValidationResult(
+                    turn_id=turn_id,
+                    check_name="max_tts_first_chunk_ms",
+                    passed=within_ttfa,
+                    message=(
+                        f"TTS first chunk {turn.tts_first_chunk_ms:.0f}ms exceeds threshold {exp.max_tts_first_chunk_ms}ms"
+                        if not within_ttfa
+                        else f"TTS first chunk {turn.tts_first_chunk_ms:.0f}ms within threshold"
+                    ),
+                    expected=exp.max_tts_first_chunk_ms,
+                    actual=turn.tts_first_chunk_ms,
                 )
             )
 

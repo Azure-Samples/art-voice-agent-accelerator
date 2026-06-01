@@ -274,6 +274,10 @@
         "max_latency_ms": {
           "type": "integer",
           "description": "Maximum E2E latency in milliseconds"
+        },
+        "max_tts_first_chunk_ms": {
+          "type": "integer",
+          "description": "Maximum time-to-first-audio-chunk in milliseconds (cascade streaming TTS dispatch)"
         }
       }
     },

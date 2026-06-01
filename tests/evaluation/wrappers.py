@@ -126,6 +126,7 @@ class EvaluationOrchestratorWrapper:
         wrapped_on_tool_start = self._wrap_tool_start_callback(on_tool_start)
         wrapped_on_tool_end = self._wrap_tool_end_callback(on_tool_end)
         wrapped_on_agent_switch = self._wrap_agent_switch_callback(on_agent_switch)
+        wrapped_on_tts_chunk = self._wrap_tts_chunk_callback(on_tts_chunk)
 
         # Register agent switch callback (must be set before process_turn)
         if hasattr(self._orchestrator, "set_on_agent_switch"):
@@ -135,7 +136,7 @@ class EvaluationOrchestratorWrapper:
         try:
             result = await self._orchestrator.process_turn(
                 context,
-                on_tts_chunk=on_tts_chunk,
+                on_tts_chunk=wrapped_on_tts_chunk,
                 on_tool_start=wrapped_on_tool_start,
                 on_tool_end=wrapped_on_tool_end,
                 **kwargs,
@@ -235,6 +236,33 @@ class EvaluationOrchestratorWrapper:
             # Call original callback if exists
             if original_callback:
                 await original_callback(previous_agent, new_agent)
+
+        return wrapped
+
+    def _wrap_tts_chunk_callback(
+        self, original_callback: Optional[Callable]
+    ) -> Callable:
+        """
+        Wrap on_tts_chunk to capture per-chunk timing.
+
+        The recorder uses the first observed chunk timestamp to compute
+        time-to-first-audio (tts_first_chunk_ms) and tracks the running
+        chunk count for the active turn. Always returns a callable so the
+        production orchestrator's dispatch path is uniform (even when no
+        downstream consumer is attached, as in headless scenario runs).
+        """
+
+        async def wrapped(chunk: str):
+            try:
+                self._recorder.record_tts_chunk(
+                    timestamp=time.perf_counter(),
+                    chunk_size=len(chunk) if chunk else 0,
+                )
+            except Exception as e:
+                logger.debug(f"record_tts_chunk failed (non-fatal): {e}")
+
+            if original_callback:
+                await original_callback(chunk)
 
         return wrapped
 

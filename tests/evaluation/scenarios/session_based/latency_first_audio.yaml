@@ -1,0 +1,73 @@
+# yaml-language-server: $schema=../scenario.schema.json
+# Session-Based Evaluation Scenario — Time-to-First-Audio Validation
+# ==================================================================
+#
+# Validates the cascade-mode TTS streaming optimizations that dispatch
+# the first audio chunk on the first clause boundary (comma / semicolon
+# / colon) rather than waiting for a full sentence terminator. Each turn
+# enforces a `max_tts_first_chunk_ms` budget that catches regressions
+# where the dispatcher reverts to waiting for ".!?" before yielding the
+# first chunk.
+#
+# WHY THESE PROMPTS:
+#   The user inputs intentionally elicit long, explanatory answers whose
+#   first sentence is several clauses long ("Sure, I can definitely help
+#   you with that — let me walk you through..."). Without the clause
+#   boundary, the first audio chunk doesn't go out until the first
+#   period, which empirically lands at ~2-3s. With the optimization the
+#   first chunk should leave well under 1.5s.
+
+scenario_name: latency_first_audio
+description: Validates streaming TTS dispatch latency (time-to-first-audio).
+
+session_config:
+  agents:
+    - BankingConcierge
+
+  start_agent: BankingConcierge
+
+  agent_defaults:
+    institution_name: "Contoso Bank"
+    industry: "banking"
+
+agent_overrides:
+  - agent: BankingConcierge
+    model_override:
+      deployment_id: gpt-4o
+      temperature: 0.7
+      # Larger max_tokens lets the model produce the long multi-clause
+      # responses that exercise the first-chunk path.
+      max_tokens: 800
+
+turns:
+  - turn_id: ttfa_explain_overdraft
+    user_input: "Can you explain in detail how overdraft protection works at your bank, including any fees and how it differs from a line of credit?"
+    expectations:
+      # No tools required — this is a long, conversational answer. We
+      # only care about the chunk dispatch timing here.
+      tools_called: []
+      max_tts_first_chunk_ms: 1500
+      max_latency_ms: 8000
+
+  - turn_id: ttfa_explain_wire_vs_ach
+    user_input: "What is the difference between a wire transfer and an ACH transfer? Please walk me through speed, cost, and when I would use each one."
+    expectations:
+      tools_called: []
+      max_tts_first_chunk_ms: 1500
+      max_latency_ms: 8000
+
+  - turn_id: ttfa_explain_apr_vs_apy
+    user_input: "I keep seeing APR and APY on different products. Can you explain the difference and why it matters when comparing accounts?"
+    expectations:
+      tools_called: []
+      max_tts_first_chunk_ms: 1500
+      max_latency_ms: 8000
+
+# Aggregate thresholds — looser than per-turn because the scorer reports
+# p50/p95/p99 across the run and we want any single warm-up turn to be
+# absorbed by the percentile.
+thresholds:
+  min_tool_precision: 1.0
+  min_tool_recall: 1.0
+  min_grounded_ratio: 0.0
+  max_latency_p95_ms: 8000

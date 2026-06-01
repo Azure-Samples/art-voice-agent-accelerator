@@ -108,17 +108,22 @@ resource "azapi_resource_action" "acs_list_keys" {
   resource_id = azapi_resource.acs.id
   action      = "listKeys"
 
-  response_export_values = {
-    primary_connection_string = "primaryConnectionString"
-  }
+  response_export_values = [
+    "primaryConnectionString"
+  ]
 
   depends_on = [azapi_resource.acs]
+}
+
+# Mark ACS connection string as sensitive locally to prevent exposure in plan output
+locals {
+  acs_connection_string = sensitive(azapi_resource_action.acs_list_keys.output.primaryConnectionString)
 }
 
 # Store the ACS connection string in Azure Key Vault as a secret
 resource "azurerm_key_vault_secret" "acs_connection_string" {
   name            = "acs-connection-string"
-  value           = azapi_resource_action.acs_list_keys.output.primary_connection_string
+  value           = local.acs_connection_string
   key_vault_id    = azurerm_key_vault.main.id
   content_type    = "text/plain"
   expiration_date = timeadd(timestamp(), "720h") # 30 days
@@ -148,6 +153,28 @@ resource "azurerm_role_assignment" "acs_storage_blob_contributor" {
   depends_on = [
     azapi_resource.acs,
     azurerm_storage_account.main
+  ]
+}
+
+# Grant the backend user-assigned managed identity access to Azure Communication
+# Services so the app can authenticate Call Automation with Microsoft Entra ID
+# (token audience https://communication.azure.com) instead of the access-key /
+# HMAC connection string. This removes the key-rotation drift class of failures
+# (e.g. ACS error 7509 "HMAC-SHA256 validation failed" from a stale key).
+#
+# Role: "Contributor" scoped to the ACS resource only.
+# - Azure Communication Services has no granular built-in data-plane RBAC role,
+#   so Contributor at the resource scope is the supported approach for managed
+#   identity auth. Scope is limited to the single ACS resource (least privilege
+#   at resource granularity).
+resource "azurerm_role_assignment" "acs_backend_contributor" {
+  scope                = azapi_resource.acs.id
+  role_definition_name = "Contributor"
+  principal_id         = azurerm_user_assigned_identity.backend.principal_id
+
+  depends_on = [
+    azapi_resource.acs,
+    azurerm_user_assigned_identity.backend
   ]
 }
 

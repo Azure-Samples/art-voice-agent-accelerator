@@ -1581,6 +1581,17 @@ class CascadeOrchestratorAdapter:
                 sentence_buffer = ""
                 # Primary breaks: sentence endings
                 primary_terms = ".!?"
+                # Secondary breaks: only used for the FIRST chunk so audio
+                # starts ~1 clause earlier. After the first dispatch we revert
+                # to primary-only — each TTS chunk pays a fresh TTFA through
+                # the speech serialization lock, so over-fragmenting later
+                # chunks would add cumulative latency.
+                secondary_terms = ",;:"
+                # Minimum characters before a secondary boundary is eligible.
+                # Avoids dispatching "Sure," (5 chars) alone — wait until the
+                # clause is long enough that the audio is meaningful.
+                FIRST_CHUNK_MIN_CHARS = 25
+                first_chunk_dispatched = False
 
                 def _put_chunk(text: str) -> None:
                     """Thread-safe put to async queue."""
@@ -1601,7 +1612,7 @@ class CascadeOrchestratorAdapter:
 
                 def _streaming_completion():
                     """Run in thread - consumes OpenAI stream."""
-                    nonlocal sentence_buffer, tool_call_detected, handoff_tool_detected
+                    nonlocal sentence_buffer, tool_call_detected, handoff_tool_detected, first_chunk_dispatched
                     # Attach the parent span context in the thread
                     token = otel_context.attach(current_context)
                     try:
@@ -1718,15 +1729,23 @@ class CascadeOrchestratorAdapter:
                                     sentence_buffer += self._sanitize_tts_text(text)
 
                                     # Dispatch only on sentence boundaries.
+                                    # First chunk also accepts a clause boundary
+                                    # (comma/semicolon/colon) once the buffer is
+                                    # long enough — gets audio out ~1 clause earlier.
                                     while True:
                                         term_idx = self._find_tts_boundary(
                                             sentence_buffer, primary_terms, 0
                                         )
+                                        if term_idx < 0 and not first_chunk_dispatched and len(sentence_buffer) >= FIRST_CHUNK_MIN_CHARS:
+                                            term_idx = self._find_tts_boundary(
+                                                sentence_buffer, secondary_terms, FIRST_CHUNK_MIN_CHARS
+                                            )
                                         if term_idx < 0:
                                             break
                                         dispatch, sentence_buffer = self._split_tts_buffer(
                                             sentence_buffer, term_idx + 1
                                         )
+                                        first_chunk_dispatched = True
                                         _put_chunk(dispatch)
 
                             logger.debug("OpenAI stream completed | chunks=%d", chunk_count)
