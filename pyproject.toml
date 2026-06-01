@@ -37,8 +37,8 @@ dependencies = [
     "redis>=5.0.0",
     "redis-entraid>=1.0.0",
     "aiohttp>=3.13.3",
-    "python-multipart>=0.0.6",
-    "pyjwt",
+    "python-multipart>=0.0.27",
+    "pyjwt>=2.12.0",
     # Azure services
     "azure-cosmos>=4.5.0",
     "azure-identity>=1.15.0",
@@ -67,7 +67,7 @@ dependencies = [
     "opentelemetry-instrumentation-urllib3==0.58b0",
     # Azure + misc
     "azure-core>=1.38.0",
-    "urllib3>=2.6.3",
+    "urllib3>=2.7.0",
     "colorama>=0.4.6",
     # AI and OpenAI integration
     "openai>=1.50.0",
@@ -103,7 +103,7 @@ dev = [
     "pytest-cov",
     "anyio",
     # Code quality
-    "black[jupyter]==25.1.0",
+    "black[jupyter]>=26.3.1",
     "isort==5.9.3",
     "flake8==3.9.2",
     "ruff",
@@ -147,7 +147,7 @@ dev-all = [
     "pytest-cov",
     "anyio",
     # Code quality
-    "black[jupyter]==25.1.0",
+    "black[jupyter]>=26.3.1",
     "isort==5.9.3",
     "flake8==3.9.2",
     "ruff",
