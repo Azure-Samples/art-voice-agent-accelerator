@@ -103,12 +103,37 @@ class EventRecorder:
             "user_text": user_text,
             "start_ts": timestamp,
             "context": context or {},
+            "tts_first_chunk_ts": None,
+            "tts_chunk_count": 0,
         }
         self._tool_calls = {}
         self._evidence_blobs = []
         self._handoff = None
 
         logger.debug(f"Turn start | turn_id={turn_id} agent={agent}")
+
+    def record_tts_chunk(self, timestamp: float, chunk_size: Optional[int] = None) -> None:
+        """
+        Record a TTS chunk dispatch.
+
+        First call captures the time-to-first-audio-chunk proxy; subsequent
+        calls only bump the count. Cheap and non-blocking — safe to invoke
+        from any callback that already runs in the eval path.
+
+        Args:
+            timestamp: perf_counter timestamp when chunk was dispatched.
+            chunk_size: optional char count (ignored today, reserved for
+                future per-chunk size aggregation).
+        """
+        if not self._current_turn:
+            # Defensive: chunk arrived outside of an active turn. Drop it
+            # rather than crash — the wrapper guards against this too.
+            return
+        if self._current_turn.get("tts_first_chunk_ts") is None:
+            self._current_turn["tts_first_chunk_ts"] = timestamp
+        self._current_turn["tts_chunk_count"] = int(
+            self._current_turn.get("tts_chunk_count", 0)
+        ) + 1
 
     def record_tool_start(self, tool_name: str, arguments: Any, timestamp: float):
         """
@@ -277,15 +302,26 @@ class EventRecorder:
             finalized_tool_calls.append(ToolCall(**tc))
 
         # Build TurnEvent
+        turn_start_ts = self._current_turn.get("start_ts", timestamp)
+        first_chunk_ts = self._current_turn.get("tts_first_chunk_ts")
+        tts_first_chunk_ms = (
+            (first_chunk_ts - turn_start_ts) * 1000
+            if first_chunk_ts is not None
+            else None
+        )
+        tts_chunk_count = self._current_turn.get("tts_chunk_count") or None
+
         event = TurnEvent(
             session_id=self.run_id,
             turn_id=turn_id,
             scenario_name=None,  # Set by ScenarioRunner if applicable
-            user_end_ts=self._current_turn.get("start_ts", timestamp),
+            user_end_ts=turn_start_ts,
             agent_first_output_ts=timestamp - (ttft_ms / 1000 if ttft_ms else 0),
             agent_last_output_ts=timestamp,
             e2e_ms=e2e_ms,
             ttft_ms=ttft_ms,
+            tts_first_chunk_ms=tts_first_chunk_ms,
+            tts_chunk_count=tts_chunk_count,
             agent_name=agent,
             previous_agent=(
                 self._handoff.source_agent if self._handoff else None

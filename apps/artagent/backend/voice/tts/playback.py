@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
+import os
 import uuid
 from collections.abc import Callable
 from functools import partial
@@ -40,6 +42,17 @@ if TYPE_CHECKING:
 # Audio sample rates
 SAMPLE_RATE_BROWSER = 48000  # Browser WebAudio prefers 48kHz
 SAMPLE_RATE_ACS = 16000  # ACS telephony uses 16kHz
+
+# Streaming synthesis: when enabled, audio chunks are sent to the transport as
+# Azure renders them (low time-to-first-audio) instead of waiting for the entire
+# utterance. Toggle off (CASCADE_TTS_STREAMING=false) to fall back to blocking
+# synthesize-then-stream without a code change.
+_STREAMING_ENABLED = os.getenv("CASCADE_TTS_STREAMING", "true").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 
 logger = get_logger("voice.tts.playback")
 
@@ -358,6 +371,14 @@ class TTSPlayback:
                     )
                     return False
 
+                # Streaming path: synthesize and send interleaved (low TTFA).
+                # Held under lock for the full duration since synthesis and
+                # transmission are pipelined together.
+                if _STREAMING_ENABLED and hasattr(synth, "synthesize_to_pcm_stream"):
+                    return await self._stream_synth_to_browser(
+                        synth, text, voice_name, style, rate, on_first_audio, run_id
+                    )
+
                 # Synthesize audio (under lock)
                 pcm_bytes = await self._synthesize(
                     synth, text, voice_name, style, rate, SAMPLE_RATE_BROWSER
@@ -457,6 +478,17 @@ class TTSPlayback:
 
                 # Synthesize audio (under lock)
                 logger.info("[%s] ACS TTS: Starting synthesis at %dHz", self._session_short, SAMPLE_RATE_ACS)
+
+                # Streaming path: synthesize and send interleaved (low TTFA).
+                # Held under lock for the full duration since synthesis and
+                # transmission are pipelined together.
+                if _STREAMING_ENABLED and hasattr(synth, "synthesize_to_pcm_stream"):
+                    result = await self._stream_synth_to_acs(
+                        synth, text, voice_name, style, rate, blocking, on_first_audio, run_id
+                    )
+                    logger.info("[%s] ACS TTS: Stream complete, result=%s", self._session_short, result)
+                    return result
+
                 pcm_bytes = await self._synthesize(
                     synth, text, voice_name, style, rate, SAMPLE_RATE_ACS
                 )
@@ -558,6 +590,246 @@ class TTSPlayback:
             logger.warning("[%s] Synthesis returned None/empty", self._session_short)
 
         return result
+
+    async def _iter_synth_chunks(
+        self,
+        synth: Any,
+        text: str,
+        voice: str,
+        style: str,
+        rate: str,
+        sample_rate: int,
+    ):
+        """
+        Async-iterate raw PCM chunks from the blocking streaming generator.
+
+        Runs ``synth.synthesize_to_pcm_stream`` (a synchronous generator that
+        blocks on Azure ``read_data``) inside the speech executor and bridges
+        its output to the event loop via a queue, yielding PCM byte chunks as
+        they are produced. Honors barge-in by stopping the producer when the
+        cancel event is set.
+        """
+        loop = asyncio.get_running_loop()
+        executor = getattr(self._app_state, "speech_executor", None)
+        queue: asyncio.Queue = asyncio.Queue()
+        sentinel = object()
+
+        def _producer() -> None:
+            try:
+                for chunk in synth.synthesize_to_pcm_stream(
+                    text=text,
+                    voice=voice,
+                    sample_rate=sample_rate,
+                    style=style,
+                    rate=rate,
+                ):
+                    if self._cancel_event.is_set():
+                        break
+                    loop.call_soon_threadsafe(queue.put_nowait, chunk)
+            except Exception as exc:  # surface to consumer
+                loop.call_soon_threadsafe(queue.put_nowait, exc)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, sentinel)
+
+        producer_future = loop.run_in_executor(executor, _producer)
+        try:
+            while True:
+                item = await queue.get()
+                if item is sentinel:
+                    break
+                if isinstance(item, Exception):
+                    raise item
+                yield item
+        finally:
+            with contextlib.suppress(Exception):
+                await producer_future
+
+    async def _stream_synth_to_browser(
+        self,
+        synth: Any,
+        text: str,
+        voice: str,
+        style: str,
+        rate: str,
+        on_first_audio: Callable[[], None] | None,
+        run_id: str,
+    ) -> bool:
+        """Synthesize and stream PCM to the browser WebSocket as it is produced."""
+        chunk_size = 4800  # 100ms at 48kHz mono 16-bit
+        buffer = bytearray()
+        first_sent = False
+        frame_index = 0
+        total_bytes = 0
+
+        logger.info("[%s] Browser TTS (streaming) START (run=%s)", self._session_short, run_id)
+
+        async def _send_frame(frame: bytes, is_final: bool) -> bool:
+            nonlocal first_sent, frame_index
+            if not _ws_is_connected(self._ws):
+                logger.warning("[%s] Browser stream aborted: WebSocket disconnected", self._session_short)
+                return False
+            await self._ws.send_json(
+                {
+                    "type": "audio_data",
+                    "data": base64.b64encode(frame).decode("utf-8"),
+                    "sample_rate": SAMPLE_RATE_BROWSER,
+                    "frame_index": frame_index,
+                    # total_frames is unknown while streaming; the frontend only
+                    # uses it for cosmetic logging, not playback control.
+                    "total_frames": 0,
+                    "is_final": is_final,
+                }
+            )
+            frame_index += 1
+            if not first_sent:
+                first_sent = True
+                if on_first_audio:
+                    with contextlib.suppress(Exception):
+                        on_first_audio()
+            await asyncio.sleep(0)
+            return True
+
+        try:
+            async for pcm in self._iter_synth_chunks(
+                synth, text, voice, style, rate, SAMPLE_RATE_BROWSER
+            ):
+                if self._cancel_event.is_set():
+                    self._cancel_event.clear()
+                    logger.debug("[%s] Browser stream cancelled", self._session_short)
+                    return False
+                buffer.extend(pcm)
+                total_bytes += len(pcm)
+                while len(buffer) >= chunk_size:
+                    frame = bytes(buffer[:chunk_size])
+                    del buffer[:chunk_size]
+                    if not await _send_frame(frame, is_final=False):
+                        return False
+        except Exception as e:
+            logger.error("[%s] Browser streaming synthesis failed: %s", self._session_short, e)
+            return False
+
+        # Flush remaining tail as the final frame.
+        if buffer:
+            if not await _send_frame(bytes(buffer), is_final=True):
+                return False
+
+        if total_bytes:
+            add_speech_tts_metrics(
+                voice=voice,
+                audio_size_bytes=total_bytes,
+                text_length=len(text),
+                sample_rate=SAMPLE_RATE_BROWSER,
+            )
+
+        logger.info(
+            "[%s] Browser TTS (streaming) complete: %d bytes, %d frames (run=%s)",
+            self._session_short,
+            total_bytes,
+            frame_index,
+            run_id,
+        )
+        return total_bytes > 0
+
+    async def _stream_synth_to_acs(
+        self,
+        synth: Any,
+        text: str,
+        voice: str,
+        style: str,
+        rate: str,
+        blocking: bool,
+        on_first_audio: Callable[[], None] | None,
+        run_id: str,
+    ) -> bool:
+        """Synthesize and stream PCM to the ACS WebSocket as it is produced."""
+        chunk_size = 1280  # 40ms at 16kHz mono 16-bit
+        buffer = bytearray()
+        first_sent = False
+        chunks_sent = 0
+        total_bytes = 0
+
+        if self._ws is None:
+            logger.error("[%s] ACS stream ERROR: WebSocket is None!", self._session_short)
+            return False
+
+        logger.info(
+            "[%s] ACS stream (streaming) START (chunk_size=%d, blocking=%s) ws=%s",
+            self._session_short,
+            chunk_size,
+            blocking,
+            type(self._ws).__name__,
+        )
+
+        async def _send_frame(frame: bytes) -> bool:
+            nonlocal first_sent, chunks_sent
+            if not _ws_is_connected(self._ws):
+                logger.warning("[%s] ACS stream aborted: WebSocket disconnected", self._session_short)
+                return False
+            try:
+                await self._ws.send_json(
+                    {
+                        "kind": "AudioData",
+                        "audioData": {
+                            "data": base64.b64encode(frame).decode("utf-8"),
+                            "timestamp": None,
+                            "participantRawID": None,
+                            "silent": False,
+                        },
+                    }
+                )
+            except Exception as e:
+                logger.error("[%s] ACS stream ERROR sending chunk %d: %s", self._session_short, chunks_sent + 1, e)
+                return False
+            chunks_sent += 1
+            if not first_sent:
+                first_sent = True
+                logger.info("[%s] ACS stream: First chunk sent successfully", self._session_short)
+                if on_first_audio:
+                    with contextlib.suppress(Exception):
+                        on_first_audio()
+            await asyncio.sleep(0.04 if blocking else 0)
+            return True
+
+        try:
+            async for pcm in self._iter_synth_chunks(
+                synth, text, voice, style, rate, SAMPLE_RATE_ACS
+            ):
+                if self._cancel_event.is_set():
+                    self._cancel_event.clear()
+                    logger.debug("[%s] ACS stream cancelled", self._session_short)
+                    return False
+                buffer.extend(pcm)
+                total_bytes += len(pcm)
+                while len(buffer) >= chunk_size:
+                    frame = bytes(buffer[:chunk_size])
+                    del buffer[:chunk_size]
+                    if not await _send_frame(frame):
+                        return False
+        except Exception as e:
+            logger.error("[%s] ACS streaming synthesis failed: %s", self._session_short, e)
+            return False
+
+        # Flush remaining tail (sent as-is, matching the blocking path).
+        if buffer:
+            if not await _send_frame(bytes(buffer)):
+                return False
+
+        if total_bytes:
+            add_speech_tts_metrics(
+                voice=voice,
+                audio_size_bytes=total_bytes,
+                text_length=len(text),
+                sample_rate=SAMPLE_RATE_ACS,
+            )
+
+        logger.info(
+            "[%s] ACS stream (streaming) COMPLETE: %d chunks sent, %d bytes total (run=%s)",
+            self._session_short,
+            chunks_sent,
+            total_bytes,
+            run_id,
+        )
+        return total_bytes > 0
 
     async def _stream_to_browser(
         self,

@@ -79,7 +79,9 @@ GREETING: str = (
 
 # These can be overridden by environment variables in app_settings.py
 DEFAULT_VAD_SEMANTIC_SEGMENTATION: bool = False
-DEFAULT_SILENCE_DURATION_MS: int = 1300
+# 500ms matches VoiceLive's turn_detection.silence_duration_ms for parity.
+# Lower = faster end-of-utterance but higher risk of cutting off slow speakers.
+DEFAULT_SILENCE_DURATION_MS: int = 500
 DEFAULT_DTMF_VALIDATION_ENABLED: bool = False
 DEFAULT_ENABLE_AUTH_VALIDATION: bool = False
 

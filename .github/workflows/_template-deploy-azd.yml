@@ -232,12 +232,15 @@ jobs:
         id: preview
         run: |
           echo "🔍 Running azd provision --preview..."
+          # Capture preview output but do NOT print it to logs (may contain sensitive values)
           if azd provision --no-prompt --preview > preview-output.txt 2>&1; then
             echo "success=true" >> $GITHUB_OUTPUT
           else
             echo "success=false" >> $GITHUB_OUTPUT
           fi
-          cat preview-output.txt
+          # Extract safe summary counts only — never expose raw plan output
+          echo "📊 Preview summary:"
+          grep -cE '^\s*(Create|Update|Delete|Replace|No changes)' preview-output.txt || echo "  (no resource change lines detected)"
         env:
           ARM_CLIENT_ID: ${{ env.AZURE_CLIENT_ID }}
           ARM_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
@@ -245,28 +248,56 @@ jobs:
           ARM_USE_OIDC: ${{ env.USE_OIDC }}
           ARM_CLIENT_SECRET: ${{ env.USE_OIDC == 'false' && env.AZURE_CLIENT_SECRET || '' }}
 
+      - name: 📊 Extract Safe Summary
+        id: summary
+        run: |
+          # grep -c always prints a count AND exits 1 on zero matches; capture
+          # with `|| true` so the non-zero exit is swallowed without echoing a
+          # second "0" (which produced multi-line $GITHUB_OUTPUT and the
+          # "Invalid format '0'" runner error).
+          count() { grep -ciE "$1" preview-output.txt 2>/dev/null || true; }
+
+          CREATES=$(count '^\s*create')
+          UPDATES=$(count '^\s*update')
+          DELETES=$(count '^\s*delete')
+          REPLACES=$(count '^\s*replace')
+          NO_CHANGES=$(count 'no changes|up-to-date|unchanged')
+
+          echo "creates=${CREATES:-0}" >> "$GITHUB_OUTPUT"
+          echo "updates=${UPDATES:-0}" >> "$GITHUB_OUTPUT"
+          echo "deletes=${DELETES:-0}" >> "$GITHUB_OUTPUT"
+          echo "replaces=${REPLACES:-0}" >> "$GITHUB_OUTPUT"
+          echo "no_changes=${NO_CHANGES:-0}" >> "$GITHUB_OUTPUT"
+
+          # Clean up — do not persist raw plan output as an artifact
+          rm -f preview-output.txt
+
       - name: 💬 Comment on PR
         uses: actions/github-script@v7
         continue-on-error: true
         with:
           script: |
-            const fs = require('fs');
-            let preview = 'No preview output available.';
-            try { preview = fs.readFileSync('preview-output.txt', 'utf8'); } catch {}
-            if (preview.length > 60000) preview = preview.slice(0, 60000) + '\n...[truncated]';
-            
             const success = '${{ steps.preview.outputs.success }}' === 'true';
-            const body = `## 🏗️ Infrastructure Preview ${success ? '✅' : '⚠️'}
+            const creates = '${{ steps.summary.outputs.creates }}';
+            const updates = '${{ steps.summary.outputs.updates }}';
+            const deletes = '${{ steps.summary.outputs.deletes }}';
+            const replaces = '${{ steps.summary.outputs.replaces }}';
             
-            **Environment:** \`${{ inputs.environment }}\`
-
-            <details>
-            <summary>Preview Output</summary>
-
-            \`\`\`
-            ${preview}
-            \`\`\`
-            </details>`;
+            const body = [
+              `## 🏗️ Infrastructure Preview ${success ? '✅' : '⚠️'}`,
+              '',
+              `**Environment:** \`${{ inputs.environment }}\``,
+              '',
+              '| Operation | Count |',
+              '|-----------|-------|',
+              `| ➕ Create | ${creates} |`,
+              `| ✏️ Update | ${updates} |`,
+              `| 🔄 Replace | ${replaces} |`,
+              `| ❌ Delete | ${deletes} |`,
+              '',
+              '> **Note:** Full plan output is available in the workflow run logs (accessible to repository collaborators only).',
+              '> Raw plan values are not posted to PRs to prevent exposure of sensitive infrastructure details.',
+            ].join('\n');
             
             await github.rest.issues.createComment({
               issue_number: context.issue.number,
@@ -280,6 +311,13 @@ jobs:
           echo "## 📋 Preview Complete" >> $GITHUB_STEP_SUMMARY
           echo "**Environment:** \`${{ inputs.environment }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Status:** ${{ steps.preview.outputs.success == 'true' && '✅ Success' || '⚠️ Check logs' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Operation | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Create | ${{ steps.summary.outputs.creates }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Update | ${{ steps.summary.outputs.updates }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Replace | ${{ steps.summary.outputs.replaces }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Delete | ${{ steps.summary.outputs.deletes }} |" >> $GITHUB_STEP_SUMMARY
 
   # ============================================================================
   # JOB: EXECUTE - Run AZD Commands (provision/deploy/up/down)

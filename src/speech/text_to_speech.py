@@ -2021,6 +2021,150 @@ class SpeechSynthesizer:
             raise RuntimeError(f"TTS failed: {last_result.reason}")
         raise RuntimeError(f"TTS failed: {last_error_details or 'unknown error'}")
 
+    def synthesize_to_pcm_stream(
+        self,
+        text: str,
+        voice: str = None,
+        sample_rate: int = 16000,
+        style: str = None,
+        rate: str = None,
+        read_chunk_bytes: int = 3200,
+    ):
+        """
+        Stream-synthesize ``text`` to raw PCM, yielding byte chunks as Azure
+        produces them (low time-to-first-audio).
+
+        Unlike :meth:`synthesize_to_pcm` — which blocks on ``speak_ssml_async().get()``
+        until the *entire* utterance is rendered before returning any bytes — this
+        method uses ``start_speaking_ssml_async`` + ``AudioDataStream.read_data`` to
+        pull audio incrementally. The first chunk is typically available within
+        ~100-200 ms instead of after the full sentence, which is the dominant
+        latency source in the SpeechCascade TTS hot path.
+
+        Args:
+            text: Text to synthesize.
+            voice: Voice name (defaults to ``self.voice``).
+            sample_rate: 16000, 24000, or 48000.
+            style: Voice style (defaults to "chat" to match ``synthesize_to_pcm``).
+            rate: Speech rate (defaults to "+3%" to match ``synthesize_to_pcm``).
+            read_chunk_bytes: Size of the SDK read buffer per ``read_data`` call.
+
+        Yields:
+            bytes: Raw little-endian 16-bit mono PCM chunks at ``sample_rate``.
+
+        Raises:
+            RuntimeError: If synthesis is canceled before any audio is produced.
+        """
+        voice = voice or self.voice
+
+        if style is None:
+            style_to_apply = "chat"
+        else:
+            style_to_apply = style.strip() or None
+
+        if rate is None:
+            rate_to_apply = "+3%"
+        else:
+            rate_to_apply = rate.strip() or None
+
+        # Build SSML identically to synthesize_to_pcm so streamed audio matches
+        # the blocking path byte-for-byte (same prosody/style envelope).
+        sanitized_text = self._sanitize(text)
+        inner_content = sanitized_text
+        if rate_to_apply:
+            inner_content = f'<prosody rate="{rate_to_apply}">{inner_content}</prosody>'
+        if style_to_apply:
+            inner_content = (
+                f'<mstts:express-as style="{style_to_apply}">{inner_content}</mstts:express-as>'
+            )
+
+        ssml = f"""<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="https://www.w3.org/2001/mstts" xml:lang="en-US">
+    <voice name="{voice}">
+        {inner_content}
+    </voice>
+</speak>"""
+
+        output_format = {
+            16000: speechsdk.SpeechSynthesisOutputFormat.Raw16Khz16BitMonoPcm,
+            24000: speechsdk.SpeechSynthesisOutputFormat.Raw24Khz16BitMonoPcm,
+            48000: speechsdk.SpeechSynthesisOutputFormat.Raw48Khz16BitMonoPcm,
+        }[sample_rate]
+
+        max_attempts = 2  # initial attempt + one auth-refresh retry
+        for attempt in range(max_attempts):
+            speech_config = self._create_speech_config()
+            speech_config.speech_synthesis_voice_name = voice
+            speech_config.set_speech_synthesis_output_format(output_format)
+
+            synthesizer = speechsdk.SpeechSynthesizer(
+                speech_config=speech_config, audio_config=None
+            )
+
+            # start_speaking_* returns as soon as synthesis BEGINS (not when it
+            # completes), unlocking incremental reads from the audio stream.
+            result = synthesizer.start_speaking_ssml_async(ssml).get()
+            audio_stream = speechsdk.AudioDataStream(result)
+
+            produced = False
+            while True:
+                # Allocate a FRESH buffer per read. Reusing one immutable
+                # ``bytes`` object across ``read_data`` calls inside a generator
+                # makes the SDK's ctypes writes (c_char_p, argtypes=None) fail to
+                # land back in the object we read from across ``yield`` suspension
+                # boundaries — every chunk comes back as silence. A fresh buffer
+                # per call yields byte-for-byte the same audio as the blocking
+                # path. Do NOT hoist this out of the loop.
+                buffer = bytes(read_chunk_bytes)
+                filled = audio_stream.read_data(buffer)
+                if filled == 0:
+                    break
+                produced = True
+                yield bytes(buffer[:filled])
+
+            # read_data returns 0 on completion OR cancellation. Inspect status.
+            if audio_stream.status == speechsdk.StreamStatus.Canceled:
+                details = audio_stream.cancellation_details
+                error_details = getattr(details, "error_details", "") if details else ""
+
+                # Only safe to retry if nothing has been emitted yet (otherwise the
+                # consumer has already played partial audio and a restart would dupe).
+                if (
+                    not produced
+                    and attempt < max_attempts - 1
+                    and self._is_auth_error_details(error_details)
+                    and self.refresh_authentication()
+                ):
+                    logger.info("Retrying streaming PCM synthesis with refreshed authentication")
+                    continue
+
+                error_msg = (
+                    f"Streaming TTS canceled: reason="
+                    f"{getattr(details, 'reason', 'unknown')} error={error_details or 'none'}"
+                )
+                if produced:
+                    # Partial audio already streamed; log and stop rather than raise
+                    # so the turn degrades gracefully instead of erroring mid-utterance.
+                    logger.warning(error_msg)
+                    return
+                raise RuntimeError(error_msg)
+
+            # Completed normally (StreamStatus.AllData / NoData).
+            return
+
+    def _is_auth_error_details(self, error_details: str) -> bool:
+        """Return True if a cancellation ``error_details`` string indicates a 401/auth failure."""
+        if not error_details:
+            return False
+        auth_error_indicators = (
+            "401",
+            "Authentication error",
+            "WebSocket upgrade failed: Authentication error",
+            "unauthorized",
+            "Please check subscription information",
+        )
+        lowered = error_details.lower()
+        return any(indicator.lower() in lowered for indicator in auth_error_indicators)
+
     @staticmethod
     def split_pcm_to_base64_frames(pcm_bytes: bytes, sample_rate: int = 16000) -> list[str]:
         import base64

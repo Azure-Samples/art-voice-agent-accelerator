@@ -1,0 +1,53 @@
+{
+  "name": "Azure Real-Time (ART) Agent Accelerator",
+  "description": "Real-time, multi-agent voice accelerator on Azure using ACS, Speech, and Azure OpenAI with FastAPI/WebSocket orchestration.",
+  "maturity": "Gold",
+  "region": "AMER",
+  "industry": "Cross",
+  "owner": [
+    "faliakbar",
+    "jinle",
+    "pablosal"
+  ],
+  "pattern": [
+    "Voice",
+  ],
+  "services": [
+    "Azure OpenAI",
+    "Azure AI Speech Services",
+    "Azure Communication Services",
+    "Azure Container Apps",
+    "Azure Cosmos DB",
+    "Azure Cache for Redis",
+    "Azure Storage",
+    "Azure Key Vault",
+    "Azure App Configuration",
+    "Azure Monitor"
+  ],
+  "tags": [
+    "realtime",
+    "voice",
+    "multi-agent",
+    "telephony",
+    "azure"
+  ],
+  "version": "2.0.0",
+  "createdDate": "2025-12-01",
+  "lastUpdated": "2026-04-08",
+  "license": "MIT",
+  "repository": {
+    "url": "https://github.com/aiappsgbbfactory/art-voice-agent-accelerator",
+    "branch": "main"
+  },
+  "documentation": {
+    "readme": "https://github.com/aiappsgbbfactory/art-voice-agent-accelerator#readme",
+    "architecture": "https://github.com/aiappsgbbfactory/art-voice-agent-accelerator?tab=readme-ov-file#the-how-architecture"
+  },
+  "contacts": {
+    "technical": [
+      "faliakbar",
+      "jinle",
+      "pablosal"
+    ]
+  }
+}

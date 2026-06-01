@@ -100,6 +100,18 @@ class TurnEvent(BaseModel):
     agent_last_output_ts: float = Field(..., description="Last output timestamp")
     e2e_ms: float = Field(..., description="End-to-end turn time (milliseconds)")
     ttft_ms: Optional[float] = Field(None, description="Time to first token (milliseconds)")
+    tts_first_chunk_ms: Optional[float] = Field(
+        None,
+        description=(
+            "Time from process_turn start until the first TTS chunk is "
+            "dispatched (milliseconds). Proxy for user-perceived "
+            "time-to-first-audio in the cascade pipeline."
+        ),
+    )
+    tts_chunk_count: Optional[int] = Field(
+        None,
+        description="Number of TTS chunks dispatched during the turn",
+    )
 
     # Agent state
     agent_name: str = Field(..., description="Active agent for this turn")

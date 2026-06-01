@@ -231,10 +231,13 @@ class MetricsScorer:
             turns: List of TurnEvents
 
         Returns:
-            Dict with p50/p95/p99 for e2e and ttft
+            Dict with p50/p95/p99 for e2e, ttft, and tts_first_chunk
         """
         e2e_times = [t.e2e_ms for t in turns if t.e2e_ms is not None]
         ttft_times = [t.ttft_ms for t in turns if t.ttft_ms is not None]
+        tts_first_chunk_times = [
+            t.tts_first_chunk_ms for t in turns if t.tts_first_chunk_ms is not None
+        ]
 
         metrics = {}
 
@@ -248,6 +251,20 @@ class MetricsScorer:
             metrics["ttft_p50_ms"] = float(np.percentile(ttft_times, 50))
             metrics["ttft_p95_ms"] = float(np.percentile(ttft_times, 95))
             metrics["ttft_mean_ms"] = float(np.mean(ttft_times))
+
+        if tts_first_chunk_times:
+            metrics["tts_first_chunk_p50_ms"] = float(
+                np.percentile(tts_first_chunk_times, 50)
+            )
+            metrics["tts_first_chunk_p95_ms"] = float(
+                np.percentile(tts_first_chunk_times, 95)
+            )
+            metrics["tts_first_chunk_p99_ms"] = float(
+                np.percentile(tts_first_chunk_times, 99)
+            )
+            metrics["tts_first_chunk_mean_ms"] = float(
+                np.mean(tts_first_chunk_times)
+            )
 
         return metrics
 

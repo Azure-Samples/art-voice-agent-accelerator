@@ -24,25 +24,65 @@ const workletSource = `
       this.queue = [];
       this.readIndex = 0;
       this.samplesProcessed = 0;
+      // Jitter buffer: streamed TTS arrives chunk-by-chunk paced by synthesis +
+      // network. Starting playback on the first chunk lets the queue drain
+      // between chunks, and outputting silence per render quantum on underrun
+      // produces a fluttery/robotic artifact. Hold a small lead buffer before
+      // starting so brief gaps are absorbed. 100ms is the sweet spot — large
+      // enough to absorb one typical synthesis stall, small enough that
+      // perceived time-to-first-audio stays under VoiceLive's ~200-400ms.
+      this.PREBUFFER_SAMPLES = Math.floor(sampleRate * 0.10);   // ~100ms lead
+      this.MAX_WAIT_FRAMES = Math.floor((sampleRate * 0.16) / 128); // ~160ms cap
+      this.queuedSamples = 0;
+      this.playing = false;
+      this.sawData = false;
+      this.framesWaited = 0;
       this.port.onmessage = (e) => {
         if (e.data?.type === 'push') {
           // payload is Float32Array
           this.queue.push(e.data.payload);
-          console.debug('AudioWorklet: Received audio chunk, queue length:', this.queue.length);
+          this.queuedSamples += e.data.payload.length;
         } else if (e.data?.type === 'clear') {
-          // Clear all queued audio data for immediate interruption
+          // Clear all queued audio data for immediate interruption and re-arm
+          // the jitter buffer for the next utterance.
           this.queue = [];
           this.readIndex = 0;
+          this.queuedSamples = 0;
+          this.playing = false;
+          this.sawData = false;
+          this.framesWaited = 0;
           console.log('AudioWorklet: Audio queue cleared for barge-in');
         }
       };
     }
     process(inputs, outputs) {
       const out = outputs[0][0]; // mono
+
+      // Gate playback start on a minimum lead buffer (or a max wait, so short
+      // utterances below the prebuffer threshold still play promptly). This
+      // gate applies ONLY to the initial start of an utterance.
+      if (!this.playing) {
+        if (this.queuedSamples > 0) this.sawData = true;
+        if (this.sawData) this.framesWaited++;
+        if (
+          this.queuedSamples >= this.PREBUFFER_SAMPLES ||
+          this.framesWaited >= this.MAX_WAIT_FRAMES
+        ) {
+          this.playing = true;
+        } else {
+          out.fill(0);
+          return true;
+        }
+      }
+
       let i = 0;
       while (i < out.length) {
         if (this.queue.length === 0) {
-          // no data: output silence
+          // Underrun: emit silence for the rest of THIS quantum only and keep
+          // playing. Azure streams audio faster than real time, so the queue
+          // refills on its own within a quantum or two. Do NOT re-arm the
+          // 100ms prebuffer here — doing so turns every brief gap into a long
+          // stall, which sounds far choppier than a single silent quantum.
           for (; i < out.length; i++) out[i] = 0;
           break;
         }
@@ -52,6 +92,7 @@ const workletSource = `
         out.set(chunk.subarray(this.readIndex, this.readIndex + toCopy), i);
         i += toCopy;
         this.readIndex += toCopy;
+        this.queuedSamples -= toCopy;
         if (this.readIndex >= chunk.length) {
           this.queue.shift();
           this.readIndex = 0;
@@ -116,7 +157,15 @@ export const useRealTimeVoiceApp = (API_BASE_URL, WS_URL) => {
     if (playbackAudioContextRef.current) return;
     
     try {
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)({});
+      // Pin the playback context to 48000 Hz to match the raw PCM rate the
+      // backend streams (Raw48Khz16BitMonoPcm). The worklet copies samples 1:1
+      // with no resampling, so a context running at the hardware default
+      // (often 44100 Hz on macOS) would play every sample at the wrong rate and
+      // sound robotic/off-pitch. The browser resamples context->hardware on
+      // output transparently and correctly.
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)({
+        sampleRate: 48000,
+      });
 
       if (audioCtx.state === "suspended") {
         await audioCtx.resume();

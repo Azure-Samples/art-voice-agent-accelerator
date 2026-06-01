@@ -884,8 +884,10 @@ class VoiceHandler:
     async def _on_greeting(self, event: SpeechEvent) -> None:
         """Play greeting via TTS and emit to UI."""
         if self._tts and event.text:
-            # Suppress barge-in during greeting
-            if self._thread_bridge:
+            # Only suppress barge-in on ACS (speakerphone echo can trigger false
+            # partials). Browser uses hardware AEC, so allow user to interrupt.
+            suppress = self._thread_bridge and self._transport == TransportType.ACS
+            if suppress:
                 self._thread_bridge.suppress_barge_in()
 
             try:
@@ -900,7 +902,7 @@ class VoiceHandler:
                     voice_rate=event.voice_rate,
                 )
             finally:
-                if self._thread_bridge:
+                if suppress:
                     self._thread_bridge.allow_barge_in()
 
     async def _on_announcement(self, event: SpeechEvent) -> None:
