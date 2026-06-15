@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agents & Scenarios — ART Agent Docs</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/syntax.css">
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a href="index.html" class="logo">◆ <span>ART</span> Agent Docs</a>
+  <nav class="header-nav">
+    <a href="index.html">Home</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="guides.html">Guides</a>
+    <a href="agents.html">Agents</a>
+    <a href="api.html">API</a>
+    <a href="certification.html">Certify</a>
+  </nav>
+  <div class="header-actions">
+    <button class="search-trigger" type="button" aria-label="Search docs (Cmd+K)">
+      <span class="search-trigger-icon" aria-hidden="true">⌕</span>
+      <span class="search-trigger-label">Search docs…</span>
+      <span class="search-trigger-kbd">⌘K</span>
+    </button>
+    <a id="legacy-docs-link" class="legacy-link" href="legacy-site/index.html" title="Original mkdocs documentation site">Legacy ↗</a>
+    <a href="https://github.com/Azure-Samples/art-voice-agent-accelerator" class="gh-link" target="_blank">GitHub ↗</a>
+    <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <h4>Scenarios</h4>
+      <a href="#scenarios" class="active">Overview</a>
+      <a href="#banking">Banking</a>
+      <a href="#insurance">Insurance</a>
+      <a href="#healthcare">Healthcare</a>
+    </div>
+    <div class="sidebar-section">
+      <h4>Agent Catalog</h4>
+      <a href="#cross-domain">Cross-Domain</a>
+      <a href="#banking-agents">Banking</a>
+      <a href="#insurance-agents">Insurance</a>
+    </div>
+    <div class="sidebar-section">
+      <h4>Tools</h4>
+      <a href="#tool-catalog">Tool Catalog</a>
+      <a href="#mcp">MCP Integration</a>
+    </div>
+  </aside>
+
+  <main class="content">
+    <div class="content-inner">
+
+      <h1>Agents & Scenarios</h1>
+      <p class="subtitle">Pre-built agents, industry scenarios, and tool catalog.</p>
+
+      <!-- ==================== Scenarios ==================== -->
+
+      <h2 id="scenarios">Industry Scenarios</h2>
+      <p>A scenario defines: which agents, how they connect, and what the entry point is.</p>
+
+<pre><code><span class="tok-cmt"># Pattern for every scenario</span>
+<span class="tok-attr">start_agent</span>: EntryPoint       <span class="tok-cmt"># Who answers first</span>
+<span class="tok-attr">agents</span>: [...]                 <span class="tok-cmt"># Who participates</span>
+<span class="tok-attr">handoffs</span>: [...]               <span class="tok-cmt"># How they connect</span>
+<span class="tok-attr">agent_defaults</span>: {...}         <span class="tok-cmt"># Shared variables</span></code></pre>
+
+      <table>
+        <thead><tr><th>Scenario</th><th>Entry Agent</th><th>Pattern</th><th>Agents</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Banking</strong></td><td>BankingConcierge</td><td>Hub &amp; spoke</td><td>5 (Cards, Fraud, Investment, KB, Auth)</td></tr>
+          <tr><td><strong>Insurance</strong></td><td>AuthAgent</td><td>Security gate</td><td>6 (Policy, Claims, FNOL, Subro, Compliance)</td></tr>
+          <tr><td><strong>Healthcare</strong></td><td>Concierge</td><td>Triage-first</td><td>Extensible via MCP</td></tr>
+        </tbody>
+      </table>
+
+      <hr>
+
+      <!-- Banking -->
+      <h2 id="banking">Banking Scenario</h2>
+      <p>Hub-and-spoke pattern. The BankingConcierge routes to specialists based on intent.</p>
+
+      <div class="mermaid">
+flowchart TD
+    BC[BankingConcierge] -->|"Cards/Balance"| CR[CardRecommendation]
+    BC -->|"Investments"| IA[InvestmentAdvisor]
+    BC -->|"Fraud alert"| FA[FraudAgent]
+    BC -->|"General"| KB[GeneralKBAgent]
+    BC -->|"Verify identity"| Auth[AuthAgent]
+    CR --> BC
+    IA --> BC
+    FA --> BC
+    KB --> BC
+
+    style BC fill:#E6FFE6,stroke:#107C10
+    style Auth fill:#FFF4CE,stroke:#FFB900
+      </div>
+
+      <table>
+        <thead><tr><th>Handoff</th><th>Type</th><th>When</th></tr></thead>
+        <tbody>
+          <tr><td>Concierge → Cards</td><td>discrete</td><td>Balance, cards, spending questions</td></tr>
+          <tr><td>Concierge → Fraud</td><td>announced</td><td>Suspicious activity reported</td></tr>
+          <tr><td>Concierge → Investment</td><td>discrete</td><td>Retirement, portfolio questions</td></tr>
+          <tr><td>Any → Auth</td><td>announced</td><td>Identity verification needed</td></tr>
+        </tbody>
+      </table>
+
+      <hr>
+
+      <!-- Insurance -->
+      <h2 id="insurance">Insurance Scenario</h2>
+      <div style="display:flex;align-items:flex-start;gap:20px;margin-bottom:16px;">
+        <img src="images/InsuAgent.png" alt="RTInsurance Agent — Insurance Support Voice Agent" style="width:100px;border-radius:8px;flex-shrink:0;">
+        <p>Security-gate pattern. AuthAgent verifies identity before routing to specialists.</p>
+      </div>
+
+      <div class="mermaid">
+flowchart TD
+    Auth[AuthAgent] -->|"Policy questions"| PA[PolicyAdvisor]
+    Auth -->|"New claim"| FNOL[FNOLAgent]
+    Auth -->|"Existing claim"| CS[ClaimsSpecialist]
+    PA -->|"Compliance"| CD[ComplianceDesk]
+    CS -->|"Subrogation"| Sub[SubroAgent]
+
+    style Auth fill:#FFF4CE,stroke:#FFB900
+    style CD fill:#FFE6E6,stroke:#E25950
+      </div>
+
+      <table>
+        <thead><tr><th>Handoff</th><th>Type</th><th>When</th></tr></thead>
+        <tbody>
+          <tr><td>Auth → Policy</td><td>announced</td><td>After identity verified, policy questions</td></tr>
+          <tr><td>Auth → FNOL</td><td>announced</td><td>After identity verified, new claim</td></tr>
+          <tr><td>Claims → Subro</td><td>discrete</td><td>B2B subrogation processing</td></tr>
+          <tr><td>Policy → Compliance</td><td>announced</td><td>Regulatory or compliance flag</td></tr>
+        </tbody>
+      </table>
+
+      <hr>
+
+      <!-- Healthcare -->
+      <h2 id="healthcare">Healthcare Scenario</h2>
+      <div style="display:flex;align-items:flex-start;gap:20px;margin-bottom:16px;">
+        <img src="images/medagent.png" alt="RTMed Agent — Healthcare Support Voice Agent" style="width:100px;border-radius:8px;flex-shrink:0;">
+        <div>
+          <p>HIPAA-compliant triage flow. Extensible through the MCP healthcare server.</p>
+          <div class="callout" style="margin-top:8px;">
+            <p><strong>MCP Integration:</strong> The healthcare scenario uses a separate MCP server (<code>apps/healthcare-async-mcp/</code>) for FHIR-compliant patient data access, appointment scheduling, and clinical decision support.</p>
+          </div>
+        </div>
+      </div>
+
+      <hr>
+
+      <!-- ==================== Agent Catalog ==================== -->
+
+      <h2 id="cross-domain">Cross-Domain Agents</h2>
+      <p>Available in all scenarios.</p>
+
+      <table>
+        <thead><tr><th>Agent</th><th>Role</th><th>Key tools</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>Concierge</strong></td>
+            <td>Default entry point. Routes to specialists based on intent.</td>
+            <td>All handoff tools</td>
+          </tr>
+          <tr>
+            <td><strong>AuthAgent</strong></td>
+            <td>Identity verification via MFA (SSN, phone, employee ID).</td>
+            <td><code>verify_identity</code>, <code>send_mfa_code</code></td>
+          </tr>
+          <tr>
+            <td><strong>GeneralKBAgent</strong></td>
+            <td>Knowledge base Q&A. RAG retrieval for general questions.</td>
+            <td><code>rag_retrieval</code></td>
+          </tr>
+          <tr>
+            <td><strong>ComplianceDesk</strong></td>
+            <td>AML, FATCA, sanctions screening. Regulatory compliance checks.</td>
+            <td><code>compliance_check</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <hr>
+
+      <h2 id="banking-agents">Banking Agents</h2>
+      <table>
+        <thead><tr><th>Agent</th><th>Role</th><th>Key tools</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>BankingConcierge</strong></td>
+            <td>Primary banking entry point. Service-first routing.</td>
+            <td>All banking handoff tools</td>
+          </tr>
+          <tr>
+            <td><strong>CardRecommendation</strong></td>
+            <td>Credit card recommendations, balance checks, spending analysis.</td>
+            <td><code>check_balance</code>, <code>recommend_card</code></td>
+          </tr>
+          <tr>
+            <td><strong>InvestmentAdvisor</strong></td>
+            <td>Retirement accounts, portfolio allocation, risk assessment.</td>
+            <td><code>get_portfolio</code>, <code>risk_assessment</code></td>
+          </tr>
+          <tr>
+            <td><strong>FraudAgent</strong></td>
+            <td>Post-authentication fraud investigation. Suspicious transaction review.</td>
+            <td><code>flag_transaction</code>, <code>freeze_account</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <hr>
+
+      <h2 id="insurance-agents">Insurance Agents</h2>
+      <table>
+        <thead><tr><th>Agent</th><th>Role</th><th>Key tools</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>PolicyAdvisor</strong></td>
+            <td>Policy details, coverage explanations, renewal info.</td>
+            <td><code>lookup_policy</code>, <code>explain_coverage</code></td>
+          </tr>
+          <tr>
+            <td><strong>ClaimsSpecialist</strong></td>
+            <td>Existing claim status, documentation requests, updates.</td>
+            <td><code>claim_status</code>, <code>request_docs</code></td>
+          </tr>
+          <tr>
+            <td><strong>FNOLAgent</strong></td>
+            <td>First Notice of Loss. New claim intake.</td>
+            <td><code>create_claim</code>, <code>capture_details</code></td>
+          </tr>
+          <tr>
+            <td><strong>SubroAgent</strong></td>
+            <td>Subrogation (B2B). Third-party recovery processing.</td>
+            <td><code>initiate_subro</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <hr>
+
+      <!-- ==================== Tools ==================== -->
+
+      <h2 id="tool-catalog">Tool Catalog</h2>
+      <p>All tools are registered with <code>@register_tool</code> in <code>toolstore/</code> and shared across agents.</p>
+
+      <table>
+        <thead><tr><th>Category</th><th>Tool</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td rowspan="3"><strong>Auth</strong></td><td><code>verify_identity</code></td><td>SSN/phone/employee ID verification</td></tr>
+          <tr><td><code>send_mfa_code</code></td><td>Send MFA code via email/SMS</td></tr>
+          <tr><td><code>validate_mfa_code</code></td><td>Validate MFA code entry</td></tr>
+          <tr><td rowspan="2"><strong>Banking</strong></td><td><code>check_balance</code></td><td>Account balance lookup</td></tr>
+          <tr><td><code>recommend_card</code></td><td>Credit card recommendation engine</td></tr>
+          <tr><td rowspan="2"><strong>Fraud</strong></td><td><code>flag_transaction</code></td><td>Flag suspicious transaction</td></tr>
+          <tr><td><code>freeze_account</code></td><td>Temporary account freeze</td></tr>
+          <tr><td rowspan="2"><strong>Insurance</strong></td><td><code>lookup_policy</code></td><td>Policy details retrieval</td></tr>
+          <tr><td><code>create_claim</code></td><td>New claim creation (FNOL)</td></tr>
+          <tr><td rowspan="2"><strong>Transfer</strong></td><td><code>call_transfer</code></td><td>SIP transfer to human agent</td></tr>
+          <tr><td><code>handoff_*</code></td><td>Agent-to-agent handoff tools (auto-generated)</td></tr>
+          <tr><td><strong>Knowledge</strong></td><td><code>rag_retrieval</code></td><td>RAG-based document retrieval</td></tr>
+        </tbody>
+      </table>
+
+      <hr>
+
+      <h2 id="mcp">MCP Integration</h2>
+      <p>Tools can also be exposed via <a href="https://modelcontextprotocol.io" target="_blank">Model Context Protocol</a> servers, enabling external tool providers.</p>
+
+      <table>
+        <thead><tr><th>MCP Server</th><th>Purpose</th><th>Location</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>Healthcare MCP</strong></td>
+            <td>FHIR patient data, appointments, clinical support</td>
+            <td><code>apps/healthcare-async-mcp/</code></td>
+          </tr>
+          <tr>
+            <td><strong>Card API MCP</strong></td>
+            <td>Card decline code lookup and search</td>
+            <td><code>apps/cardapi/</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>MCP tools are discovered at startup and merged into the tool registry alongside built-in tools. Agents reference them the same way — no code difference between built-in and MCP tools.</p>
+
+      <p><a href="guides.html#add-tool">Add your own tool →</a></p>
+
+    </div>
+  </main>
+</div>
+
+<script src="js/main.js?v=2"></script>
+<script src="js/search.js?v=2"></script>
+</body>
+</html>

@@ -223,6 +223,7 @@ cp .env.sample .env
     # ============================================================================
     ACS_CONNECTION_STRING=endpoint=https://your-acs.communication.azure.com/;accesskey=...
     ACS_ENDPOINT=https://your-acs.communication.azure.com
+    ACS_AUTH_MODE=auto                                      # auto | entra | connection_string
     ACS_SOURCE_PHONE_NUMBER=+1234567890                 # E.164 format (skip if browser-only)
     
     # ============================================================================

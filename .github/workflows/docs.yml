@@ -1,5 +1,5 @@
-name: 📖 Deploy MKDocs Documentation
-run-name: "📖 Deploy MKDocs Documentation (branch: ${{ github.ref_name }})"
+name: 📖 Deploy HTML Documentation
+run-name: "📖 Deploy HTML Documentation (branch: ${{ github.ref_name }})"
 
 on:
   push:
@@ -7,7 +7,6 @@ on:
       - main
     paths:
       - 'docs/**'
-      - 'pyproject.toml'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 # Permissions for GitHub Actions deployment
@@ -33,57 +32,22 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-        with:
-          version: "latest"
-
-      - name: Install docs dependencies (from pyproject extras)
+      - name: Validate static docs root
         run: |
-          # Extract docs dependencies from pyproject.toml
-          python - <<'PY'
-          import pathlib
-          import tomllib
-
-          data = tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))
-          docs_deps = (
-              data.get('project', {})
-              .get('optional-dependencies', {})
-              .get('docs', [])
-          )
-          if not docs_deps:
-              raise SystemExit('No [project.optional-dependencies].docs found in pyproject.toml')
-
-          req = pathlib.Path('requirements-docs.txt')
-          req.write_text('\n'.join(docs_deps) + '\n', encoding='utf-8')
-          print(f'Wrote {req} with {len(docs_deps)} dependencies')
-          PY
-
-          # Install into system Python (--system required for uv outside a venv)
-          uv pip install --system -r requirements-docs.txt
+          test -f docs/index.html
 
       - name: Setup Pages
         id: pages
         uses: actions/configure-pages@v5
 
-      - name: Build documentation
+      - name: Prepare static docs artifact
         run: |
-          # Build without --strict to allow warnings (broken anchors are documentation debt, not blockers)
-          mkdocs build --clean -f docs/mkdocs.yml
-          touch ./site/.nojekyll
-        env:
-          AZURE_SPEECH_KEY: "dummy-key-for-docs"
-          AZURE_SPEECH_REGION: "eastus"
+          touch ./docs/.nojekyll
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./site
+          path: ./docs
 
   deploy:
     environment:

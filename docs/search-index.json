@@ -1,0 +1,654 @@
+{
+  "generated_by": "docs/build-search-index.py",
+  "version": 1,
+  "pages": [
+    {
+      "url": "agents.html",
+      "title": "Agents & Scenarios",
+      "sections": 10
+    },
+    {
+      "url": "api.html",
+      "title": "API Reference",
+      "sections": 13
+    },
+    {
+      "url": "architecture.html",
+      "title": "Architecture",
+      "sections": 11
+    },
+    {
+      "url": "certification.html",
+      "title": "ARTist Certification",
+      "sections": 10
+    },
+    {
+      "url": "guides.html",
+      "title": "Guides",
+      "sections": 27
+    },
+    {
+      "url": "index.html",
+      "title": "ART Agent",
+      "sections": 6
+    }
+  ],
+  "sections": [
+    {
+      "url": "agents.html#top",
+      "anchor": "top",
+      "level": 1,
+      "page": "Agents & Scenarios",
+      "title": "Agents & Scenarios",
+      "text": "Pre-built agents, industry scenarios, and tool catalog."
+    },
+    {
+      "url": "agents.html#scenarios",
+      "anchor": "scenarios",
+      "level": 2,
+      "page": "Agents & Scenarios",
+      "title": "Industry Scenarios",
+      "text": "A scenario defines: which agents, how they connect, and what the entry point is. # Pattern for every scenario start_agent : EntryPoint # Who answers first agents : [...] # Who participates handoffs : [...] # How they connect agent_defaults : {...} # Shared variables Scenario Entry Agent Pattern Agents Banking BankingConcierge Hub & spoke 5 (Cards, Fraud, Investment, KB, Auth) Insurance AuthAgent Security gate 6 (Policy, Claims, FNOL, Subro, Compliance) Healthcare Concierge Triage-first Extensible via MCP"
+    },
+    {
+      "url": "agents.html#banking",
+      "anchor": "banking",
+      "level": 2,
+      "page": "Agents & Scenarios",
+      "title": "Banking Scenario",
+      "text": "Hub-and-spoke pattern. The BankingConcierge routes to specialists based on intent. flowchart TD BC[BankingConcierge] -->|\"Cards/Balance\"| CR[CardRecommendation] BC -->|\"Investments\"| IA[InvestmentAdvisor] BC -->|\"Fraud alert\"| FA[FraudAgent] BC -->|\"General\"| KB[GeneralKBAgent] BC -->|\"Verify identity\"| Auth[AuthAgent] CR --> BC IA --> BC FA --> BC KB --> BC style BC fill:#E6FFE6,stroke:#107C10 style Auth fill:#FFF4CE,stroke:#FFB900 Handoff Type When Concierge → Cards discrete Balance, cards, spending questions Concierge → Fraud announced Suspicious activity reported Concierge → Investment discrete Retirement, portfolio questions Any → Auth announced Identity verification needed"
+    },
+    {
+      "url": "agents.html#insurance",
+      "anchor": "insurance",
+      "level": 2,
+      "page": "Agents & Scenarios",
+      "title": "Insurance Scenario",
+      "text": "Security-gate pattern. AuthAgent verifies identity before routing to specialists. flowchart TD Auth[AuthAgent] -->|\"Policy questions\"| PA[PolicyAdvisor] Auth -->|\"New claim\"| FNOL[FNOLAgent] Auth -->|\"Existing claim\"| CS[ClaimsSpecialist] PA -->|\"Compliance\"| CD[ComplianceDesk] CS -->|\"Subrogation\"| Sub[SubroAgent] style Auth fill:#FFF4CE,stroke:#FFB900 style CD fill:#FFE6E6,stroke:#E25950 Handoff Type When Auth → Policy announced After identity verified, policy questions Auth → FNOL announced After identity verified, new claim Claims → Subro discrete B2B subrogation processing Policy → Compliance announced Regulatory or compliance flag"
+    },
+    {
+      "url": "agents.html#healthcare",
+      "anchor": "healthcare",
+      "level": 2,
+      "page": "Agents & Scenarios",
+      "title": "Healthcare Scenario",
+      "text": "HIPAA-compliant triage flow. Extensible through the MCP healthcare server. MCP Integration: The healthcare scenario uses a separate MCP server ( apps/healthcare-async-mcp/ ) for FHIR-compliant patient data access, appointment scheduling, and clinical decision support."
+    },
+    {
+      "url": "agents.html#cross-domain",
+      "anchor": "cross-domain",
+      "level": 2,
+      "page": "Agents & Scenarios",
+      "title": "Cross-Domain Agents",
+      "text": "Available in all scenarios. Agent Role Key tools Concierge Default entry point. Routes to specialists based on intent. All handoff tools AuthAgent Identity verification via MFA (SSN, phone, employee ID). verify_identity , send_mfa_code GeneralKBAgent Knowledge base Q&A. RAG retrieval for general questions. rag_retrieval ComplianceDesk AML, FATCA, sanctions screening. Regulatory compliance checks. compliance_check"
+    },
+    {
+      "url": "agents.html#banking-agents",
+      "anchor": "banking-agents",
+      "level": 2,
+      "page": "Agents & Scenarios",
+      "title": "Banking Agents",
+      "text": "Agent Role Key tools BankingConcierge Primary banking entry point. Service-first routing. All banking handoff tools CardRecommendation Credit card recommendations, balance checks, spending analysis. check_balance , recommend_card InvestmentAdvisor Retirement accounts, portfolio allocation, risk assessment. get_portfolio , risk_assessment FraudAgent Post-authentication fraud investigation. Suspicious transaction review. flag_transaction , freeze_account"
+    },
+    {
+      "url": "agents.html#insurance-agents",
+      "anchor": "insurance-agents",
+      "level": 2,
+      "page": "Agents & Scenarios",
+      "title": "Insurance Agents",
+      "text": "Agent Role Key tools PolicyAdvisor Policy details, coverage explanations, renewal info. lookup_policy , explain_coverage ClaimsSpecialist Existing claim status, documentation requests, updates. claim_status , request_docs FNOLAgent First Notice of Loss. New claim intake. create_claim , capture_details SubroAgent Subrogation (B2B). Third-party recovery processing. initiate_subro"
+    },
+    {
+      "url": "agents.html#tool-catalog",
+      "anchor": "tool-catalog",
+      "level": 2,
+      "page": "Agents & Scenarios",
+      "title": "Tool Catalog",
+      "text": "All tools are registered with @register_tool in toolstore/ and shared across agents. Category Tool Description Auth verify_identity SSN/phone/employee ID verification send_mfa_code Send MFA code via email/SMS validate_mfa_code Validate MFA code entry Banking check_balance Account balance lookup recommend_card Credit card recommendation engine Fraud flag_transaction Flag suspicious transaction freeze_account Temporary account freeze Insurance lookup_policy Policy details retrieval create_claim New claim creation (FNOL) Transfer call_transfer SIP transfer to human agent handoff_* Agent-to-agent handoff tools (auto-generated) Knowledge rag_retrieval RAG-based document retrieval"
+    },
+    {
+      "url": "agents.html#mcp",
+      "anchor": "mcp",
+      "level": 2,
+      "page": "Agents & Scenarios",
+      "title": "MCP Integration",
+      "text": "Tools can also be exposed via Model Context Protocol servers, enabling external tool providers. MCP Server Purpose Location Healthcare MCP FHIR patient data, appointments, clinical support apps/healthcare-async-mcp/ Card API MCP Card decline code lookup and search apps/cardapi/ MCP tools are discovered at startup and merged into the tool registry alongside built-in tools. Agents reference them the same way — no code difference between built-in and MCP tools. Add your own tool →"
+    },
+    {
+      "url": "api.html#top",
+      "anchor": "top",
+      "level": 1,
+      "page": "API Reference",
+      "title": "API Reference",
+      "text": "REST endpoints and WebSocket protocols for the FastAPI backend. Base URL: /api/v1/ — Interactive OpenAPI docs available at /docs when running locally."
+    },
+    {
+      "url": "api.html#health",
+      "anchor": "health",
+      "level": 2,
+      "page": "API Reference",
+      "title": "Health & Monitoring",
+      "text": "Endpoint Method Description /health GET Liveness check. Returns 200 when server is running. Use for K8s liveness probes. /ready GET Readiness check. Returns 200 when warmup tasks (MCP, pools) are complete. /readiness GET Deep health check. Validates all Azure service dependencies. /pools GET Resource pool metrics — TTS/STT client availability and utilization. /appconfig GET Azure App Configuration provider status. /appconfig/refresh POST Force refresh App Configuration cache. Example # Check if backend is ready to serve calls curl https://your-backend.azurecontainerapps.io/api/v1/ready # Response { \"status\" : \"ready\" , \"mcp\" : \"connected\" , \"pools\" : { \"tts\" : 5 , \"stt\" : 5 } }"
+    },
+    {
+      "url": "api.html#calls",
+      "anchor": "calls",
+      "level": 2,
+      "page": "API Reference",
+      "title": "Call Management",
+      "text": "Endpoint Method Description /calls/initiate POST Start an outbound call. Body: { \"phone_number\": \"+1...\" } /calls/ GET List active/recent calls with pagination. /calls/terminate POST End an active call. Body: { \"connection_id\": \"...\" } /calls/answer POST Handle inbound call from ACS Event Grid webhook. /calls/callbacks POST Process ACS callback events (call state changes, DTMF, etc.) Initiate a call curl -X POST https://your-backend/api/v1/calls/initiate \\ -H \"Content-Type: application/json\" \\ -d '{\"phone_number\": \"+18165019907\", \"scenario\": \"banking\"}'"
+    },
+    {
+      "url": "api.html#media",
+      "anchor": "media",
+      "level": 2,
+      "page": "API Reference",
+      "title": "Media Streaming",
+      "text": "Endpoint Type Description /media/status GET Media streaming configuration and active stream count. /media/stream WebSocket ACS bidirectional audio stream. See WebSocket protocol ."
+    },
+    {
+      "url": "api.html#genesys-api",
+      "anchor": "genesys-api",
+      "level": 2,
+      "page": "API Reference",
+      "title": "Genesys AudioConnector",
+      "text": "AudioHook v2 bridge for Genesys Cloud telephony. See the Genesys Cloud Integration guide for setup, the simulator, and troubleshooting. Endpoint Type Description /genesys/health GET Liveness check — returns {\"status\":\"ok\",\"service\":\"genesys-audiohook\"} . /genesys/stream WebSocket AudioHook v2 audio + control stream (subprotocol audiohook-v2 , µ-law 8 kHz). Bridges Genesys Cloud AudioConnector to Azure VoiceLive."
+    },
+    {
+      "url": "api.html#browser",
+      "anchor": "browser",
+      "level": 2,
+      "page": "API Reference",
+      "title": "Browser Conversations",
+      "text": "Endpoint Type Description /browser/status GET Active browser connections and service status. /browser/conversation WebSocket Browser-based voice conversation. See WebSocket protocol . /browser/dashboard/relay WebSocket Real-time dashboard events (audio levels, transcripts, agent state)."
+    },
+    {
+      "url": "api.html#agents-api",
+      "anchor": "agents-api",
+      "level": 2,
+      "page": "API Reference",
+      "title": "Agent Management",
+      "text": "Endpoint Method Description /agents GET List all loaded agents with their configuration. /agents/{name} GET Get specific agent details (prompt, tools, handoff trigger). /agents/{name} PUT Update agent runtime configuration (model, temperature, etc.). /agents POST Create a new agent at runtime (session-scoped)."
+    },
+    {
+      "url": "api.html#sessions",
+      "anchor": "sessions",
+      "level": 2,
+      "page": "API Reference",
+      "title": "Sessions",
+      "text": "Endpoint Method Description /sessions/{id} GET Get session state (scenario, active agent, conversation history). /sessions/{id}/reset POST Reset session — new ID, clear state, fresh conversation."
+    },
+    {
+      "url": "api.html#scenarios",
+      "anchor": "scenarios",
+      "level": 2,
+      "page": "API Reference",
+      "title": "Scenarios",
+      "text": "Endpoint Method Description /scenarios GET List available scenarios (built-in + session-created). /scenarios POST Create a session-scoped scenario from the Scenario Builder. /scenarios/{name} GET Get scenario details (agents, handoffs, start agent)."
+    },
+    {
+      "url": "api.html#profiles",
+      "anchor": "profiles",
+      "level": 2,
+      "page": "API Reference",
+      "title": "Demo Profiles",
+      "text": "Endpoint Method Description /profiles/generate POST Generate a random demo customer profile (name, accounts, MFA). /profiles/{id} GET Retrieve a generated profile by ID."
+    },
+    {
+      "url": "api.html#ws-media",
+      "anchor": "ws-media",
+      "level": 2,
+      "page": "API Reference",
+      "title": "WebSocket: Media Stream",
+      "text": "wss://your-backend/api/v1/media/stream Bidirectional audio streaming for ACS. The backend receives raw audio from ACS and sends synthesized audio back. Message types (server → client) Type Payload audio Base64-encoded PCM audio chunk transcript STT recognition result (interim or final) agent_response LLM text response before TTS handoff Agent handoff notification (from, to, type) tool_call Tool invocation event (name, args, result)"
+    },
+    {
+      "url": "api.html#ws-browser",
+      "anchor": "ws-browser",
+      "level": 2,
+      "page": "API Reference",
+      "title": "WebSocket: Browser Conversation",
+      "text": "wss://your-backend/api/v1/browser/conversation?session_id=... Browser-based voice conversation using the Web Audio API. Same orchestration pipeline as phone calls. Message types (client → server) Type Payload audio_data Base64 PCM audio from browser microphone control Start/stop/pause/reset commands config Session configuration (scenario, agent overrides) Message types (server → client) Type Payload audio Base64 PCM audio for playback transcript User speech recognition response Agent text response event Session events (handoff, tool call, state change) audio_levels Input/output amplitude for visualization"
+    },
+    {
+      "url": "api.html#config",
+      "anchor": "config",
+      "level": 2,
+      "page": "API Reference",
+      "title": "Configuration Reference",
+      "text": "All configuration via environment variables. azd up generates a .env.local with all values. Core Variable Description Default ACS_STREAMING_MODE Orchestration mode: MEDIA , TRANSCRIPTION , or VOICE_LIVE MEDIA BASE_URL Public callback URL ACS uses to reach the backend (dev tunnel URL for local dev) — ENVIRONMENT development or production development Azure Services Prefix Service Key variables ACS_* Communication Services ACS_ENDPOINT , ACS_PHONE_NUMBER AZURE_OPENAI_* Azure OpenAI AZURE_OPENAI_ENDPOINT , AZURE_OPENAI_DEPLOYMENT AZURE_SPEECH_* Speech Services AZURE_SPEECH_REGION , AZURE_SPEECH_KEY REDIS_* Azure Redis REDIS_HOST , REDIS_PORT AZURE_COSMOS_* Cosmos DB AZURE_COSMOS_ENDPOINT , AZURE_COSMOS_DATABASE Voice settings Variable Description Default TTS_VOICE Azure neural voice name en-US-AvaMultilingualNeural TTS_STYLE Voice style ( chat , friendly , etc.) chat TTS_RATE Speech rate adjustment +3% STT_LANGUAGE Recognition language en-US VAD_SILENCE_TIMEOUT Silence before turn end (ms) 500"
+    },
+    {
+      "url": "architecture.html#overview",
+      "anchor": "overview",
+      "level": 1,
+      "page": "Architecture",
+      "title": "Architecture",
+      "text": "How audio flows from a phone call through AI agents and back. The system is a real-time voice pipeline that connects callers to AI agents via Azure Communication Services. Two orchestration modes handle the audio differently, but share the same agent framework, tool registry, and session state. Five zones, left to right. Cross-cutting concerns (observability, network) span the bottom. Show original detailed PNG reference → Original detailed reference (source: PowerPoint export) Phone Call → ACS → WebSocket → [Orchestrator] → AI Agent → Voice Response ↓ [STT → LLM → TTS]"
+    },
+    {
+      "url": "architecture.html#call-lifecycle",
+      "anchor": "call-lifecycle",
+      "level": 2,
+      "page": "Architecture",
+      "title": "Call Lifecycle",
+      "text": "Every call follows this sequence regardless of orchestration mode: sequenceDiagram participant Phone participant ACS participant Backend participant Redis participant AI participant Cosmos Phone->>ACS: Incoming call ACS->>Backend: WebSocket connect Backend->>Redis: Initialize session loop Conversation turns Phone->>Backend: Audio stream Backend->>AI: Process (STT → LLM → TTS) AI->>Backend: Response audio Backend->>Redis: Update state Backend->>Phone: Stream audio back end Backend->>Cosmos: Persist transcript Backend->>ACS: End call Key points: Session state lives in Redis for fast access during the call. Transcripts are archived to Cosmos DB when the call ends. The backend is stateless — any container instance can handle any call via Redis session affinity."
+    },
+    {
+      "url": "architecture.html#orchestration",
+      "anchor": "orchestration",
+      "level": 2,
+      "page": "Architecture",
+      "title": "Orchestration Modes",
+      "text": "Both modes use the same agents, tools, and handoff logic. The difference is how audio gets processed — and how much of the turn loop you control versus hand to Azure. Both modes branch off the same ACS_STREAMING_MODE dispatch and converge on the same shared core — agents, tools, handoffs, and MemoManager state. Only the audio surface in the middle differs. Click to expand. Pick the mode per deployment with one env var. Everything below the audio surface — agent definitions, the tool registry, HandoffService , and session-state sync into MemoManager — is byte-for-byte identical across modes, so an agent built for Cascade runs unchanged on VoiceLive. SpeechCascade VoiceLive You orchestrate each component separately. Full control over every step. Numbered arrows show the per-turn flow: transcribe → reason → synthesize. Audio In → Azure Speech STT → Transcript → Azure OpenAI → Text → Azure Speech TTS → Audio Out Component Options STT Azure Speech, Whisper, Custom Speech models LLM Any Azure OpenAI model, or bring your own TTS 400+ Azure neural voices, custom styles & prosody VAD Custom silence thresholds, barge-in control Best for: on-prem/hybrid, strict compliance, per-component debugging, model flexibility. Azure-hosted pipeline handles audio in one hop. Lowest latency, managed operations. One managed call replaces STT + LLM + TTS — fewer hops, lower latency. Audio In → Azure VoiceLive SDK (STT + LLM + TTS managed) → Audio Out Feature Details Latency ~200ms end-to-end VAD Server-side automatic turn detection + noise reduction Tools Native function calling via Realtime API Voices HD voices like en-US-Ava:DragonHDLatestNeural Best for: speed to production, lowest latency requirements. # Sets the DEFAULT orchestration mode for ACS telephony calls export ACS_STREAMING_MODE=MEDIA # SpeechCascade export ACS_STREAMING_MODE=VOICE_LIVE # VoiceLive ACS_STREAMING_MODE only sets the default pipeline that inbound ACS phone calls use; the agent framework is identical across both modes. Control & tradeoffs at a glance The two modes are not feature-equivalent. Cascade hands you every component to tune; VoiceLive hands the whole audio loop to Azure for the lowest latency. Pick per workload. Dimension SpeechCascade you control VoiceLive Azure-managed Latency ~400 ms end-to-end (3 hops) ~200–250 ms (single hop) Components Swap STT, LLM, TTS independently One managed pipeline — no swapping LLM surface Chat Completions or Responses API ( _process_llm ) Realtime API only ( gpt-realtime ) VAD / barge-in Client-side thresholds + ThreadBridge cancellation Server-side automatic — not tunable STT models Custom Speech + phrase lists Built-in only Voices 400+ neural voices, per-agent styles HD voices only (e.g. DragonHDLatest ) Deployment On-prem / hybrid endpoints supported Azure cloud only Turn model Synchronous per-turn ( process_user_input ) Event-driven ( ServerEventType.* ) How each mode manages turn context & state Both modes read and write the same MemoManager via sync_state_from_memo() / sync_state_to_memo() — so active agent, visited agents, profile, and handoff context survive across turns and container restarts. They differ in how the model sees that context on each turn: SpeechCascade assembles the prompt itself — current agent's per-agent thread plus de-duplicated cross-agent context ( _get_conversation_history ), then ships it to Azure OpenAI. You decide exactly what the model sees, so this is where the planned compaction levers (rolling window, summarizer) plug in. VoiceLive keeps conversation state inside the realtime connection. The orchestrator re-injects a throttled session recap (recent user messages, slots, last assistant turn) via session.update(instructions=…) before responses, and history is per-connection only — visited_agents is intentionally not replayed to avoid stale context on a fresh call. Shared truth. Slots, tool outputs, and the user profile always land in MemoManager regardless of mode, so a handoff or a Cosmos archive looks identical either way."
+    },
+    {
+      "url": "architecture.html#agent-framework",
+      "anchor": "agent-framework",
+      "level": 2,
+      "page": "Architecture",
+      "title": "Agent Framework",
+      "text": "Agents are defined in YAML, not Python classes. Scenarios wire them together. Tools give them abilities. custom Reminder — this is our own lightweight framework, not Microsoft Agent Framework. See the \"Why this complexity?\" section below for the positioning note and reasoning. flowchart LR subgraph Agents[\"Agents (capabilities)\"] A1[Concierge] A2[FraudAgent] A3[AuthAgent] end subgraph Scenarios[\"Scenarios (routing)\"] S[orchestration.yaml] end subgraph Tools[\"Tools (actions)\"] T1[check_balance] T2[verify_identity] end Agents --> S Tools --> S S --> O[Orchestrator] style Agents fill:#E6FFE6,stroke:#107C10 style Scenarios fill:#FFF4CE,stroke:#FFB900 style Tools fill:#F3E6FF,stroke:#8764B8 Three concepts Concept Defined in What it does Agent agentstore/*/agent.yaml AI assistant with a role, greeting, system prompt, and tool list Scenario scenariostore/*/orchestration.yaml Wires agents together with handoff routes and entry points Tool toolstore/registry.py Callable function shared across all agents ( @register_tool ) Separation of concerns Same agent behaves differently in different scenarios (banking vs. insurance) Handoff routing is declarative — change the YAML, not the code Tools are shared across all agents via a central registry Minimal agent definition # agentstore/my_agent/agent.yaml name : MyAgent description : Does something useful handoff : trigger : handoff_my_agent greeting : \"Hi, I'm the specialist you need!\" tools : - my_tool - handoff_concierge prompts : path : prompt.jinja Browse all agents → · Create your own →"
+    },
+    {
+      "url": "architecture.html#storage",
+      "anchor": "storage",
+      "level": 2,
+      "page": "Architecture",
+      "title": "Storage Tiers",
+      "text": "Three tiers, each optimized for its access pattern: Hot Application memory Active call state, audio buffers, connection pools ~ microseconds container RAM Warm Azure Cache for Redis Conversation context, session history, worker affinity ~ sub-ms 1–100 GB Cold Azure Cosmos DB Call transcripts, user profiles, analytics & audit 1–10 ms unlimited MemoManager handles warm-tier persistence. Never store conversation state in-memory globals — it breaks container scaling."
+    },
+    {
+      "url": "architecture.html#session-runtime",
+      "anchor": "session-runtime",
+      "level": 2,
+      "page": "Architecture",
+      "title": "Session Runtime",
+      "text": "How the runtime keeps many concurrent calls isolated, how session memory moves through MemoManager / Redis / Cosmos, and what hooks fire on every turn. Everything below is grounded in the current implementation — the names map 1:1 to functions and events in apps/artagent/backend/voice/ . Concurrent session handling and speech-channel isolation Each call is isolated by session_id + call_connection_id , with per-session handlers, per-session turn state, and per-session outbound envelopes. This prevents cross-talk when many conversations run concurrently on the same container. Three concurrent calls on the same container — each owns its handler, queue, MemoManager state, and Redis namespace. Animated lanes show audio flowing per session with no shared path. Isolation boundary How isolation is enforced Why it matters for concurrency Turn ownership Every user/assistant message carries turn identifiers; tool/handoff boundaries advance effective turn IDs instead of reusing stale IDs. Prevents transcript and UI frame collisions across overlapping tool calls. Speech event lanes Speech Cascade uses a dedicated queue and thread bridge per handler instance; Voice Live tracks active response IDs per session. Audio/control events from one call cannot drain or cancel another call's audio lane. Session state Session metadata is stored in MemoManager and synchronized to Redis, then restored into orchestrator state on demand. Stateless container scaling works without losing active agent/context. WebSocket envelopes Outbound events include session-scoped metadata and turn IDs before broadcast. UI and telemetry streams stay correctly partitioned under load. Session memory lifecycle (what persists, when) The hot path stays in MemoManager . Redis is the cross-container source of truth. Cosmos is cold archive only — never read on the hot path. Reads happen once on session start; writes happen on tool/turn boundaries and on cleanup. Five phases of session memory — read on start, in-memory turn updates, opportunistic Redis writes at tool boundaries, async flush on stop, and Cosmos archival after the call ends. Session starts: orchestrator reads prior state (active agent, visited agents, profile, handoff context) from MemoManager/Redis. Each turn: orchestrator updates active agent and session vars, then writes back to MemoManager as turn state evolves. Turn/tool boundaries: effective turn IDs are advanced for post-tool segments to keep message history coherent. Session stop/cleanup: handler flushes MemoManager to Redis asynchronously; cold archival to Cosmos remains post-call oriented."
+    },
+    {
+      "url": "architecture.html#per-turn-memory",
+      "anchor": "per-turn-memory",
+      "level": 3,
+      "page": "Architecture",
+      "title": "Per-turn memory flow and long-session strategies",
+      "text": "Each turn fires the same fixed sequence of ten calls against MemoManager . The hot path is entirely in-process; Redis is touched once per turn via a fire-and-forget task; Cosmos is only touched after the call ends. Where the system stays honest is also where it has work left to do — there is no automatic history compaction today, so longer sessions grow the per-agent thread monotonically. Ten phases of a single turn against MemoManager — in-process work (purple), the one LLM round-trip (green), and the async Redis flush (blue). The growth band shows what accumulates per turn, and the dashed strip names the four compaction levers planned for long sessions. What actually happens on every turn (verified against voice/speech_cascade/orchestrator.py ) on_final(text) (Cascade) or TRANSCRIPTION_COMPLETED (Voice Live) hands the finalized utterance to the orchestrator. sync_state_from_memo(cm, available_agents=…) hydrates active_agent , visited_agents , session_profile , and any pending_handoff . cm.append_to_history(active_agent, \"user\", text) writes the user turn into the active agent’s thread and stamps last_activity . cm.get_history(active_agent) reads that agent’s full thread — no windowing, no token cap. _get_conversation_history(cm) merges in substantive user messages from other agents (dedup by lowercased content, filters <10 chars / “welcome…”) so handoffs don’t drop context. _build_session_context(cm) pulls session_profile , caller_name , customer_intelligence , and institution_name out of CoreMemory for prompt-template variables. agent.run(…) calls the LLM with [system, …cross_agent_context, …agent_history, user_turn] ; tool calls advance turn_sequence via advance_turn_for_tool() . cm.append_to_history(active_agent, \"assistant\", response) appends the assistant turn into the same per-agent thread. sync_state_to_memo(cm, active_agent=…, visited_agents=…) persists orchestration state back into MemoManager . asyncio.create_task(cm.persist_to_redis_async(redis_mgr)) mirrors MemoManager to Redis without blocking the next turn. Cosmos is untouched until build_and_flush(cm, cosmos) after the call ends. Why a long session can degrade today Per-agent thread is append-only. ChatHistory.append() never trims. A 30-minute call with one agent and ~2 turns/minute lands ~60 user+assistant pairs into a single thread that ships in full on every prompt build. Cross-agent merge can stack. _get_conversation_history prepends substantive user messages from every other visited agent. Repeated handoffs grow the prefix even when the active agent’s own thread is short. No token budgeting. The Voice Live context_window field (default 4000) only configures the realtime session — it doesn’t cap what we ship to the model. Foundry/AOAI calls in Cascade currently send the whole assembled list. What partially protects us today. Per-agent partitioning + handoff-as-natural-reset means short tasks usually finish inside one agent before the thread gets large. That’s a workload assumption, not an architectural guarantee. Strategies to keep performance flat as context fills up The four levers below are the planned compaction surface. Each one slots in between step ⑧ (append assistant) and step ⑨ (sync state) so it runs once per turn, off the user-visible critical path. Lever Where it lives What it changes Tradeoff Rolling window Wrap cm.get_history(active_agent) in a windowed reader that returns the last N turns or T tokens. Bounds prompt size; MemoManager still keeps full history for Cosmos archival. Drops earlier callbacks (“as I mentioned earlier…”) unless the summarizer below also runs. Turn summarizer New cm.summarize_thread(agent, before_turn=k) that replaces stale turns with one {\"role\":\"system\",\"content\":\"…summary…\"} note. Preserves the gist of earlier turns inside the prompt budget. Adds a background LLM call; needs an idempotency guard so we don’t re-summarize. Fact extraction → CoreMemory Background pass over completed turns lifts named entities (order #, account, preference) into typed CoreMemory slots. Most repeated lookups become cm.corememory.get(\"order_id\") instead of re-reading transcript. Requires a slot schema per agent and a small extractor; quality depends on extractor. Cosmos RAG retrieval On step ⑤, ask Cosmos (or a vector index over archived turns) for the K most relevant past-turn snippets to inject into the prompt. Brings back cross-call memory without ballooning the per-call prompt. Adds 30–100ms to the turn unless the retrieval runs in parallel with prompt assembly. Where to start: the rolling window is the cheapest defense — a single change in _get_conversation_history bounds prompt growth without any new background work. The summarizer and fact-extractor become valuable once we see real-call traces with >40-turn agents. RAG over Cosmos is the right answer once we have a corpus of past calls worth retrieving from. Turn-by-turn orchestration hooks: Speech Cascade vs Voice Live Same logical turn, two different surfaces. Speech Cascade reacts to local on_partial / on_final callbacks coming off the Speech SDK thread; Voice Live reacts to ServerEventType.* messages coming off the realtime model websocket. Both converge on the same session-state contract. Each column is one phase of the same turn. The top row is your Speech Cascade callback, the bottom row is the Azure VoiceLive event you react to, and the middle band says what's actually happening. Click to expand. Phase Speech Cascade hooks Voice Live hooks User starts speaking on_partial(...) callback triggers immediate barge-in scheduling via thread bridge. INPUT_AUDIO_BUFFER_SPEECH_STARTED triggers turn start, barge-in, stop-audio, and new span bookkeeping. User utterance finalized on_final(...) enqueues SpeechEventType.FINAL into per-session speech queue. CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_COMPLETED finalizes user transcript and emits turn-scoped message. Streaming transcript feedback Optional on_partial_transcript callback feeds live UI text without committing a final turn. CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_DELTA sends streaming user transcript envelopes. Assistant audio output Route turn processing drives TTS queueing and sequential playback from orchestrator output. RESPONSE_AUDIO_DELTA streams assistant audio frames; RESPONSE_AUDIO_DONE marks completion. Tool execution / handoff Turn IDs can be advanced after tool calls for clean post-tool message segments. RESPONSE_FUNCTION_CALL_ARGUMENTS_DONE executes tools, then continues response/create flow. Turn completion Queue drains and orchestrator state sync persists session updates through MemoManager. RESPONSE_DONE finalizes playback and turn metrics before next speech-start event. Practical implication: Speech Cascade gives explicit local control over callback and queue boundaries; Voice Live gives explicit realtime event hooks from the model connection. Both converge on the same session-state contract via MemoManager + Redis."
+    },
+    {
+      "url": "architecture.html#production-hardening",
+      "anchor": "production-hardening",
+      "level": 2,
+      "page": "Architecture",
+      "title": "Production Hardening",
+      "text": "This section is the honest read on the security posture: what the production reference targets, what the threat surface is, and what the current terraform actually ships with the defaults vs. what is variable-gated or still planned. The repurposed “Azure Services” inventory and App Configuration mapping live here too, since both are part of the hardening story. Production reference architecture Target posture — hub-spoke isolation, WAF at the edge, ACS constrained via NSP, private endpoints for Foundry/Speech data planes, Redis, and Cosmos. Some elements are reference-only and not yet in default terraform; the status matrix below tracks each one. Show original detailed PNG reference → Original detailed reference Threat surface and mitigations Eight surfaces to defend, mapped to where the mitigation lives in the codebase. Surface Risk Mitigation Where it lives Inbound telephony (ACS) Spoofed callers, replayed sessions, unsolicited inbound calls hitting the WebSocket. DTMF + ANI composite session key pre-stored in Redis by AWS Connect / SBC; ACS IncomingCall Event Grid webhook validates the composite key before authorizing media WS. API-initiated calls use direct call_connection_id lookup. docs/security/authentication.md Media WebSocket Unauthenticated WS upgrade attaching to a live call; cross-session bleed. Custom JWT validated on WS handshake; WS session correlated to the call session via Redis composite key. apps/artagent/backend/api/v1/endpoints/media.py + Redis session store Frontend → backend (HTTPS) Cross-origin abuse, credentialed CORS leaks. Container Apps cors_policy with explicit frontend / backend origin lists and support_credentials toggle. infra/terraform/modules/containers/main.tf + modules/webapps/variables.tf App → Azure service identity Long-lived keys leaking from env vars or container images. System-assigned managed identity on every container app; RBAC role assignments for Foundry, Voice Live, ACS, Storage, AppConfig, Key Vault, ACR pull, Cosmos. infra/terraform/ai-foundry.tf , ai-foundry-vl.tf , communication.tf , data.tf , cardapi.tf Secrets at rest Connection strings checked into config or env. Key Vault with RBAC authorization ( rbac_authorization_enabled = true ); container apps reference secrets by key_vault_secret_id rather than inline values. infra/terraform/keyvault.tf + modules/containers/main.tf Service-to-service TLS Downgrade attacks against the data plane. Storage min_tls_version = \"TLS1_2\" ; Redis Enterprise minimumTlsVersion = \"1.2\" ; Cosmos OIDC connection string forces tls=true . infra/terraform/data.tf , redis.tf Cosmos data plane auth Shared password credentials reused across services. App connects with authMechanism=MONGODB-OIDC via managed identity; admin password is stored in Key Vault for break-glass only. infra/terraform/data.tf Network exposure Public data planes reachable from the internet. Variable-gated toggles already in place ( cosmosdb_public_network_access_enabled , Foundry public_network_access ). Private endpoints, NSP, and WAF are reference-architecture targets and not in default terraform yet. infra/terraform/variables.tf , modules/ai/foundry.tf Hardening status — in place / variable-gated / planned What the default azd up actually ships today vs. what is one variable flip away vs. what is still reference-only. Use this to size remaining work for a given environment. Control Status How to verify / change Managed identity on backend, frontend, MCP containers in place azurerm_role_assignment.*_backend_* in infra/terraform/ . Key Vault with RBAC authorization (no access policies) in place rbac_authorization_enabled = true in keyvault.tf . Cosmos MongoDB OIDC (passwordless app auth) in place OIDC connection string built in data.tf ; admin password is Key Vault break-glass only. TLS 1.2 minimum on Storage and Redis Enterprise in place min_tls_version / minimumTlsVersion in data.tf , redis.tf . App Configuration + feature flags (no secrets in env) in place APPCONFIG_KEY_MAP + FEATURE_FLAG_MAP in apps/artagent/backend/config/appconfig_provider.py . Per-app CORS origin allow-list with credentials toggle in place cors_policy in modules/containers/main.tf ; origins in modules/webapps/variables.tf . WebSocket auth (DTMF + ANI composite key, JWT on WS) in place docs/security/authentication.md + api/v1/endpoints/media.py . Cosmos public network access variable-gated cosmosdb_public_network_access_enabled in variables.tf . Default is open for local dev; flip to false for production envs. Foundry public network access variable-gated public_network_access on the AI module ( modules/ai/foundry.tf ). Set to Disabled when private endpoints are wired up. MongoDB cluster firewall variable-gated azapi_resource.mongo_firewall_all in data.tf opens 0.0.0.0–255.255.255.255 when public access is enabled. Disable along with public access for production. Private endpoints for Foundry / Speech / Redis / Cosmos / Key Vault planned Shown in the reference diagram but no azurerm_private_endpoint resources in default terraform. Requires hub-spoke VNet + private DNS zones added per service. Application Gateway / WAF in front of Container Apps planned No azurerm_application_gateway in terraform today. Add as the public ingress when moving off the Container Apps default fqdn. Network Security Perimeter (NSP) around ACS planned Reference-only in the production diagram; NSP resource not yet in terraform. Track ACS NSP GA before promising in customer architectures. Service inventory The same services the previous “Azure Services” section listed, kept here as the hardening surface they actually live on. Service Purpose Config prefix Azure Communication Services Telephony, WebSocket audio ACS_* Microsoft Foundry Model/runtime endpoint for GPT-4o and realtime orchestration AZURE_OPENAI_* Azure AI Speech STT / TTS voice services used by the Foundry-based voice stack AZURE_SPEECH_* Azure Redis Session cache REDIS_* Cosmos DB (Mongo vCore) Persistent storage AZURE_COSMOS_* App Configuration Dynamic config & feature flags AZURE_APPCONFIG_* Application Insights Observability APPLICATIONINSIGHTS_* Container Apps Hosting Terraform / Bicep Azure App Configuration mapping (high level) Runtime settings are loaded from Azure App Configuration using hierarchical keys, then synchronized to environment variables used by the service. Local .env.local values can still override for developer workflows. App Config key Environment variable consumed by runtime Used for azure/openai/endpoint AZURE_OPENAI_ENDPOINT Microsoft Foundry model endpoint azure/openai/deployment-id AZURE_OPENAI_CHAT_DEPLOYMENT_ID Model deployment selection azure/speech/endpoint AZURE_SPEECH_ENDPOINT Azure AI Speech service endpoint azure/acs/endpoint ACS_ENDPOINT ACS call/media integration azure/redis/hostname REDIS_HOST Session and cache backend azure/cosmos/connection-string AZURE_COSMOS_CONNECTION_STRING Transcript/audit persistence azure/appinsights/connection-string APPLICATIONINSIGHTS_CONNECTION_STRING Telemetry and traces app/pools/tts-size POOL_SIZE_TTS TTS client pool sizing app/voice/default-tts-voice DEFAULT_TTS_VOICE Default voice selection Feature flag: warm-pool WARM_POOL_ENABLED Warm pool behavior toggle Full key coverage is defined in apps/artagent/backend/config/appconfig_provider.py in APPCONFIG_KEY_MAP and FEATURE_FLAG_MAP . Cross-cloud integration The accelerator supports hybrid deployments. AWS Connect traffic can be routed to Azure via a Certified Session Border Controller — Azure handles the AI workload while the carrier path and call routing stay on the partner side. SBC bridges SIP between clouds — Azure handles AI workload only Hardening minimums before going to production: flip cosmosdb_public_network_access_enabled to false , set the Foundry module public_network_access to Disabled , drop the Mongo firewall-all rule, wire private endpoints for Foundry / Speech / Redis / Cosmos / Key Vault into a hub-spoke VNet, and put an App Gateway + WAF in front of the Container Apps ingress. Everything else in the matrix above is already on by default."
+    },
+    {
+      "url": "architecture.html#performance",
+      "anchor": "performance",
+      "level": 2,
+      "page": "Architecture",
+      "title": "Performance Targets",
+      "text": "This is a real-time voice system. Latency kills user experience. Operation Target STT recognition < 200ms LLM first token < 500ms TTS first audio chunk < 150ms End-to-end turn < 1 second Agent handoff < 50ms Anti-patterns to avoid: Creating new clients per request (use pools), blocking I/O in async handlers, large context windows without compaction, synchronous DB calls, unbounded audio buffers."
+    },
+    {
+      "url": "architecture.html#why-complex",
+      "anchor": "why-complex",
+      "level": 2,
+      "page": "Architecture",
+      "title": "Why this complexity?",
+      "text": "If you've skimmed the codebase and wondered why there's a custom orchestrator, per-stage streaming, a pool layer, a VAD layer, and a barge-in cancellation path — this section is the answer. Real-time voice has constraints that don't show up in chat or batch-LLM systems, and those constraints drove every structural choice. 1 · The framework choice — own the loop, not the abstraction Most agent frameworks (Microsoft Agent Framework, LangChain, etc.) hand you a single agent.run() call that returns when the whole turn is done. That's perfect for chat and async work. For voice, it's the wrong shape — you lose the seams where latency and interruption live. Opinionated note: if you're starting greenfield and don't need per-turn audio control, Agent Framework is worth evaluating first. If you need a realtime voice loop with barge-in and fine-grained telemetry, keep the custom orchestrator and integrate at the workflow boundary. Where the managed pieces plug in: the orchestrator runs either audio path — custom Speech cascade or the Foundry Voice Live tool. Voice Live can manage the whole audio channel (audio in + out). Today the reason + tool stage runs ART's own custom agent framework; Microsoft Agent Framework is a potential drop-in there, not wired in today. The bottom cards weigh the latency tradeoff of each Foundry agent deployment style. Click to expand. Plugging in Agent Framework, Foundry agents, and Voice Live You don't have to choose \"all custom\" or \"all managed.\" The realtime loop above has clean seams where Microsoft's managed building blocks could slot in — each with its own latency profile to weigh against the ~1-second turn budget. Today the reason + tool stage runs ART's own custom agent framework; the items below are the supported plug-in points, some shipped and some potential. Agent Framework at the reason stage potential · not current state . MAF is two things — agents (LLM + tools/MCP) and graph workflows (type-safe routing, checkpointing, human-in-the-loop) — built on model clients, an agent session for state, middleware, and MCP clients. It maps cleanly onto our reasoning + tool-dispatch stage, so it's a natural future drop-in: keep the audio transport here, and let MAF own the agent graph, calling the Responses API on your Foundry project endpoint. This accelerator does not use MAF today — it ships its own custom, latency-tuned agent framework around the realtime loop; MAF is shown here as where it would plug in. Voice Live as a managed audio channel. The Voice Live API is exposed as a Foundry Agent Service tool that collapses speech-in and speech-out into one managed WebSocket hop (Realtime-API compatible), with 600+ Azure neural voices, custom voice, and models like gpt-realtime . Because the orchestrator supports both pipelines, Voice Live can take over the entire audio channel — VAD, STT, and TTS — while MAF still sits in the middle to customize the agentic layer. Use it when you want Azure to own the whole audio surface; use the custom Speech cascade when you need per-component control. Hosted agents vs. prompt agents — where every millisecond counts Foundry Agent Service offers two agent types, and the difference matters for voice. A prompt agent is configuration only (instructions + model + tools) — fully managed, nothing to scale, but you call it over the Responses API, so every turn pays a network hop and you can't reshape the orchestration. A hosted agent is your container (MAF, LangGraph, or custom) run by Foundry with a managed endpoint, autoscale, and a dedicated identity — great performance and full control once it's running. The warmup catch. Per the hosted-agents docs , each session runs in its own VM-isolated sandbox that scales to zero with stateful resume and predictable cold starts . After 15 minutes idle the compute is deprovisioned; the next request to that session has to provision fresh compute and restore state — and there's no warm pool to size . For a phone call where end-to-end has to stay under ~1 second, a cold start on the critical path is a non-starter. That's exactly why this accelerator keeps the audio loop in an always-on service: you plug MAF in at the reason stage and let Voice Live or your own pooled STT/TTS handle audio, but the hot path never waits on a container warmup. 2 · The 1-second turn budget Conversational research is clear: anything over ~1 second between the caller finishing their sentence and hearing a reply feels like lag and breaks turn-taking. That cap drives everything downstream. A single turn, broken down. We have ~120 ms of headroom — that's why we pool clients, stream LLM tokens straight into TTS, and never block on a full response. 3 · Barge-in — the user can talk over the agent The instant the caller starts speaking, the agent has to stop, drain its audio buffer, and start listening again — all within roughly 150 ms or it feels rude. This is the single biggest reason for the custom orchestrator: we have to be able to cancel in-flight TTS at any moment, which means we have to own the handle. VAD fires → orchestrator cancels the turn → TTS flushes its buffer → STT re-arms. Every arrow here is a real call site you can grep in the codebase. The takeaway: the complexity isn't accidental. Each layer (pools, VAD, streaming pipeline, cancellation paths, MemoManager) is paying for a specific real-time constraint. If you're extending this codebase, ask \"which constraint does this serve?\" before adding abstractions that hide the seams."
+    },
+    {
+      "url": "architecture.html#design-decisions",
+      "anchor": "design-decisions",
+      "level": 2,
+      "page": "Architecture",
+      "title": "Key Design Decisions",
+      "text": "Decision Why Implication Custom orchestrator (not Microsoft Agent Framework) Framework wasn't GA at build time; voice needs turn-level control over latency, streaming, and barge-in Extend the existing orchestrators in apps/artagent/backend/voice/ . Don't wrap them in higher-level agent abstractions that hide the per-stage seams. YAML-first agents Non-developers can modify behavior Don't create agent subclasses. Extend via YAML. Scenario-based handoffs Same agent works differently in different scenarios Change routing in orchestration.yaml , not agent code. Centralized tool registry Prevents duplication, enables discovery Always use @register_tool . Never define tools inline. Connection pooling Client creation costs 100-500ms Use get_tts_client() / get_stt_client() . Never instantiate directly. MemoManager for state Enables stateless container scaling Never store conversation state in-memory globals."
+    },
+    {
+      "url": "certification.html#top",
+      "anchor": "top",
+      "level": 1,
+      "page": "ARTist Certification",
+      "title": "ARTist Certification Program",
+      "text": "A three-level path that validates real-world skill with the ART Voice Agent Accelerator — from your first local call, to custom agents, to production at scale. Choose your level → How it works ARTist = Artist + ART (Azure Real-Time Voice Agent Framework). The program recognizes practitioners who can deploy, extend, and operate real-time voice agents in production. Brand new? Start with the Get started guide , run a call end-to-end, then come back here and aim for Apprentice first."
+    },
+    {
+      "url": "certification.html#levels",
+      "anchor": "levels",
+      "level": 2,
+      "page": "ARTist Certification",
+      "title": "Three levels, one path",
+      "text": "Each level builds on the last. Pick the one that matches where you are today. Level 1 Apprentice Run the framework locally, demo it confidently, and explain the end-to-end voice pipeline. View requirements → Level 2 Creator Build a custom YAML agent, integrate a tool, and contribute back to the community. View requirements → Level 3 Maestro Ship to production with observability, security, performance budgets, and mentor others. View requirements →"
+    },
+    {
+      "url": "certification.html#apprentice",
+      "anchor": "apprentice",
+      "level": 2,
+      "page": "ARTist Certification",
+      "title": "Level 1 — Apprentice",
+      "text": "Entry level Run it. Demo it. Explain it. You can stand the framework up on your own machine, drive an end-to-end voice call, and explain how audio flows from the phone to the model and back. Technical checklist Run the UI (frontend + backend) locally Successfully demo the framework to others Understand the end-to-end call flow Explain ACS → Speech (STT/TTS) → LLM Describe Voice Live vs Speech Cascade modes Use the Agent Builder to run a custom flow Complete one end-to-end voice call demo Documentation review Read the architecture overview Navigate the API reference Review the agent catalog Portfolio evidence Screenshot of successful local deployment Brief architecture explanation (5–10 sentences) Recording or log of a completed voice call"
+    },
+    {
+      "url": "certification.html#creator",
+      "anchor": "creator",
+      "level": 2,
+      "page": "ARTist Certification",
+      "title": "Level 2 — Creator",
+      "text": "Practitioner Build something that talks back. You design custom agents in YAML, wire them to real tools, and ship the result — then help the next person do the same. Custom agent development Create a custom agent ( agents/<name>/agent.yaml ) Define prompt, greeting, and return greeting Configure handoff triggers for multi-agent flows Customize voice (name, rate, pitch) for your use case Test end-to-end with speech input + tool calls Tool integration (choose one or more) External REST API (CRM, ticketing, payments) Database (Cosmos DB, PostgreSQL, etc.) Custom business-logic tool Third-party service (Twilio, Stripe, etc.) Community contributions File a bug report with reproduction steps Submit a documentation improvement PR Answer a question in GitHub Discussions Portfolio evidence Link to a GitHub repo with your custom agent YAML Demo video or call recording (2–5 minutes) Code snippet showing your tool integration Links to your GitHub contributions (issues, PRs, discussions)"
+    },
+    {
+      "url": "certification.html#maestro",
+      "anchor": "maestro",
+      "level": 2,
+      "page": "ARTist Certification",
+      "title": "Level 3 — Maestro",
+      "text": "Expert Ship it. Operate it. Teach it. You run real-time voice systems in production with observability, security guardrails, performance budgets, and contribute back to the framework itself. Production deployment Deploy to Azure with Bicep or Terraform Configure ACS for PSTN or SIP integration Implement health checks and readiness probes Document deployment architecture and runbooks Observability & performance Instrument code with OpenTelemetry spans Set up tracing in App Insights or Jaeger Hit < 1s P95 for STT → LLM → TTS Configure connection pooling (Warmable / OnDemand) Implement resource limits and backpressure Advanced development (choose one or more) Extend ACS event handlers for custom call control Build custom media processing (VAD tuning, audio prep) Implement stateful handoffs and context transfer Contribute a framework enhancement (new pool, etc.) Security & compliance Implement authentication flow ( auth_agent pattern) PII detection / redaction (Content Safety or custom) Audit logging for HIPAA / GDPR / PCI-DSS Secret management with Key Vault + Managed Identity Community leadership Review and merge community PRs Lead a workshop or create a video tutorial Mentor 2+ developers through certification Portfolio evidence Production deployment URL or architecture diagram Observability dashboard screenshot (traces, metrics, logs) Performance report demonstrating P95 latency < 1s Security documentation (auth flow, PII handling, compliance) Evidence of mentorship (PR reviews, workshop slides, tutorials)"
+    },
+    {
+      "url": "certification.html#process",
+      "anchor": "process",
+      "level": 2,
+      "page": "ARTist Certification",
+      "title": "How to get certified",
+      "text": "The self-assessment path. Five steps from \"I think I'm ready\" to badge in hand. 1 Complete the technical checklist for your level Work through every item under Apprentice , Creator , or Maestro . Tick them off as you go. 2 Assemble your portfolio evidence Gather the screenshots, repo links, recordings, and reports listed under Portfolio evidence for your level. Keep links public. 3 Open a GitHub Discussion Title format: [ARTist Certification] <Level> - <Your Name> . Paste in your portfolio links and a short summary. 4 Program maintainers review Expected response time: 5 business days . Reviewers may ask follow-up questions in the same thread. 5 Receive your badge & Hall of Fame entry On approval you get the badge image, a Hall of Fame listing, and the markdown snippet to drop into your GitHub profile. Start your submission on GitHub ↗"
+    },
+    {
+      "url": "certification.html#workshops",
+      "anchor": "workshops",
+      "level": 2,
+      "page": "ARTist Certification",
+      "title": "Workshop fast-track",
+      "text": "Skip the self-assessment queue by attending an official workshop. Participants get expedited review. Level Format Duration Outcome Apprentice Onboarding session 2 hours Deployment + architecture review Creator Hands-on lab Full day Build a custom agent with guidance Maestro Architecture review + mentorship Ongoing Production readiness assessment Want to host or attend a workshop? Open a GitHub Discussion and tag the maintainers — see Contact ."
+    },
+    {
+      "url": "certification.html#hall-of-fame",
+      "anchor": "hall-of-fame",
+      "level": 2,
+      "page": "ARTist Certification",
+      "title": "Hall of Fame",
+      "text": "Practitioners recognized for expertise in real-time voice AI. Maestros Level 3 Name GitHub Organization Pablo Salvador Lopez @pablosalvador10 Microsoft Jin Lee @JinLee794 Microsoft Creators Level 2 Name GitHub Organization Be the first Creator! Apprentices Level 1 Name GitHub Organization Complete onboarding to join!"
+    },
+    {
+      "url": "certification.html#profile",
+      "anchor": "profile",
+      "level": 2,
+      "page": "ARTist Certification",
+      "title": "Add the badge to your profile",
+      "text": "Show off your certification on GitHub. Replace the badge filename with the level you earned. Certified ARTist — Creator Crafting real-time voice AI with the ART framework. <!-- In your GitHub profile README.md --> <img src=\"https://raw.githubusercontent.com/Azure-Samples/art-voice-agent-accelerator/main/docs/badges/ artistacreator .png\" alt=\"ARTist Creator\" width=\"200\"/> Certified ARTist — crafting real-time voice AI with the ART framework. [About ARTist Certification →](https://azure-samples.github.io/art-voice-agent-accelerator/certification.html) Badge filenames Level Filename Recommended width Apprentice badges/artistapprentice.png 200 px Creator badges/artistacreator.png 200 px Maestro badges/artistamaestro.png 200 px"
+    },
+    {
+      "url": "certification.html#contact",
+      "anchor": "contact",
+      "level": 2,
+      "page": "ARTist Certification",
+      "title": "Contact & support",
+      "text": "Certification Submit for review Open a Discussion titled [ARTist Certification] <Level> - <Name> . Tag @pablosalvador10 or @JinLee794 . Technical Bugs & features File a GitHub Issue with repro steps for bugs, or a feature request for new capabilities. Community Questions & ideas Architecture, implementation, and \"how should I…?\" go in Discussions. Expected response: 5 business days. The ARTist certification program is maintained by the ART Voice Agent Accelerator community."
+    },
+    {
+      "url": "guides.html#top",
+      "anchor": "top",
+      "level": 1,
+      "page": "Guides",
+      "title": "Guides",
+      "text": "Step-by-step instructions for setup, extension, and operations."
+    },
+    {
+      "url": "guides.html#prerequisites",
+      "anchor": "prerequisites",
+      "level": 2,
+      "page": "Guides",
+      "title": "Prerequisites",
+      "text": "Requirement Install Verify Azure CLI brew install azure-cli az --version Azure Developer CLI brew install azd azd version Docker or Podman brew install --cask docker docker --version Python 3.11+ brew install python@3.11 python3 --version Node.js 18+ brew install node node --version Azure Subscription With Contributor access az account show Azure OpenAI access: You need GPT-4o or GPT-4o-mini deployed in a supported region. The azd up command handles this provisioning."
+    },
+    {
+      "url": "guides.html#deploy",
+      "anchor": "deploy",
+      "level": 2,
+      "page": "Guides",
+      "title": "Deploy to Azure",
+      "text": "One command deploys everything: infrastructure, backend, frontend. Infrastructure provisioned by azd up — Terraform/Bicep IaC # 1. Clone and enter the repo git clone https://github.com/Azure-Samples/art-voice-agent-accelerator.git cd art-voice-agent-accelerator # 2. Login az login azd auth login # 3. Deploy (~25 min total) azd up What azd up creates: Resource Purpose Azure OpenAI GPT-4o for conversations Azure Speech Services STT and TTS processing Azure Communication Services Telephony and media streaming Cosmos DB Conversation persistence Azure Redis Session state Container Apps (×2) Backend + Frontend hosting Storage Account Blob storage for app files App Configuration Dynamic configuration Application Insights Monitoring and tracing After deployment, azd prints the frontend URL. Open it to start a conversation."
+    },
+    {
+      "url": "guides.html#enable-phone-calling",
+      "anchor": "enable-phone-calling",
+      "level": 2,
+      "page": "Guides",
+      "title": "Enable Phone Calling (ACS)",
+      "text": "azd up provisions the Azure Communication Services (ACS) resource, but it does not buy a phone number or wire up call routing for you — those are deliberate, billable, one-time steps. To receive inbound PSTN calls you need to do three things: (1) purchase a phone number, (2) point an Event Grid subscription at your backend so ACS knows where to deliver the call, and (3) let the backend answer it."
+    },
+    {
+      "url": "guides.html#acs-call-flow",
+      "anchor": "acs-call-flow",
+      "level": 3,
+      "page": "Guides",
+      "title": "How an inbound call reaches your agent",
+      "text": "When someone dials your ACS number, ACS doesn't talk to your backend directly. It raises an IncomingCall event to Azure Event Grid , which fans that event out to whatever webhook you've subscribed. That webhook is a single backend endpoint: Event Grid webhook (the one URL ACS needs to know) POST https://<your-backend-host>/api/v1/calls/answer That same endpoint does double duty: it answers Event Grid's one-time SubscriptionValidationEvent handshake and handles the runtime Microsoft.Communication.IncomingCall events. The flow: Caller dials your purchased ACS number. ACS emits a Microsoft.Communication.IncomingCall event to Event Grid. Event Grid delivers that event to your subscribed webhook ( /api/v1/calls/answer ). The backend answers the call, opens the media WebSocket, and the orchestrator starts the conversation. The one URL that matters: /api/v1/calls/answer . In production this is your Container App's public FQDN; in local dev it's your dev tunnel URL (see Dev tunnel below). Everything in this section is about getting ACS to deliver IncomingCall events to that path."
+    },
+    {
+      "url": "guides.html#acs-buy-number",
+      "anchor": "acs-buy-number",
+      "level": 3,
+      "page": "Guides",
+      "title": "Step 1 — Purchase a phone number in ACS",
+      "text": "Buy a number directly on the ACS resource that azd up created. Via the Azure Portal: Open the Azure Portal → your Communication Services resource. In the left menu under Telephony and SMS , select Phone numbers → + Get . Choose Country/Region (e.g. United States), number type Toll-free or Local , and enable the Calling — Make & receive calls capability (inbound is what you need to receive calls). Search, select an available number, review the monthly + per-minute pricing, and Place order . Heads up: phone numbers are billed (a monthly lease plus usage), and toll-free numbers may require a one-time regulatory / verification review before they can carry traffic. Buy the number early so the verification clears before you demo. Via the Azure CLI (the communication extension installs on first use): # Search for an available toll-free US number with inbound calling az communication phonenumber search-available \\ --resource-group <your-rg> \\ --communication-service <your-acs-name> \\ --country-code US \\ --phone-number-type tollFree \\ --assignment-type application \\ --calling-capabilities inbound # Purchase using the search-id returned above az communication phonenumber purchase \\ --resource-group <your-rg> \\ --communication-service <your-acs-name> \\ --search-id <search-id> # Confirm the number is on the resource az communication phonenumber list-purchased \\ --resource-group <your-rg> \\ --communication-service <your-acs-name>"
+    },
+    {
+      "url": "guides.html#acs-event-subscription",
+      "anchor": "acs-event-subscription",
+      "level": 3,
+      "page": "Guides",
+      "title": "Step 2 — Route the call: create an Event Grid subscription",
+      "text": "This is the step that connects ACS to your backend. You're subscribing to the ACS resource's IncomingCall events and telling Event Grid to deliver them to your /api/v1/calls/answer webhook. Via the Azure Portal: Open your Communication Services resource → Events (left menu) → + Event Subscription . Name it (e.g. incoming-call-to-backend ). Under Filter to Event Types , select only Incoming Call ( Microsoft.Communication.IncomingCall ). Deselecting the rest keeps noise off your webhook. Set Endpoint Type = Web Hook . For Endpoint , paste your backend's answer URL: Production (Container App FQDN) https://<your-backend>.<region>.azurecontainerapps.io/api/v1/calls/answer Click Create . Event Grid immediately fires a SubscriptionValidationEvent to that URL; the backend's /answer endpoint auto-completes the handshake, so the subscription goes green within a few seconds. If it stays in a failed/validating state, your endpoint wasn't reachable — see the troubleshooting note below. Via the Azure CLI: # Resolve the ACS resource ID (the Event Grid \"source\") ACS_ID=$(az communication show \\ --name <your-acs-name> \\ --resource-group <your-rg> \\ --query id -o tsv) # Subscribe IncomingCall events → backend /api/v1/calls/answer az eventgrid event-subscription create \\ --name incoming-call-to-backend \\ --source-resource-id \"$ACS_ID\" \\ --endpoint \"https://<your-backend>.<region>.azurecontainerapps.io/api/v1/calls/answer\" \\ --endpoint-type webhook \\ --included-event-types Microsoft.Communication.IncomingCall Validation must succeed or no calls flow. Event Grid only delivers IncomingCall events after the one-time validation handshake completes. The backend must be running and publicly reachable at the moment you create the subscription. If the endpoint is down, the subscription will fail and you'll need to re-create it once the backend is up."
+    },
+    {
+      "url": "guides.html#acs-verify",
+      "anchor": "acs-verify",
+      "level": 3,
+      "page": "Guides",
+      "title": "Step 3 — Verify",
+      "text": "Confirm the Event Subscription shows Provisioning state: Succeeded under Events on the ACS resource. Call your purchased number from any phone. Watch the backend logs — you should see the SubscriptionValidationEvent (once, at creation) and then a Microsoft.Communication.IncomingCall event followed by the call being answered."
+    },
+    {
+      "url": "guides.html#acs-local",
+      "anchor": "acs-local",
+      "level": 3,
+      "page": "Guides",
+      "title": "Local development — making ACS reach your laptop",
+      "text": "In production the webhook is a public Container App URL, so ACS can reach it. On your laptop, http://localhost:8010/api/v1/calls/answer is invisible to Azure. The fix is exactly the same three steps above, with one change: the Endpoint you give the Event Grid subscription is your dev tunnel URL instead of the Container App FQDN: Event Grid endpoint for local dev https://abc123-8010.usw3.devtunnels.ms/api/v1/calls/answer The dev tunnel gives localhost:8010 a public, internet-routable HTTPS address that ACS can deliver events to. See Dev tunnel — enabling telephony on your laptop for setup, and remember to update both the Event Grid subscription endpoint and the backend BASE_URL whenever you create a fresh tunnel. Re-create the subscription when the tunnel ID changes. Each new devtunnel create mints a new random URL. An Event Grid subscription pinned to a dead tunnel silently drops every IncomingCall event. Either keep a stable tunnel for the day or update/re-create the subscription endpoint after each rotation."
+    },
+    {
+      "url": "guides.html#genesys",
+      "anchor": "genesys",
+      "level": 2,
+      "page": "Guides",
+      "title": "Genesys Cloud Integration",
+      "text": "The accelerator ships with a built-in Genesys Cloud AudioConnector bridge , so you can put the same multi-agent voice orchestrator behind a Genesys contact-center flow without Azure Communication Services or a PSTN number. Genesys streams the live call audio to the backend over a WebSocket, the backend runs the conversation through Azure VoiceLive and the agent/tool/handoff stack, and synthesized speech streams back to the caller — all in real time. This is an alternative telephony front-end that sits alongside the ACS path above. ACS and Genesys share the exact same agents, tools, scenarios, and handoff logic; only the audio transport differs. When to use this: you already run Genesys Cloud as your contact-center platform and want to route a queue, IVR branch, or a single flow action to an Azure AI voice agent. Genesys owns the PSTN leg and caller experience; the accelerator provides the AI brain."
+    },
+    {
+      "url": "guides.html#genesys-how-it-works",
+      "anchor": "genesys-how-it-works",
+      "level": 3,
+      "page": "Guides",
+      "title": "How it works",
+      "text": "Genesys Cloud's AudioConnector integration speaks the AudioHook v2 WebSocket protocol. The accelerator implements the full server side of that protocol and bridges it to Azure VoiceLive: flowchart LR caller([📞 Caller]) --- gc subgraph GENESYS[\"☁️ Genesys Cloud\"] gc[\"AudioConnector Architect flow \"] end subgraph ART[\"⚙️ ART Backend — /api/v1/genesys/stream\"] direction TB proto[\"AudioHook v2 protocol handshake · seq · ping · DTMF · barge-in \"] codec[\"Audio codec µ-law 8kHz ⇄ PCM16 24kHz \"] handler[\"GenesysVoiceLiveHandler\"] proto --- handler codec --- handler end subgraph CORE[\"🧠 Shared multi-agent core (same as ACS)\"] direction TB orch[\"LiveOrchestrator\"] agents[\"Agents · Tools · Handoffs\"] memo[\"MemoManager Redis session + caller context \"] orch --- agents orch --- memo end vl[\"Azure VoiceLive API STT · LLM · TTS (managed) \"] gc < == \"WebSocket · µ-law 8kHz + JSON\" ==> proto handler < == \"PCM16 24kHz · base64\" ==> vl handler --> orch classDef callerNode fill:#FFFFFF,stroke:#605E5C,color:#1A1A1A classDef gNode fill:#FFF8E1,stroke:#C8960A,color:#3D2F00 classDef aNode fill:#E3F0FF,stroke:#0078D4,color:#0A2540 classDef cNode fill:#E6FAEA,stroke:#107C10,color:#0B3D0B classDef vNode fill:#F1E6FF,stroke:#8764B8,color:#2E1A47 class caller callerNode class gc gNode class proto,codec,handler aNode class orch,agents,memo cNode class vl vNode style GENESYS fill:#FFFBF0,stroke:#FFB900,color:#3D2F00 style ART fill:#F0F7FF,stroke:#0078D4,color:#0A2540 style CORE fill:#F0FBF2,stroke:#107C10,color:#0B3D0B The bridge does three jobs on every call: Protocol — Implements the AudioHook v2 server handshake ( open / opened ), keep-alive ( ping / pong ), sequence-number tracking, DTMF, barge-in, and graceful close / disconnect . Audio codec — Genesys sends µ-law (PCMU) 8 kHz mono; VoiceLive expects PCM16 24 kHz . The handler decodes + upsamples 3× inbound, and downsamples + µ-law encodes outbound, with paced 250 ms chunking back to Genesys. Orchestration — On session open it connects to VoiceLive, resolves the same agent set / scenario / handoff map used by the ACS path, and starts the LiveOrchestrator . Caller context from the Genesys flow is injected into the agent's working memory. Genesys is VoiceLive-only today. Unlike the ACS path (which honors ACS_STREAMING_MODE and can run the SpeechCascade orchestrator), the Genesys bridge is wired exclusively to Azure VoiceLive via GenesysVoiceLiveHandler → LiveOrchestrator — there is no SpeechCascade code path for Genesys. This keeps end-to-end latency lowest for contact-center traffic. Your VoiceLive settings must be configured (see Step 1) regardless of what ACS_STREAMING_MODE is set to. The agents, tools, and handoff logic are identical to the cascade path, so the same scenarios work either way."
+    },
+    {
+      "url": "guides.html#genesys-builtin",
+      "anchor": "genesys-builtin",
+      "level": 3,
+      "page": "Guides",
+      "title": "What the accelerator gives you out of the box",
+      "text": "The integration is already wired into the backend — there is nothing to build. Once the backend is running it exposes: Endpoint Type Purpose /api/v1/genesys/stream WebSocket AudioHook v2 audio + control stream (subprotocol audiohook-v2 ) /api/v1/genesys/health GET Liveness check — returns {\"status\":\"ok\",\"service\":\"genesys-audiohook\"} Caller context configured as input variables on the Genesys AudioConnector action is delivered in the open message and made available to your agents. A few well-known keys are promoted to system variables; all input variables are also stored in the session's working memory ( MemoManager ) so tools and prompts can read them: Genesys input variable Exposed to agents as Notes phoneNumber caller_phone Caller's number from the Genesys flow emailAddress caller_email Caller email, if collected promptName genesys_prompt Scenario / prompt hint from the flow any other key working memory Stored verbatim in MemoManager for the session"
+    },
+    {
+      "url": "guides.html#genesys-step1",
+      "anchor": "genesys-step1",
+      "level": 3,
+      "page": "Guides",
+      "title": "Step 1 — Configure Azure VoiceLive",
+      "text": "The bridge connects to Azure VoiceLive on session open, so these must be set in the backend environment (they are populated by azd up when VoiceLive is provisioned): .env (repo root) # Azure VoiceLive — required for the Genesys bridge AZURE_VOICELIVE_ENDPOINT=https://<your-voicelive-resource>.cognitiveservices.azure.com AZURE_VOICELIVE_MODEL=gpt-4o-realtime-preview # Auth: managed identity (recommended) OR an API key USE_DEFAULT_CREDENTIAL=true # AZURE_VOICELIVE_API_KEY=<key> # only if not using managed identity # Recommended: Redis-backed session memory so caller context + handoffs persist REDIS_HOST=<your-redis-host> REDIS_PORT=6380"
+    },
+    {
+      "url": "guides.html#genesys-step2",
+      "anchor": "genesys-step2",
+      "level": 3,
+      "page": "Guides",
+      "title": "Step 2 — Point Genesys at your endpoint",
+      "text": "In Genesys Cloud Admin , create an AudioConnector integration and set its connection URI to your backend's Genesys WebSocket endpoint (always wss:// — Genesys requires TLS): AudioConnector connection URI wss://<your-backend>.<region>.azurecontainerapps.io/api/v1/genesys/stream Then reference that integration from an Audio Connector action inside an Architect inbound call flow, and map any caller context you want the agent to receive into the action's input variables (e.g. phoneNumber , promptName ). When a call hits that flow action, Genesys opens the WebSocket and the AI agent takes over the conversation. Public, TLS, and reachable. Genesys Cloud connects from its own cloud infrastructure, so the endpoint must be a public wss:// URL. For local development, expose the backend through a dev tunnel and use the tunnel's wss:// address — exactly as you would for ACS, but pointing at /api/v1/genesys/stream ."
+    },
+    {
+      "url": "guides.html#genesys-step3",
+      "anchor": "genesys-step3",
+      "level": 3,
+      "page": "Guides",
+      "title": "Step 3 — Test without Genesys (simulator)",
+      "text": "The repo ships a local AudioConnector simulator at tools/genesys_simulator/ that emulates a Genesys client end-to-end — it negotiates AudioHook v2, captures your microphone, streams µ-law audio, and plays the agent's response — so you can validate the full pipeline before touching real Genesys infrastructure. # 1) Start the backend (if not already running) python -m uvicorn apps.artagent.backend.main:app --host 0.0.0.0 --port 8081 # 2) Run the simulator against it cd tools/genesys_simulator python -m venv .venv && source .venv/bin/activate pip install -r requirements.txt python genesys_client_simulator.py ws://localhost:8081/api/v1/genesys/stream Speak into your mic and you should hear the agent respond. See tools/genesys_simulator/README.md for configuration (prompt/scenario name, org/conversation IDs, and the input variables it sends)."
+    },
+    {
+      "url": "guides.html#genesys-expect",
+      "anchor": "genesys-expect",
+      "level": 3,
+      "page": "Guides",
+      "title": "What you should expect to see",
+      "text": "A healthy call produces this log sequence in the backend (loggers api.v1.endpoints.genesys , genesys.protocol , and genesys.handler ). Every line is tagged with the AudioHook session= so you can follow a single call: Backend logs — successful Genesys session [Genesys] WebSocket connect | session=<sid> [Genesys] Handler started | session=<sid> [GenesysProtocol] Session opened | conversation=<conv> org=<org> media={\"format\":\"PCMU\",\"rate\":8000,...} [Genesys] VoiceLive connected | connect_ms=312.4 session=<sid> [Genesys] Agents resolved | count=8 start=Concierge session=<sid> [Genesys] Orchestrator started | session=<sid> [Genesys] User transcript: 'I want to check my balance' | session=<sid> [Genesys] First audio chunk for response=<rid> | session=<sid> [Genesys] Speech started → barge-in | session=<sid> # caller interrupted; playback stops Handshake: WebSocket connect → Session opened within a second. If you never see Session opened , Genesys and the backend failed to agree on a media format. Audio both ways: VoiceLive connected then First audio chunk means the agent is talking back; User transcript lines confirm inbound speech is being recognized. Barge-in: Speech started → barge-in appears when the caller interrupts the agent — the bridge tells Genesys to stop the current playback."
+    },
+    {
+      "url": "guides.html#genesys-debug",
+      "anchor": "genesys-debug",
+      "level": 3,
+      "page": "Guides",
+      "title": "Debugging & troubleshooting via monitor logs",
+      "text": "All Genesys activity flows through the standard OpenTelemetry → Application Insights pipeline (see Monitoring ). Filter on the [Genesys] / [GenesysProtocol] tags or a specific session= to isolate one call. Application Insights (Logs / KQL): All Genesys activity in the last hour traces | where timestamp > ago(1h) | where message has \"[Genesys]\" or message has \"[GenesysProtocol]\" | project timestamp, message, severityLevel, operation_Id | order by timestamp asc Trace a single call end-to-end traces | where message has \"session=<your-session-id>\" | order by timestamp asc Container App live logs (Azure CLI): # Tail the backend and filter to Genesys lines az containerapp logs show \\ --name <your-backend-app> \\ --resource-group <your-rg> \\ --follow --tail 100 | grep -i genesys # Quick liveness check of the Genesys endpoint curl https://<your-backend>.<region>.azurecontainerapps.io/api/v1/genesys/health Common issues — the log line in the right column tells you which stage failed: Symptom Likely cause What to check / log signal WebSocket connects, then drops right after open VoiceLive not configured or credential failure Look for [Genesys] Failed to connect to VoiceLive . Verify AZURE_VOICELIVE_ENDPOINT / AZURE_VOICELIVE_MODEL and that the managed identity (or API key) can reach VoiceLive. No opened response / session never starts Media format mismatch [GenesysProtocol] No supported media format found . The AudioConnector must offer PCMU @ 8000 Hz on the external channel. Session rejected with a disconnect Out-of-order or duplicate frames (proxy/network) [GenesysProtocol] Invalid client seq or Session ID mismatch . Check for a proxy reordering WebSocket frames between Genesys and the backend. Garbled, robotic, or sped-up audio Codec conversion problem Inspect the [Genesys] Audio delta: input_type=… → µ-law_size=… debug line. Confirm Genesys is sending 8 kHz µ-law mono. Agent greets with the wrong persona / scenario Scenario or start-agent resolution [Genesys] Agents resolved | count=… start=… shows which agent set and start agent were selected. Adjust the promptName input variable or scenario config. Caller context (phone/email) missing in the agent Input variables not mapped, or Redis unavailable Confirm the AudioConnector action sets inputVariables ; without Redis ( REDIS_* ) the MemoManager is skipped and context isn't persisted across handoffs. Calls connect locally with the simulator but not from Genesys Endpoint not publicly reachable over TLS Genesys requires a public wss:// URL. Use the Container App FQDN in production or a dev tunnel locally — pointed at /api/v1/genesys/stream ."
+    },
+    {
+      "url": "guides.html#local-development",
+      "anchor": "local-development",
+      "level": 2,
+      "page": "Guides",
+      "title": "Local Development",
+      "text": "Install dependencies make install # Installs Python (pip) + Node (npm) dependencies Environment setup After azd up , a .env.local file is generated at the repo root with all connection strings. For local development, copy it to .env (which the backend loads by default): cp .env.local .env"
+    },
+    {
+      "url": "guides.html#dev-tunnel",
+      "anchor": "dev-tunnel",
+      "level": 3,
+      "page": "Guides",
+      "title": "Dev tunnel — enabling telephony on your laptop",
+      "text": "Why a dev tunnel is required. The voice agent is driven by Azure Communication Services (ACS) , a cloud service that places phone calls and streams audio into your backend via webhooks ( /api/v1/calls/answer , media WebSocket, etc.). localhost:8010 is invisible to Azure — ACS literally cannot reach it. A dev tunnel gives your laptop a public, internet-routable HTTPS URL that ACS can call into, which is what turns local development into a working PSTN endpoint. Skip the tunnel and you'll still get a working browser UI, but no phone calls will connect and ACS event subscriptions will fail validation. Use Azure Dev Tunnels : # Install brew install --cask devtunnel # Login and create a tunnel with anonymous access (required for ACS — see below) devtunnel user login devtunnel create --allow-anonymous # Expose backend port 8010 and start hosting devtunnel port create -p 8010 --protocol https devtunnel host Copy the HTTPS URL it prints (e.g. https://abc123-8010.usw3.devtunnels.ms ) — you'll wire it into BASE_URL below."
+    },
+    {
+      "url": "guides.html#dev-tunnel-security",
+      "anchor": "dev-tunnel-security",
+      "level": 3,
+      "page": "Guides",
+      "title": "Securing the tunnel (RBAC + compensating controls)",
+      "text": "The constraint: ACS webhooks are unauthenticated HTTPS POST s from Azure infrastructure — ACS cannot present a user's Entra ID token to your tunnel. That means the tunnel path ACS hits must allow anonymous traffic , so you can't simply put Entra RBAC in front of the callback URL and call it a day. Instead, layer defenses around it. 1. Restrict who can create tunnels in your tenant Tenant admins can lock down the Dev Tunnels service itself so only approved users (and only inside the corporate tenant) can host tunnels. From the Dev Tunnels security docs : # Tenant admin: require Entra ID auth + restrict tunnel creation to a group # (configured in the Entra admin center under Enterprise applications → # \"Visual Studio Tunnel Service\" → Users and groups + Conditional Access) This doesn't protect the data plane that ACS hits, but it stops random tenants/users from spinning up tunnels that look like yours. 2. Treat the tunnel URL as a secret Each tunnel ID is a high-entropy random string (e.g. abc123 in abc123-8010.usw3.devtunnels.ms ). That ID is effectively a bearer secret for the callback path. Don't paste it in Teams, don't commit it, and rotate it often: # Tear down at end of day devtunnel delete <tunnel-id> # Or recycle with a fresh ID devtunnel create --allow-anonymous 3. Use Entra-restricted tunnels for non-ACS surfaces If you also expose the frontend or an admin UI through a tunnel (i.e. anything a human in a browser consumes — not ACS), you can drop --allow-anonymous and add tenant- or user-scoped RBAC. Callers will be challenged for an Entra ID token before reaching your service: # Create a tunnel with no anonymous access (default = owner only) devtunnel create # Grant your whole tenant access (members must sign in with Entra ID) devtunnel access create <tunnel-id> --tenant <your-tenant-id> # Or grant a specific user devtunnel access create <tunnel-id> --user alice@contoso.com # Inspect / revoke devtunnel access list <tunnel-id> devtunnel access delete <tunnel-id> --access-id <id> A common split-brain pattern: two tunnels per laptop — one anonymous tunnel exposing only the backend port for ACS callbacks, and one Entra-restricted tunnel exposing the frontend so only your tenant can load the UI. 4. Validate ACS callbacks at the application layer Even with an anonymous tunnel, the backend should still verify incoming ACS events. The ACS Event Grid integration performs a one-time SubscriptionValidation handshake, and runtime events ship as CloudEvents 1.0 with a known schema — reject anything that doesn't match. Bottom line: for the ACS callback path, anonymous + a random tunnel ID + short-lived tunnels is the realistic posture. Use Entra RBAC where it actually helps (tunnel creation , frontend/admin UIs), and never use a dev tunnel for anything beyond local development. Wire BASE_URL into the backend .env The backend reads BASE_URL as the public callback endpoint it gives to ACS for media streaming and call events. Edit the root .env : .env (repo root) # Public URL ACS uses to reach your backend (from `devtunnel host`) BASE_URL=https://abc123-8010.usw3.devtunnels.ms Every time you create a new tunnel, update this value — a stale BASE_URL is the #1 cause of dropped calls and 404 callbacks. Wire the frontend .env The frontend is a Vite/React app, so its environment variables are baked into the bundle at build time (Vite inlines anything prefixed VITE_ when npm run dev or npm run build starts). Changing this file requires restarting the Vite dev server. Create apps/artagent/frontend/.env from the sample: cp apps/artagent/frontend/.env.sample apps/artagent/frontend/.env apps/artagent/frontend/.env # Local backend (default) VITE_BACKEND_BASE_URL=http://localhost:8010 # Or, when testing the browser client against your dev tunnel: # VITE_BACKEND_BASE_URL=https://abc123-8010.usw3.devtunnels.ms Use localhost for normal browser-only development. Point it at the tunnel URL only when you need an external device (phone, another machine) to hit your backend through the browser UI. Start the services make start_backend # FastAPI on http://localhost:8010 make start_frontend # Vite dev server on http://localhost:5173"
+    },
+    {
+      "url": "guides.html#create-agent",
+      "anchor": "create-agent",
+      "level": 2,
+      "page": "Guides",
+      "title": "Create an Agent",
+      "text": "Agents are YAML files — no Python required. 1. Create the agent directory mkdir -p apps/artagent/backend/registries/agentstore/my_agent 2. Define the agent my_agent/agent.yaml name : MyAgent description : Handles widget inquiries handoff : trigger : handoff_my_agent greeting : \"Hi! I can help with widget questions.\" tools : - lookup_widget - handoff_concierge # Always include a way back prompts : path : prompt.jinja 3. Write the system prompt my_agent/prompt.jinja You are a widget specialist for {{ company_name }}. Help the caller find the right widget. Be concise and friendly. If you can't help, use the handoff_concierge tool to transfer back. 4. Add to a scenario scenariostore/my_scenario/orchestration.yaml start_agent : Concierge handoffs : - from : Concierge to : MyAgent tool : handoff_my_agent type : announced - from : MyAgent to : Concierge tool : handoff_concierge type : discrete The agent is auto-discovered on next restart. No registration code needed."
+    },
+    {
+      "url": "guides.html#add-tool",
+      "anchor": "add-tool",
+      "level": 2,
+      "page": "Guides",
+      "title": "Add a Tool",
+      "text": "Tools are Python functions registered in the centralized tool store. toolstore/lookup_widget.py from registries.toolstore.registry import register_tool @register_tool ( name = \"lookup_widget\" , description = \"Look up widget details by SKU or name\" , ) async def lookup_widget (query: str ) -> dict : # Your business logic here return { \"sku\" : \"W-123\" , \"name\" : \"Premium Widget\" } Rules: Always use @register_tool . Make tools async . Never define tools inline in agents. The tool is immediately available to any agent that lists it."
+    },
+    {
+      "url": "guides.html#create-scenario",
+      "anchor": "create-scenario",
+      "level": 2,
+      "page": "Guides",
+      "title": "Create a Scenario",
+      "text": "Scenarios define how agents connect. Same agents, different wiring. scenariostore/my_scenario/orchestration.yaml name : my_scenario description : Widget support flow start_agent : Concierge agents : - Concierge - MyAgent - AuthAgent handoffs : - from : Concierge to : AuthAgent tool : handoff_auth_agent type : announced - from : AuthAgent to : MyAgent tool : handoff_my_agent type : discrete agent_defaults : company_name : \"Contoso Widgets\" Handoff types: Type Behavior announced Agent tells the caller they're being transferred discrete Silent handoff — caller doesn't know"
+    },
+    {
+      "url": "guides.html#production",
+      "anchor": "production",
+      "level": 2,
+      "page": "Guides",
+      "title": "Production Deployment",
+      "text": "Checklist Category Item Identity Use managed identity (not connection strings) for all Azure services Networking VNet integration, private endpoints for Redis/Cosmos/Speech Scaling Container Apps min replicas ≥ 2, scale on concurrent connections Monitoring Application Insights connected, alerts on latency & error rate Secrets Key Vault for any non-managed-identity credentials Availability Multi-region ACS, geo-redundant Cosmos, Redis HA"
+    },
+    {
+      "url": "guides.html#monitoring",
+      "anchor": "monitoring",
+      "level": 2,
+      "page": "Guides",
+      "title": "Monitoring",
+      "text": "The system emits OpenTelemetry traces through Application Insights. Key metrics to watch Metric What it means Alert threshold End-to-end turn latency User speech end → response start > 2 seconds STT recognition time Audio → transcript > 500ms p95 TTS first byte Text → first audio chunk > 300ms p95 Active connections Concurrent WebSocket sessions > 80% of limit Tool execution time Function call duration > 5 seconds"
+    },
+    {
+      "url": "guides.html#testing",
+      "anchor": "testing",
+      "level": 2,
+      "page": "Guides",
+      "title": "Testing",
+      "text": "Run tests # Unit tests make test # With coverage make test_coverage # Load testing make load_test Test structure Type Location What it covers Unit tests/unit/ Individual functions, agents, tools Integration tests/integration/ API endpoints, WebSocket flows Evaluation tests/evaluation/ LLM response quality, scenario correctness Load tests/load/ Concurrent calls, latency under stress"
+    },
+    {
+      "url": "guides.html#troubleshooting",
+      "anchor": "troubleshooting",
+      "level": 2,
+      "page": "Guides",
+      "title": "Troubleshooting",
+      "text": "Problem Likely cause Fix No audio response TTS client pool exhausted Check /api/v1/pools for available clients. Increase pool size. Agent not responding Azure OpenAI rate limit Check Application Insights for 429 errors. Increase TPM quota. Call drops immediately ACS callback URL unreachable Verify BASE_URL in .env matches your current devtunnel host URL and the tunnel is still running. Handoff loops Circular handoff routes in scenario Check orchestration.yaml for cycles. Each agent should have a clear return path. High latency (> 2s) Cold client connections Ensure pools are warm. Check /api/v1/ready for warmup status. Session state lost Redis connectivity Check Redis connection. Verify REDIS_* environment variables."
+    },
+    {
+      "url": "index.html#top",
+      "anchor": "top",
+      "level": 1,
+      "page": "ART Agent",
+      "title": "Build real-time voice agents on Azure",
+      "text": "Code-first framework for production voice AI. Handles telephony, audio streaming, STT → LLM → TTS orchestration, and multi-agent handoffs so you focus on your domain logic. Quick Start → Architecture Every channel converges on the same ART Agent core — dual orchestration modes, live multi-agent handoffs, shared tools and memory. Show original conceptual PNG (legacy reference) → Original PowerPoint sketch — kept for reference 📞 Telephony built in ACS integration for PSTN, SIP, IVR, barge-in. Works with contact centers out of the box. 🔄 Two orchestration modes SpeechCascade for full control, VoiceLive for lowest latency. Same agent framework for both. 🤖 Multi-agent handoffs YAML-defined agents with scenario-based routing. No code changes to rewire agent flows. 🔧 Tool registry Shared tool store with MCP support. Every agent gets the same capabilities without duplication. ⚡ Sub-second latency Connection pooling, streaming TTS, async everywhere. End-to-end turn target < 1 second. 📊 Observable OpenTelemetry traces, Application Insights, structured logging. Debug voice pipelines in production."
+    },
+    {
+      "url": "index.html#quickstart",
+      "anchor": "quickstart",
+      "level": 2,
+      "page": "ART Agent",
+      "title": "Quick Start (~25 min)",
+      "text": "From clone to a working voice agent talking on the phone. The first run is mostly doing the boring but necessary platform work: pulling the repo, logging into Azure, provisioning the runtime, building the containers, and waiting for Azure to finish wiring the services together. Once that foundation exists, local iteration is much faster. 1. Azure has to provision the platform azd up creates the Azure resources, deploys the backend, and publishes the frontend URL. 2. Container builds take real time The repo ships both Python and web assets, so the first build compiles images instead of just starting a script. 3. The long part is mostly waiting Human effort is closer to a few minutes. The rest is Azure provisioning, image pushes, and service warm-up. Clone + authenticate Provision Azure resources Build and publish containers Open the phone-ready frontend 1 Clone repository Azure-Samples/art-voice-agent-accelerator Use HTTPS to get started quickly, then switch remotes later if you prefer SSH. # Clone and enter the repo git clone https://github.com/Azure-Samples/art-voice-agent-accelerator.git cd art-voice-agent-accelerator 2 Authenticate az login && azd auth login 3 Deploy everything azd up The estimate is roughly 15-20 minutes of Azure provisioning plus 5-10 minutes for the initial container build and publish. ⚠️ Two extra steps before phones ring. azd up stands up the platform, but it does not deploy your app code or buy a phone number for you. To get a working voice agent on the phone, follow these two guides next: Deploy to Azure — push the backend + frontend to your provisioned Container Apps. Enable Phone Calling (ACS) — buy a phone number and wire the Event Grid subscription that routes inbound calls to your backend. Prerequisites: Azure CLI, Azure Developer CLI, Docker (or Podman), Azure subscription with Contributor access. See full prerequisites . Run locally instead # After azd up has created your Azure resources: make install # Install Python + Node deps make start_backend # FastAPI on :8010 make start_frontend # Vite on :5173 The backend needs a dev tunnel for ACS callbacks. See local development guide ."
+    },
+    {
+      "url": "index.html#regions",
+      "anchor": "regions",
+      "level": 2,
+      "page": "ART Agent",
+      "title": "Recommended Regions",
+      "text": "Pick a region with full coverage of the two binding AI dependencies: the gpt-realtime audio model (powers VoiceLive mode and the realtime cascade variant) and the Azure AI Voice Live endpoint. ACS, Speech, Cosmos, Redis, and Container Apps are broadly available — the realtime audio surface is what narrows your choices. Model naming as of mid-2026: The current realtime audio model is gpt-realtime (GA 2025-08-28), with gpt-realtime-mini , gpt-realtime-1.5 (2026-02-23), and gpt-realtime-2 (2026-05-06) as newer variants. The legacy gpt-4o-realtime-preview name is superseded — this accelerator defaults to gpt-realtime across all agent configs. Region gpt-realtime Voice Live Speech / ACS / Cosmos / Redis Recommendation East US 2 ✅ ✅ Regional + Global ✅ Default — full coverage Sweden Central ✅ ✅ Regional + Global ✅ EU data residency West US 2 ✅ ✅ Regional + Global ✅ US West pairing Southeast Asia — ✅ Regional + Global ✅ APAC — Voice Live only Japan East — ✅ Regional + Global ✅ APAC — Voice Live only Other major regions (East US, UK South, West Europe, France Central, Australia East, Brazil South…) — ✅ Global standard ✅ Voice Live works; gpt-realtime via auto-fallback → Voice Live has expanded well beyond its original four-region preview footprint — Global Standard deployment is now live across most major Americas / Europe / APAC regions. The five regions above additionally support Regional deployment (data pinned to that region) and have hosted gpt-realtime since GA. Not in a supported region? You don't need to move. The azd up preflight detects when your primary AZURE_LOCATION lacks gpt-realtime / Voice Live and will provision the Voice Live Foundry endpoint in a supported region for you (defaulting to eastus2 ). Your app, ACS, Cosmos, and the rest of the stack stay in your chosen region — only the realtime AI endpoint is split out. # Pin the Voice Live region explicitly (optional — azd will prompt otherwise) azd env set AZURE_LOCATION westeurope # app + ACS + Cosmos here azd env set TF_VAR_voice_live_location swedencentral # gpt-realtime + Voice Live here azd up Always-current source of truth (region tables shift as Foundry expands availability): gpt-realtime regional availability ↗ · Voice Live regions ↗"
+    },
+    {
+      "url": "index.html#modes",
+      "anchor": "modes",
+      "level": 2,
+      "page": "ART Agent",
+      "title": "Two Orchestration Modes",
+      "text": "Same agent framework, different audio pipelines. Choose based on your latency and control requirements. SpeechCascade VoiceLive Audio path Azure Speech STT → LLM → TTS Azure VoiceLive SDK (managed) Latency ~400ms ~200ms VAD Custom (your thresholds) Server-side (automatic) Voices 400+ Azure neural voices HD voices (Ava, etc.) STT customization Custom Speech models, phrase lists Built-in Best for On-prem, compliance, full control Speed to production, lowest latency # Sets the DEFAULT orchestration mode for ACS telephony calls export ACS_STREAMING_MODE=MEDIA # SpeechCascade (default) export ACS_STREAMING_MODE=VOICE_LIVE # VoiceLive ACS_STREAMING_MODE only sets the default pipeline that inbound ACS phone calls use — it doesn't change the agent framework. Both modes run the same agents. Full orchestration architecture →"
+    },
+    {
+      "url": "index.html#repo-structure",
+      "anchor": "repo-structure",
+      "level": 2,
+      "page": "ART Agent",
+      "title": "Repository Structure",
+      "text": "art-voice-agent-accelerator/ ├── apps/artagent/ │ ├── backend/ # FastAPI + WebSockets voice pipeline │ │ ├── voice/ # Orchestrators (cascade, voicelive) │ │ └── registries/ # Agents (YAML), tools, scenarios │ └── frontend/ # Vite + React demo client ├── src/ # Core libraries (ACS, Speech, AOAI, Redis, Cosmos) ├── infra/ # Terraform + Bicep IaC ├── tests/ # Unit, integration, load tests ├── samples/ # Tutorials and labs └── utils/ # Logging, telemetry helpers"
+    },
+    {
+      "url": "index.html#next-steps",
+      "anchor": "next-steps",
+      "level": 2,
+      "page": "ART Agent",
+      "title": "Next Steps",
+      "text": "Understand Architecture Data flows, orchestration modes, agent framework, storage tiers. Build Guides Create agents, add tools, deploy to production, run locally. Explore Agents & Scenarios Pre-built agents for banking, insurance, healthcare. Scenario wiring. Reference API Reference REST endpoints, WebSocket protocol, MCP integration."
+    }
+  ]
+}

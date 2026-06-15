@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Architecture — ART Agent Docs</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/syntax.css">
+  <link rel="stylesheet" href="css/diagrams.css">
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a href="index.html" class="logo">◆ <span>ART</span> Agent Docs</a>
+  <nav class="header-nav">
+    <a href="index.html">Home</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="guides.html">Guides</a>
+    <a href="agents.html">Agents</a>
+    <a href="api.html">API</a>
+    <a href="certification.html">Certify</a>
+  </nav>
+  <div class="header-actions">
+    <button class="search-trigger" type="button" aria-label="Search docs (Cmd+K)">
+      <span class="search-trigger-icon" aria-hidden="true">⌕</span>
+      <span class="search-trigger-label">Search docs…</span>
+      <span class="search-trigger-kbd">⌘K</span>
+    </button>
+    <a id="legacy-docs-link" class="legacy-link" href="legacy-site/index.html" title="Original mkdocs documentation site">Legacy ↗</a>
+    <a href="https://github.com/Azure-Samples/art-voice-agent-accelerator" class="gh-link" target="_blank">GitHub ↗</a>
+    <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <h4>Architecture</h4>
+      <a href="#overview" class="active">Overview</a>
+      <a href="#call-lifecycle">Call Lifecycle</a>
+      <a href="#orchestration">Orchestration Modes</a>
+      <a href="#agent-framework">Agent Framework</a>
+      <a href="#storage">Storage Tiers</a>
+      <a href="#session-runtime">Session Runtime</a>
+      <a href="#production-hardening">Production Hardening</a>
+      <a href="#performance">Performance</a>
+      <a href="#why-complex">Why this complexity?</a>
+      <a href="#design-decisions">Design Decisions</a>
+    </div>
+  </aside>
+
+  <main class="content">
+    <div class="content-inner">
+
+      <h1 id="overview">Architecture</h1>
+      <p class="subtitle">How audio flows from a phone call through AI agents and back.</p>
+
+      <p>The system is a real-time voice pipeline that connects callers to AI agents via Azure Communication Services. Two orchestration modes handle the audio differently, but share the same agent framework, tool registry, and session state.</p>
+
+      <div class="az-diagram" data-diagram="system-overview">
+        <figcaption class="az-diagram-caption">Five zones, left to right. Cross-cutting concerns (observability, network) span the bottom.</figcaption>
+      </div>
+
+      <details>
+        <summary style="cursor:pointer;color:var(--c-text-2);font-size:13px;margin-bottom:12px">Show original detailed PNG reference →</summary>
+        <figure class="arch-diagram contain" data-expandable>
+          <img src="images/RTAgentArch.png" alt="Original ART Agent architecture diagram">
+          <figcaption>Original detailed reference (source: PowerPoint export)</figcaption>
+        </figure>
+      </details>
+
+<pre><code>Phone Call → ACS → WebSocket → <span class="tok-fn">[Orchestrator]</span> → AI Agent → Voice Response
+                                     ↓
+                              <span class="tok-cmt">[STT → LLM → TTS]</span></code></pre>
+
+      <hr>
+
+      <!-- Call Lifecycle -->
+      <h2 id="call-lifecycle">Call Lifecycle</h2>
+      <p>Every call follows this sequence regardless of orchestration mode:</p>
+
+      <div class="mermaid">
+sequenceDiagram
+    participant Phone
+    participant ACS
+    participant Backend
+    participant Redis
+    participant AI
+    participant Cosmos
+
+    Phone->>ACS: Incoming call
+    ACS->>Backend: WebSocket connect
+    Backend->>Redis: Initialize session
+
+    loop Conversation turns
+        Phone->>Backend: Audio stream
+        Backend->>AI: Process (STT → LLM → TTS)
+        AI->>Backend: Response audio
+        Backend->>Redis: Update state
+        Backend->>Phone: Stream audio back
+    end
+
+    Backend->>Cosmos: Persist transcript
+    Backend->>ACS: End call
+      </div>
+
+      <p><strong>Key points:</strong> Session state lives in Redis for fast access during the call. Transcripts are archived to Cosmos DB when the call ends. The backend is stateless — any container instance can handle any call via Redis session affinity.</p>
+
+      <hr>
+
+      <!-- Orchestration -->
+      <h2 id="orchestration">Orchestration Modes</h2>
+      <p>Both modes use the same agents, tools, and handoff logic. The difference is how audio gets processed — and how much of the turn loop you control versus hand to Azure.</p>
+
+      <div class="az-diagram" data-diagram="modes-wiring">
+        <figcaption class="az-diagram-caption">Both modes branch off the same <code>ACS_STREAMING_MODE</code> dispatch and converge on the same shared core — agents, tools, handoffs, and MemoManager state. Only the audio surface in the middle differs. Click to expand.</figcaption>
+      </div>
+
+      <p>Pick the mode per deployment with one env var. Everything below the audio surface — agent definitions, the tool registry, <code>HandoffService</code>, and session-state sync into <code>MemoManager</code> — is byte-for-byte identical across modes, so an agent built for Cascade runs unchanged on VoiceLive.</p>
+
+      <div class="tab-group">
+        <div class="tab-buttons">
+          <button class="tab-btn active" data-tab="tab-cascade">SpeechCascade</button>
+          <button class="tab-btn" data-tab="tab-voicelive">VoiceLive</button>
+        </div>
+        <div id="tab-cascade" class="tab-panel active">
+          <p>You orchestrate each component separately. Full control over every step.</p>
+
+          <div class="az-diagram" data-diagram="cascade-pipeline">
+            <figcaption class="az-diagram-caption">Numbered arrows show the per-turn flow: transcribe → reason → synthesize.</figcaption>
+          </div>
+
+<pre><code>Audio In → <span class="tok-fn">Azure Speech STT</span> → Transcript → <span class="tok-fn">Azure OpenAI</span> → Text → <span class="tok-fn">Azure Speech TTS</span> → Audio Out</code></pre>
+          <table>
+            <thead><tr><th>Component</th><th>Options</th></tr></thead>
+            <tbody>
+              <tr><td><strong>STT</strong></td><td>Azure Speech, Whisper, Custom Speech models</td></tr>
+              <tr><td><strong>LLM</strong></td><td>Any Azure OpenAI model, or bring your own</td></tr>
+              <tr><td><strong>TTS</strong></td><td>400+ Azure neural voices, custom styles &amp; prosody</td></tr>
+              <tr><td><strong>VAD</strong></td><td>Custom silence thresholds, barge-in control</td></tr>
+            </tbody>
+          </table>
+          <p>Best for: on-prem/hybrid, strict compliance, per-component debugging, model flexibility.</p>
+        </div>
+        <div id="tab-voicelive" class="tab-panel">
+          <p>Azure-hosted pipeline handles audio in one hop. Lowest latency, managed operations.</p>
+
+          <div class="az-diagram" data-diagram="voicelive-pipeline">
+            <figcaption class="az-diagram-caption">One managed call replaces STT + LLM + TTS — fewer hops, lower latency.</figcaption>
+          </div>
+
+<pre><code>Audio In → <span class="tok-fn">Azure VoiceLive SDK</span> (STT + LLM + TTS managed) → Audio Out</code></pre>
+          <table>
+            <thead><tr><th>Feature</th><th>Details</th></tr></thead>
+            <tbody>
+              <tr><td><strong>Latency</strong></td><td>~200ms end-to-end</td></tr>
+              <tr><td><strong>VAD</strong></td><td>Server-side automatic turn detection + noise reduction</td></tr>
+              <tr><td><strong>Tools</strong></td><td>Native function calling via Realtime API</td></tr>
+              <tr><td><strong>Voices</strong></td><td>HD voices like <code>en-US-Ava:DragonHDLatestNeural</code></td></tr>
+            </tbody>
+          </table>
+          <p>Best for: speed to production, lowest latency requirements.</p>
+        </div>
+      </div>
+
+<pre><code><span class="tok-cmt"># Sets the DEFAULT orchestration mode for ACS telephony calls</span>
+<span class="tok-kw">export</span> ACS_STREAMING_MODE=MEDIA       <span class="tok-cmt"># SpeechCascade</span>
+<span class="tok-kw">export</span> ACS_STREAMING_MODE=VOICE_LIVE  <span class="tok-cmt"># VoiceLive</span></code></pre>
+      <p><code>ACS_STREAMING_MODE</code> only sets the <strong>default</strong> pipeline that inbound ACS phone calls use; the agent framework is identical across both modes.</p>
+
+      <h3>Control &amp; tradeoffs at a glance</h3>
+      <p>The two modes are not feature-equivalent. Cascade hands you every component to tune; VoiceLive hands the whole audio loop to Azure for the lowest latency. Pick per workload.</p>
+      <table>
+        <thead><tr><th>Dimension</th><th>SpeechCascade <span class="pill planned">you control</span></th><th>VoiceLive <span class="pill">Azure-managed</span></th></tr></thead>
+        <tbody>
+          <tr><td><strong>Latency</strong></td><td>~400&nbsp;ms end-to-end (3 hops)</td><td>~200&ndash;250&nbsp;ms (single hop)</td></tr>
+          <tr><td><strong>Components</strong></td><td>Swap STT, LLM, TTS independently</td><td>One managed pipeline — no swapping</td></tr>
+          <tr><td><strong>LLM surface</strong></td><td>Chat Completions <em>or</em> Responses API (<code>_process_llm</code>)</td><td>Realtime API only (<code>gpt-realtime</code>)</td></tr>
+          <tr><td><strong>VAD / barge-in</strong></td><td>Client-side thresholds + <code>ThreadBridge</code> cancellation</td><td>Server-side automatic — not tunable</td></tr>
+          <tr><td><strong>STT models</strong></td><td>Custom Speech + phrase lists</td><td>Built-in only</td></tr>
+          <tr><td><strong>Voices</strong></td><td>400+ neural voices, per-agent styles</td><td>HD voices only (e.g. <code>DragonHDLatest</code>)</td></tr>
+          <tr><td><strong>Deployment</strong></td><td>On-prem / hybrid endpoints supported</td><td>Azure cloud only</td></tr>
+          <tr><td><strong>Turn model</strong></td><td>Synchronous per-turn (<code>process_user_input</code>)</td><td>Event-driven (<code>ServerEventType.*</code>)</td></tr>
+        </tbody>
+      </table>
+
+      <h3>How each mode manages turn context &amp; state</h3>
+      <p>Both modes read and write the same <code>MemoManager</code> via <code>sync_state_from_memo()</code> / <code>sync_state_to_memo()</code> — so active agent, visited agents, profile, and handoff context survive across turns and container restarts. They differ in how the model <em>sees</em> that context on each turn:</p>
+      <ul>
+        <li><strong>SpeechCascade</strong> assembles the prompt itself — current agent's per-agent thread plus de-duplicated cross-agent context (<code>_get_conversation_history</code>), then ships it to Azure OpenAI. You decide exactly what the model sees, so this is where the planned compaction levers (rolling window, summarizer) plug in.</li>
+        <li><strong>VoiceLive</strong> keeps conversation state inside the realtime connection. The orchestrator re-injects a throttled <strong>session recap</strong> (recent user messages, slots, last assistant turn) via <code>session.update(instructions=…)</code> before responses, and history is per-connection only — <code>visited_agents</code> is intentionally <em>not</em> replayed to avoid stale context on a fresh call.</li>
+        <li><strong>Shared truth.</strong> Slots, tool outputs, and the user profile always land in <code>MemoManager</code> regardless of mode, so a handoff or a Cosmos archive looks identical either way.</li>
+      </ul>
+
+      <hr>
+
+      <!-- Agent Framework -->
+      <h2 id="agent-framework">Agent Framework</h2>
+      <p>Agents are defined in YAML, not Python classes. Scenarios wire them together. Tools give them abilities.</p>
+      <p style="font-size:13px;color:var(--c-text-3);margin-top:-4px;margin-bottom:18px">
+        <span style="display:inline-block;font:600 10px 'Inter',sans-serif;letter-spacing:.08em;text-transform:uppercase;padding:2px 8px;border-radius:4px;background:#5C2D91;color:#fff;margin-right:6px">custom</span>
+        Reminder — this is our own lightweight framework, not Microsoft Agent Framework. See the <a href="#why-complex" style="color:var(--c-accent)">"Why this complexity?"</a> section below for the positioning note and reasoning.
+      </p>
+
+      <div class="mermaid">
+flowchart LR
+    subgraph Agents["Agents (capabilities)"]
+        A1[Concierge]
+        A2[FraudAgent]
+        A3[AuthAgent]
+    end
+
+    subgraph Scenarios["Scenarios (routing)"]
+        S[orchestration.yaml]
+    end
+
+    subgraph Tools["Tools (actions)"]
+        T1[check_balance]
+        T2[verify_identity]
+    end
+
+    Agents --> S
+    Tools --> S
+    S --> O[Orchestrator]
+
+    style Agents fill:#E6FFE6,stroke:#107C10
+    style Scenarios fill:#FFF4CE,stroke:#FFB900
+    style Tools fill:#F3E6FF,stroke:#8764B8
+      </div>
+
+      <h3>Three concepts</h3>
+      <table>
+        <thead><tr><th>Concept</th><th>Defined in</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>Agent</strong></td>
+            <td><code>agentstore/*/agent.yaml</code></td>
+            <td>AI assistant with a role, greeting, system prompt, and tool list</td>
+          </tr>
+          <tr>
+            <td><strong>Scenario</strong></td>
+            <td><code>scenariostore/*/orchestration.yaml</code></td>
+            <td>Wires agents together with handoff routes and entry points</td>
+          </tr>
+          <tr>
+            <td><strong>Tool</strong></td>
+            <td><code>toolstore/registry.py</code></td>
+            <td>Callable function shared across all agents (<code>@register_tool</code>)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Separation of concerns</h3>
+      <ul>
+        <li>Same agent behaves differently in different scenarios (banking vs. insurance)</li>
+        <li>Handoff routing is declarative — change the YAML, not the code</li>
+        <li>Tools are shared across all agents via a central registry</li>
+      </ul>
+
+      <h3>Minimal agent definition</h3>
+<pre><code><span class="tok-cmt"># agentstore/my_agent/agent.yaml</span>
+<span class="tok-attr">name</span>: MyAgent
+<span class="tok-attr">description</span>: Does something useful
+<span class="tok-attr">handoff</span>:
+  <span class="tok-attr">trigger</span>: handoff_my_agent
+<span class="tok-attr">greeting</span>: <span class="tok-str">"Hi, I'm the specialist you need!"</span>
+<span class="tok-attr">tools</span>:
+  - my_tool
+  - handoff_concierge
+<span class="tok-attr">prompts</span>:
+  <span class="tok-attr">path</span>: prompt.jinja</code></pre>
+
+      <p><a href="agents.html">Browse all agents →</a> · <a href="guides.html#create-agent">Create your own →</a></p>
+
+      <hr>
+
+      <!-- Storage -->
+      <h2 id="storage">Storage Tiers</h2>
+      <p>Three tiers, each optimized for its access pattern:</p>
+
+      <div class="tier-stack">
+        <div class="tier tier-hot">
+          <span class="tier-label">Hot</span>
+          <div>
+            <div class="tier-name">Application memory</div>
+            <div class="tier-desc">Active call state, audio buffers, connection pools</div>
+          </div>
+          <div class="tier-meta">~ microseconds<br>container RAM</div>
+        </div>
+        <div class="tier tier-warm">
+          <span class="tier-label">Warm</span>
+          <div>
+            <div class="tier-name">Azure Cache for Redis</div>
+            <div class="tier-desc">Conversation context, session history, worker affinity</div>
+          </div>
+          <div class="tier-meta">~ sub-ms<br>1–100 GB</div>
+        </div>
+        <div class="tier tier-cold">
+          <span class="tier-label">Cold</span>
+          <div>
+            <div class="tier-name">Azure Cosmos DB</div>
+            <div class="tier-desc">Call transcripts, user profiles, analytics &amp; audit</div>
+          </div>
+          <div class="tier-meta">1–10 ms<br>unlimited</div>
+        </div>
+      </div>
+
+      <p><code>MemoManager</code> handles warm-tier persistence. Never store conversation state in-memory globals — it breaks container scaling.</p>
+
+      <hr>
+
+      <!-- Session Runtime -->
+      <h2 id="session-runtime">Session Runtime</h2>
+      <p>How the runtime keeps many concurrent calls isolated, how session memory moves through MemoManager / Redis / Cosmos, and what hooks fire on every turn. Everything below is grounded in the current implementation — the names map 1:1 to functions and events in <code>apps/artagent/backend/voice/</code>.</p>
+
+      <h3>Concurrent session handling and speech-channel isolation</h3>
+      <p>Each call is isolated by <code>session_id</code> + <code>call_connection_id</code>, with per-session handlers, per-session turn state, and per-session outbound envelopes. This prevents cross-talk when many conversations run concurrently on the same container.</p>
+
+      <div class="az-diagram" data-diagram="session-isolation">
+        <figcaption class="az-diagram-caption">Three concurrent calls on the same container — each owns its handler, queue, MemoManager state, and Redis namespace. Animated lanes show audio flowing per session with no shared path.</figcaption>
+      </div>
+
+      <table>
+        <thead><tr><th>Isolation boundary</th><th>How isolation is enforced</th><th>Why it matters for concurrency</th></tr></thead>
+        <tbody>
+          <tr><td>Turn ownership</td><td>Every user/assistant message carries turn identifiers; tool/handoff boundaries advance effective turn IDs instead of reusing stale IDs.</td><td>Prevents transcript and UI frame collisions across overlapping tool calls.</td></tr>
+          <tr><td>Speech event lanes</td><td>Speech Cascade uses a dedicated queue and thread bridge per handler instance; Voice Live tracks active response IDs per session.</td><td>Audio/control events from one call cannot drain or cancel another call's audio lane.</td></tr>
+          <tr><td>Session state</td><td>Session metadata is stored in MemoManager and synchronized to Redis, then restored into orchestrator state on demand.</td><td>Stateless container scaling works without losing active agent/context.</td></tr>
+          <tr><td>WebSocket envelopes</td><td>Outbound events include session-scoped metadata and turn IDs before broadcast.</td><td>UI and telemetry streams stay correctly partitioned under load.</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Session memory lifecycle (what persists, when)</h3>
+      <p>The hot path stays in <code>MemoManager</code>. Redis is the cross-container source of truth. Cosmos is cold archive only — never read on the hot path. Reads happen once on session start; writes happen on tool/turn boundaries and on cleanup.</p>
+
+      <div class="az-diagram" data-diagram="memory-lifecycle">
+        <figcaption class="az-diagram-caption">Five phases of session memory — read on start, in-memory turn updates, opportunistic Redis writes at tool boundaries, async flush on stop, and Cosmos archival after the call ends.</figcaption>
+      </div>
+
+      <ol>
+        <li>Session starts: orchestrator reads prior state (active agent, visited agents, profile, handoff context) from MemoManager/Redis.</li>
+        <li>Each turn: orchestrator updates active agent and session vars, then writes back to MemoManager as turn state evolves.</li>
+        <li>Turn/tool boundaries: effective turn IDs are advanced for post-tool segments to keep message history coherent.</li>
+        <li>Session stop/cleanup: handler flushes MemoManager to Redis asynchronously; cold archival to Cosmos remains post-call oriented.</li>
+      </ol>
+
+      <h3 id="per-turn-memory">Per-turn memory flow and long-session strategies</h3>
+      <p>Each turn fires the same fixed sequence of ten calls against <code>MemoManager</code>. The hot path is entirely in-process; Redis is touched once per turn via a fire-and-forget task; Cosmos is only touched after the call ends. Where the system stays honest is also where it has work left to do — there is no automatic history compaction today, so longer sessions grow the per-agent thread monotonically.</p>
+
+      <div class="az-diagram" data-diagram="memory-per-turn">
+        <figcaption class="az-diagram-caption">Ten phases of a single turn against <code>MemoManager</code> — in-process work (purple), the one LLM round-trip (green), and the async Redis flush (blue). The growth band shows what accumulates per turn, and the dashed strip names the four compaction levers planned for long sessions.</figcaption>
+      </div>
+
+      <h4>What actually happens on every turn (verified against <code>voice/speech_cascade/orchestrator.py</code>)</h4>
+      <ol>
+        <li><code>on_final(text)</code> (Cascade) or <code>TRANSCRIPTION_COMPLETED</code> (Voice Live) hands the finalized utterance to the orchestrator.</li>
+        <li><code>sync_state_from_memo(cm, available_agents=…)</code> hydrates <code>active_agent</code>, <code>visited_agents</code>, <code>session_profile</code>, and any <code>pending_handoff</code>.</li>
+        <li><code>cm.append_to_history(active_agent, "user", text)</code> writes the user turn into the active agent’s thread and stamps <code>last_activity</code>.</li>
+        <li><code>cm.get_history(active_agent)</code> reads that agent’s full thread — no windowing, no token cap.</li>
+        <li><code>_get_conversation_history(cm)</code> merges in substantive user messages from other agents (dedup by lowercased content, filters &lt;10 chars / “welcome…”) so handoffs don’t drop context.</li>
+        <li><code>_build_session_context(cm)</code> pulls <code>session_profile</code>, <code>caller_name</code>, <code>customer_intelligence</code>, and <code>institution_name</code> out of <code>CoreMemory</code> for prompt-template variables.</li>
+        <li><code>agent.run(…)</code> calls the LLM with <code>[system, …cross_agent_context, …agent_history, user_turn]</code>; tool calls advance <code>turn_sequence</code> via <code>advance_turn_for_tool()</code>.</li>
+        <li><code>cm.append_to_history(active_agent, "assistant", response)</code> appends the assistant turn into the same per-agent thread.</li>
+        <li><code>sync_state_to_memo(cm, active_agent=…, visited_agents=…)</code> persists orchestration state back into <code>MemoManager</code>.</li>
+        <li><code>asyncio.create_task(cm.persist_to_redis_async(redis_mgr))</code> mirrors <code>MemoManager</code> to Redis without blocking the next turn. Cosmos is untouched until <code>build_and_flush(cm, cosmos)</code> after the call ends.</li>
+      </ol>
+
+      <h4>Why a long session can degrade today</h4>
+      <ul>
+        <li><strong>Per-agent thread is append-only.</strong> <code>ChatHistory.append()</code> never trims. A 30-minute call with one agent and ~2 turns/minute lands ~60 user+assistant pairs into a single thread that ships in full on every prompt build.</li>
+        <li><strong>Cross-agent merge can stack.</strong> <code>_get_conversation_history</code> prepends substantive user messages from every other visited agent. Repeated handoffs grow the prefix even when the active agent’s own thread is short.</li>
+        <li><strong>No token budgeting.</strong> The Voice Live <code>context_window</code> field (default 4000) only configures the realtime session — it doesn’t cap what we ship to the model. Foundry/AOAI calls in Cascade currently send the whole assembled list.</li>
+        <li><strong>What partially protects us today.</strong> Per-agent partitioning + handoff-as-natural-reset means short tasks usually finish inside one agent before the thread gets large. That’s a workload assumption, not an architectural guarantee.</li>
+      </ul>
+
+      <h4>Strategies to keep performance flat as context fills up</h4>
+      <p>The four levers below are the planned compaction surface. Each one slots in between step ⑧ (append assistant) and step ⑨ (sync state) so it runs once per turn, off the user-visible critical path.</p>
+
+      <table>
+        <thead><tr><th>Lever</th><th>Where it lives</th><th>What it changes</th><th>Tradeoff</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>Rolling window</strong></td>
+            <td>Wrap <code>cm.get_history(active_agent)</code> in a windowed reader that returns the last <em>N</em> turns or <em>T</em> tokens.</td>
+            <td>Bounds prompt size; <code>MemoManager</code> still keeps full history for Cosmos archival.</td>
+            <td>Drops earlier callbacks (“as I mentioned earlier…”) unless the summarizer below also runs.</td>
+          </tr>
+          <tr>
+            <td><strong>Turn summarizer</strong></td>
+            <td>New <code>cm.summarize_thread(agent, before_turn=k)</code> that replaces stale turns with one <code>{"role":"system","content":"…summary…"}</code> note.</td>
+            <td>Preserves the gist of earlier turns inside the prompt budget.</td>
+            <td>Adds a background LLM call; needs an idempotency guard so we don’t re-summarize.</td>
+          </tr>
+          <tr>
+            <td><strong>Fact extraction → <code>CoreMemory</code></strong></td>
+            <td>Background pass over completed turns lifts named entities (order #, account, preference) into typed <code>CoreMemory</code> slots.</td>
+            <td>Most repeated lookups become <code>cm.corememory.get("order_id")</code> instead of re-reading transcript.</td>
+            <td>Requires a slot schema per agent and a small extractor; quality depends on extractor.</td>
+          </tr>
+          <tr>
+            <td><strong>Cosmos RAG retrieval</strong></td>
+            <td>On step ⑤, ask Cosmos (or a vector index over archived turns) for the <em>K</em> most relevant past-turn snippets to inject into the prompt.</td>
+            <td>Brings back cross-call memory without ballooning the per-call prompt.</td>
+            <td>Adds 30–100ms to the turn unless the retrieval runs in parallel with prompt assembly.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p><strong>Where to start:</strong> the rolling window is the cheapest defense — a single change in <code>_get_conversation_history</code> bounds prompt growth without any new background work. The summarizer and fact-extractor become valuable once we see real-call traces with &gt;40-turn agents. RAG over Cosmos is the right answer once we have a corpus of past calls worth retrieving from.</p>
+
+      <h3>Turn-by-turn orchestration hooks: Speech Cascade vs Voice Live</h3>
+      <p>Same logical turn, two different surfaces. Speech Cascade reacts to local <code>on_partial</code> / <code>on_final</code> callbacks coming off the Speech SDK thread; Voice Live reacts to <code>ServerEventType.*</code> messages coming off the realtime model websocket. Both converge on the same session-state contract.</p>
+
+      <div class="az-diagram" data-diagram="turn-hooks-compare">
+        <figcaption class="az-diagram-caption">Each column is one phase of the same turn. The top row is your Speech Cascade callback, the bottom row is the Azure VoiceLive event you react to, and the middle band says what's actually happening. Click to expand.</figcaption>
+      </div>
+
+      <table>
+        <thead><tr><th>Phase</th><th>Speech Cascade hooks</th><th>Voice Live hooks</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>User starts speaking</td>
+            <td><code>on_partial(...)</code> callback triggers immediate barge-in scheduling via thread bridge.</td>
+            <td><code>INPUT_AUDIO_BUFFER_SPEECH_STARTED</code> triggers turn start, barge-in, stop-audio, and new span bookkeeping.</td>
+          </tr>
+          <tr>
+            <td>User utterance finalized</td>
+            <td><code>on_final(...)</code> enqueues <code>SpeechEventType.FINAL</code> into per-session speech queue.</td>
+            <td><code>CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_COMPLETED</code> finalizes user transcript and emits turn-scoped message.</td>
+          </tr>
+          <tr>
+            <td>Streaming transcript feedback</td>
+            <td>Optional <code>on_partial_transcript</code> callback feeds live UI text without committing a final turn.</td>
+            <td><code>CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_DELTA</code> sends streaming user transcript envelopes.</td>
+          </tr>
+          <tr>
+            <td>Assistant audio output</td>
+            <td>Route turn processing drives TTS queueing and sequential playback from orchestrator output.</td>
+            <td><code>RESPONSE_AUDIO_DELTA</code> streams assistant audio frames; <code>RESPONSE_AUDIO_DONE</code> marks completion.</td>
+          </tr>
+          <tr>
+            <td>Tool execution / handoff</td>
+            <td>Turn IDs can be advanced after tool calls for clean post-tool message segments.</td>
+            <td><code>RESPONSE_FUNCTION_CALL_ARGUMENTS_DONE</code> executes tools, then continues response/create flow.</td>
+          </tr>
+          <tr>
+            <td>Turn completion</td>
+            <td>Queue drains and orchestrator state sync persists session updates through MemoManager.</td>
+            <td><code>RESPONSE_DONE</code> finalizes playback and turn metrics before next speech-start event.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p><strong>Practical implication:</strong> Speech Cascade gives explicit local control over callback and queue boundaries; Voice Live gives explicit realtime event hooks from the model connection. Both converge on the same session-state contract via MemoManager + Redis.</p>
+
+      <hr>
+
+      <!-- Production Hardening -->
+      <h2 id="production-hardening">Production Hardening</h2>
+      <p>This section is the honest read on the security posture: what the production reference targets, what the threat surface is, and what the current terraform actually ships with the defaults vs. what is variable-gated or still planned. The repurposed “Azure Services” inventory and App Configuration mapping live here too, since both are part of the hardening story.</p>
+
+      <h3>Production reference architecture</h3>
+      <div class="az-diagram" data-diagram="production-ref">
+        <figcaption class="az-diagram-caption">Target posture — hub-spoke isolation, WAF at the edge, ACS constrained via NSP, private endpoints for Foundry/Speech data planes, Redis, and Cosmos. Some elements are reference-only and not yet in default terraform; the status matrix below tracks each one.</figcaption>
+      </div>
+
+      <details>
+        <summary class="az-details-summary">Show original detailed PNG reference →</summary>
+        <figure class="arch-diagram contain" data-expandable>
+          <img src="images/RTAudio.v0.png" alt="Original production reference architecture">
+          <figcaption>Original detailed reference</figcaption>
+        </figure>
+      </details>
+
+      <h3>Threat surface and mitigations</h3>
+      <p>Eight surfaces to defend, mapped to where the mitigation lives in the codebase.</p>
+      <table>
+        <thead><tr><th>Surface</th><th>Risk</th><th>Mitigation</th><th>Where it lives</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>Inbound telephony (ACS)</strong></td>
+            <td>Spoofed callers, replayed sessions, unsolicited inbound calls hitting the WebSocket.</td>
+            <td>DTMF + ANI composite session key pre-stored in Redis by AWS Connect / SBC; ACS <code>IncomingCall</code> Event Grid webhook validates the composite key before authorizing media WS. API-initiated calls use direct <code>call_connection_id</code> lookup.</td>
+            <td><a href="https://github.com/Azure-Samples/art-voice-agent-accelerator/blob/main/docs/security/authentication.md">docs/security/authentication.md</a></td>
+          </tr>
+          <tr>
+            <td><strong>Media WebSocket</strong></td>
+            <td>Unauthenticated WS upgrade attaching to a live call; cross-session bleed.</td>
+            <td>Custom JWT validated on WS handshake; WS session correlated to the call session via Redis composite key.</td>
+            <td><code>apps/artagent/backend/api/v1/endpoints/media.py</code> + Redis session store</td>
+          </tr>
+          <tr>
+            <td><strong>Frontend → backend (HTTPS)</strong></td>
+            <td>Cross-origin abuse, credentialed CORS leaks.</td>
+            <td>Container Apps <code>cors_policy</code> with explicit frontend / backend origin lists and <code>support_credentials</code> toggle.</td>
+            <td><code>infra/terraform/modules/containers/main.tf</code> + <code>modules/webapps/variables.tf</code></td>
+          </tr>
+          <tr>
+            <td><strong>App → Azure service identity</strong></td>
+            <td>Long-lived keys leaking from env vars or container images.</td>
+            <td>System-assigned managed identity on every container app; RBAC role assignments for Foundry, Voice Live, ACS, Storage, AppConfig, Key Vault, ACR pull, Cosmos.</td>
+            <td><code>infra/terraform/ai-foundry.tf</code>, <code>ai-foundry-vl.tf</code>, <code>communication.tf</code>, <code>data.tf</code>, <code>cardapi.tf</code></td>
+          </tr>
+          <tr>
+            <td><strong>Secrets at rest</strong></td>
+            <td>Connection strings checked into config or env.</td>
+            <td>Key Vault with RBAC authorization (<code>rbac_authorization_enabled = true</code>); container apps reference secrets by <code>key_vault_secret_id</code> rather than inline values.</td>
+            <td><code>infra/terraform/keyvault.tf</code> + <code>modules/containers/main.tf</code></td>
+          </tr>
+          <tr>
+            <td><strong>Service-to-service TLS</strong></td>
+            <td>Downgrade attacks against the data plane.</td>
+            <td>Storage <code>min_tls_version = "TLS1_2"</code>; Redis Enterprise <code>minimumTlsVersion = "1.2"</code>; Cosmos OIDC connection string forces <code>tls=true</code>.</td>
+            <td><code>infra/terraform/data.tf</code>, <code>redis.tf</code></td>
+          </tr>
+          <tr>
+            <td><strong>Cosmos data plane auth</strong></td>
+            <td>Shared password credentials reused across services.</td>
+            <td>App connects with <code>authMechanism=MONGODB-OIDC</code> via managed identity; admin password is stored in Key Vault for break-glass only.</td>
+            <td><code>infra/terraform/data.tf</code></td>
+          </tr>
+          <tr>
+            <td><strong>Network exposure</strong></td>
+            <td>Public data planes reachable from the internet.</td>
+            <td>Variable-gated toggles already in place (<code>cosmosdb_public_network_access_enabled</code>, Foundry <code>public_network_access</code>). Private endpoints, NSP, and WAF are reference-architecture targets and not in default terraform yet.</td>
+            <td><code>infra/terraform/variables.tf</code>, <code>modules/ai/foundry.tf</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Hardening status — in place / variable-gated / planned</h3>
+      <p>What the default <code>azd up</code> actually ships today vs. what is one variable flip away vs. what is still reference-only. Use this to size remaining work for a given environment.</p>
+      <table>
+        <thead><tr><th>Control</th><th>Status</th><th>How to verify / change</th></tr></thead>
+        <tbody>
+          <tr><td>Managed identity on backend, frontend, MCP containers</td><td><span class="pill">in place</span></td><td><code>azurerm_role_assignment.*_backend_*</code> in <code>infra/terraform/</code>.</td></tr>
+          <tr><td>Key Vault with RBAC authorization (no access policies)</td><td><span class="pill">in place</span></td><td><code>rbac_authorization_enabled = true</code> in <code>keyvault.tf</code>.</td></tr>
+          <tr><td>Cosmos MongoDB OIDC (passwordless app auth)</td><td><span class="pill">in place</span></td><td>OIDC connection string built in <code>data.tf</code>; admin password is Key Vault break-glass only.</td></tr>
+          <tr><td>TLS 1.2 minimum on Storage and Redis Enterprise</td><td><span class="pill">in place</span></td><td><code>min_tls_version</code> / <code>minimumTlsVersion</code> in <code>data.tf</code>, <code>redis.tf</code>.</td></tr>
+          <tr><td>App Configuration + feature flags (no secrets in env)</td><td><span class="pill">in place</span></td><td><code>APPCONFIG_KEY_MAP</code> + <code>FEATURE_FLAG_MAP</code> in <code>apps/artagent/backend/config/appconfig_provider.py</code>.</td></tr>
+          <tr><td>Per-app CORS origin allow-list with credentials toggle</td><td><span class="pill">in place</span></td><td><code>cors_policy</code> in <code>modules/containers/main.tf</code>; origins in <code>modules/webapps/variables.tf</code>.</td></tr>
+          <tr><td>WebSocket auth (DTMF + ANI composite key, JWT on WS)</td><td><span class="pill">in place</span></td><td><code>docs/security/authentication.md</code> + <code>api/v1/endpoints/media.py</code>.</td></tr>
+          <tr><td>Cosmos public network access</td><td><span class="pill warn">variable-gated</span></td><td><code>cosmosdb_public_network_access_enabled</code> in <code>variables.tf</code>. Default is open for local dev; flip to <code>false</code> for production envs.</td></tr>
+          <tr><td>Foundry public network access</td><td><span class="pill warn">variable-gated</span></td><td><code>public_network_access</code> on the AI module (<code>modules/ai/foundry.tf</code>). Set to <code>Disabled</code> when private endpoints are wired up.</td></tr>
+          <tr><td>MongoDB cluster firewall</td><td><span class="pill warn">variable-gated</span></td><td><code>azapi_resource.mongo_firewall_all</code> in <code>data.tf</code> opens 0.0.0.0–255.255.255.255 when public access is enabled. Disable along with public access for production.</td></tr>
+          <tr><td>Private endpoints for Foundry / Speech / Redis / Cosmos / Key Vault</td><td><span class="pill planned">planned</span></td><td>Shown in the reference diagram but no <code>azurerm_private_endpoint</code> resources in default terraform. Requires hub-spoke VNet + private DNS zones added per service.</td></tr>
+          <tr><td>Application Gateway / WAF in front of Container Apps</td><td><span class="pill planned">planned</span></td><td>No <code>azurerm_application_gateway</code> in terraform today. Add as the public ingress when moving off the Container Apps default fqdn.</td></tr>
+          <tr><td>Network Security Perimeter (NSP) around ACS</td><td><span class="pill planned">planned</span></td><td>Reference-only in the production diagram; NSP resource not yet in terraform. Track ACS NSP GA before promising in customer architectures.</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Service inventory</h3>
+      <p>The same services the previous “Azure Services” section listed, kept here as the hardening surface they actually live on.</p>
+      <table>
+        <thead><tr><th>Service</th><th>Purpose</th><th>Config prefix</th></tr></thead>
+        <tbody>
+          <tr><td>Azure Communication Services</td><td>Telephony, WebSocket audio</td><td><code>ACS_*</code></td></tr>
+          <tr><td>Microsoft Foundry</td><td>Model/runtime endpoint for GPT-4o and realtime orchestration</td><td><code>AZURE_OPENAI_*</code></td></tr>
+          <tr><td>Azure AI Speech</td><td>STT / TTS voice services used by the Foundry-based voice stack</td><td><code>AZURE_SPEECH_*</code></td></tr>
+          <tr><td>Azure Redis</td><td>Session cache</td><td><code>REDIS_*</code></td></tr>
+          <tr><td>Cosmos DB (Mongo vCore)</td><td>Persistent storage</td><td><code>AZURE_COSMOS_*</code></td></tr>
+          <tr><td>App Configuration</td><td>Dynamic config &amp; feature flags</td><td><code>AZURE_APPCONFIG_*</code></td></tr>
+          <tr><td>Application Insights</td><td>Observability</td><td><code>APPLICATIONINSIGHTS_*</code></td></tr>
+          <tr><td>Container Apps</td><td>Hosting</td><td>Terraform / Bicep</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Azure App Configuration mapping (high level)</h3>
+      <p>Runtime settings are loaded from Azure App Configuration using hierarchical keys, then synchronized to environment variables used by the service. Local <code>.env.local</code> values can still override for developer workflows.</p>
+      <table>
+        <thead><tr><th>App Config key</th><th>Environment variable consumed by runtime</th><th>Used for</th></tr></thead>
+        <tbody>
+          <tr><td><code>azure/openai/endpoint</code></td><td><code>AZURE_OPENAI_ENDPOINT</code></td><td>Microsoft Foundry model endpoint</td></tr>
+          <tr><td><code>azure/openai/deployment-id</code></td><td><code>AZURE_OPENAI_CHAT_DEPLOYMENT_ID</code></td><td>Model deployment selection</td></tr>
+          <tr><td><code>azure/speech/endpoint</code></td><td><code>AZURE_SPEECH_ENDPOINT</code></td><td>Azure AI Speech service endpoint</td></tr>
+          <tr><td><code>azure/acs/endpoint</code></td><td><code>ACS_ENDPOINT</code></td><td>ACS call/media integration</td></tr>
+          <tr><td><code>azure/redis/hostname</code></td><td><code>REDIS_HOST</code></td><td>Session and cache backend</td></tr>
+          <tr><td><code>azure/cosmos/connection-string</code></td><td><code>AZURE_COSMOS_CONNECTION_STRING</code></td><td>Transcript/audit persistence</td></tr>
+          <tr><td><code>azure/appinsights/connection-string</code></td><td><code>APPLICATIONINSIGHTS_CONNECTION_STRING</code></td><td>Telemetry and traces</td></tr>
+          <tr><td><code>app/pools/tts-size</code></td><td><code>POOL_SIZE_TTS</code></td><td>TTS client pool sizing</td></tr>
+          <tr><td><code>app/voice/default-tts-voice</code></td><td><code>DEFAULT_TTS_VOICE</code></td><td>Default voice selection</td></tr>
+          <tr><td>Feature flag: warm-pool</td><td><code>WARM_POOL_ENABLED</code></td><td>Warm pool behavior toggle</td></tr>
+        </tbody>
+      </table>
+      <p>Full key coverage is defined in <code>apps/artagent/backend/config/appconfig_provider.py</code> in <code>APPCONFIG_KEY_MAP</code> and <code>FEATURE_FLAG_MAP</code>.</p>
+
+      <h3>Cross-cloud integration</h3>
+      <p>The accelerator supports hybrid deployments. AWS Connect traffic can be routed to Azure via a Certified Session Border Controller — Azure handles the AI workload while the carrier path and call routing stay on the partner side.</p>
+
+      <div class="az-diagram" data-diagram="cross-cloud">
+        <figcaption class="az-diagram-caption">SBC bridges SIP between clouds — Azure handles AI workload only</figcaption>
+      </div>
+
+      <div class="callout tip">
+        <p><strong>Hardening minimums before going to production:</strong> flip <code>cosmosdb_public_network_access_enabled</code> to <code>false</code>, set the Foundry module <code>public_network_access</code> to <code>Disabled</code>, drop the Mongo firewall-all rule, wire private endpoints for Foundry / Speech / Redis / Cosmos / Key Vault into a hub-spoke VNet, and put an App Gateway + WAF in front of the Container Apps ingress. Everything else in the matrix above is already on by default.</p>
+      </div>
+
+      <hr>
+
+      <!-- Performance -->
+      <h2 id="performance">Performance Targets</h2>
+      <p>This is a real-time voice system. Latency kills user experience.</p>
+
+      <table>
+        <thead><tr><th>Operation</th><th>Target</th></tr></thead>
+        <tbody>
+          <tr><td>STT recognition</td><td>&lt; 200ms</td></tr>
+          <tr><td>LLM first token</td><td>&lt; 500ms</td></tr>
+          <tr><td>TTS first audio chunk</td><td>&lt; 150ms</td></tr>
+          <tr><td>End-to-end turn</td><td>&lt; 1 second</td></tr>
+          <tr><td>Agent handoff</td><td>&lt; 50ms</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout warn">
+        <p><strong>Anti-patterns to avoid:</strong> Creating new clients per request (use pools), blocking I/O in async handlers, large context windows without compaction, synchronous DB calls, unbounded audio buffers.</p>
+      </div>
+
+      <hr>
+
+      <!-- Why this complexity? -->
+      <h2 id="why-complex">Why this complexity?</h2>
+      <p>If you've skimmed the codebase and wondered why there's a custom orchestrator, per-stage streaming, a pool layer, a VAD layer, and a barge-in cancellation path — this section is the answer. Real-time voice has constraints that don't show up in chat or batch-LLM systems, and those constraints drove every structural choice.</p>
+
+      <h3 style="margin-top:28px">1 · The framework choice — own the loop, not the abstraction</h3>
+      <p>Most agent frameworks (Microsoft Agent Framework, LangChain, etc.) hand you a single <code>agent.run()</code> call that returns when the whole turn is done. That's perfect for chat and async work. For voice, it's the wrong shape — you lose the seams where latency and interruption live.</p>
+      <p style="font-size:12px;color:var(--c-text-3);margin-top:10px;">Opinionated note: if you're starting greenfield and don't need per-turn audio control, Agent Framework is worth evaluating first. If you need a realtime voice loop with barge-in and fine-grained telemetry, keep the custom orchestrator and integrate at the workflow boundary.</p>
+
+      <aside class="framework-callout" aria-labelledby="not-maf-heading">
+        <div class="framework-callout-icon">≠</div>
+        <div class="framework-callout-body">
+          <h3 id="not-maf-heading">This is <em>not</em> built on Microsoft Agent Framework <span class="pill">opinionated</span></h3>
+          <p>It's a custom, purpose-built orchestrator for real-time voice. That choice was mainly about timing and control, not a dismissal of Agent Framework.</p>
+          <p><strong>What Microsoft Agent Framework supports today.</strong> The current framework is a strong fit for production agents and workflows: multi-language support in Python and .NET, tool use, middleware, graph-style orchestration, sequential and concurrent patterns, handoffs, human-in-the-loop control, streaming, checkpointing, observability, declarative agents, and hosted-agent integration through Foundry.</p>
+          <p><strong>Why we still own the voice loop here.</strong> Voice systems have tighter latency and interruption constraints than a typical chat agent. This accelerator needs turn-level control over VAD, STT, partial LLM streaming, TTS chunking, audio pump timing, and barge-in behavior, plus stage-by-stage telemetry. Those seams are still the core of the product.</p>
+          <p><strong>Practical integration path.</strong> A good path is to keep the current audio pipeline and session state, then let Agent Framework own the higher-level agent graph: agent definitions, tool registration, workflow/handoff policies, and hosted or declarative deployment. In other words, start by using MAF for the orchestration and policy layer while leaving the real-time audio transport in this accelerator. That gets us the framework benefits without giving up the low-latency voice control we need today.</p>
+        </div>
+      </aside>
+
+      <div class="az-diagram" data-diagram="framework-positioning">
+        <figcaption class="az-diagram-caption">Where the managed pieces plug in: the orchestrator runs either audio path — custom Speech cascade or the Foundry Voice Live tool. Voice Live can manage the whole audio channel (audio in + out). Today the reason + tool stage runs ART's own custom agent framework; Microsoft Agent Framework is a potential drop-in there, not wired in today. The bottom cards weigh the latency tradeoff of each Foundry agent deployment style. Click to expand.</figcaption>
+      </div>
+
+      <h3 style="margin-top:28px">Plugging in Agent Framework, Foundry agents, and Voice Live</h3>
+      <p>You don't have to choose "all custom" or "all managed." The realtime loop above has clean seams where Microsoft's managed building blocks <em>could</em> slot in — each with its own latency profile to weigh against the ~1-second turn budget. Today the reason + tool stage runs ART's own custom agent framework; the items below are the supported plug-in points, some shipped and some potential.</p>
+      <ul>
+        <li><strong>Agent Framework at the reason stage <span class="pill planned">potential · not current state</span>.</strong> MAF is two things — <em>agents</em> (LLM + tools/MCP) and graph <em>workflows</em> (type-safe routing, checkpointing, human-in-the-loop) — built on model clients, an agent session for state, middleware, and MCP clients. It maps cleanly onto our reasoning + tool-dispatch stage, so it's a natural future drop-in: keep the audio transport here, and let MAF own the agent graph, calling the <a href="https://learn.microsoft.com/en-us/azure/ai-services/agents/quickstarts/responses-api">Responses API</a> on your Foundry project endpoint. <strong>This accelerator does not use MAF today</strong> — it ships its own custom, latency-tuned agent framework around the realtime loop; MAF is shown here as where it would plug in.</li>
+        <li><strong>Voice Live as a managed audio channel.</strong> The <a href="https://learn.microsoft.com/en-us/azure/ai-services/speech-service/voice-live">Voice Live API</a> is exposed as a Foundry Agent Service tool that collapses speech-in and speech-out into one managed WebSocket hop (Realtime-API compatible), with 600+ Azure neural voices, custom voice, and models like <code>gpt-realtime</code>. Because the orchestrator supports both pipelines, Voice Live can take over the <em>entire</em> audio channel — VAD, STT, and TTS — while MAF still sits in the middle to customize the agentic layer. Use it when you want Azure to own the whole audio surface; use the custom Speech cascade when you need per-component control.</li>
+      </ul>
+
+      <h3 style="margin-top:28px">Hosted agents vs. prompt agents — where every millisecond counts</h3>
+      <p>Foundry Agent Service offers two agent types, and the difference matters for voice. A <strong>prompt agent</strong> is configuration only (instructions + model + tools) — fully managed, nothing to scale, but you call it over the Responses API, so every turn pays a network hop and you can't reshape the orchestration. A <strong>hosted agent</strong> is <em>your</em> container (MAF, LangGraph, or custom) run by Foundry with a managed endpoint, autoscale, and a dedicated identity — great performance and full control once it's running.</p>
+      <div class="callout warn">
+        <p><strong>The warmup catch.</strong> Per the <a href="https://learn.microsoft.com/en-us/azure/ai-services/agents/concepts/hosted-agents">hosted-agents docs</a>, each session runs in its own VM-isolated sandbox that <em>scales to zero with stateful resume and predictable cold starts</em>. After 15 minutes idle the compute is deprovisioned; the next request to that session has to provision fresh compute and restore state — and there's <em>no warm pool to size</em>. For a phone call where end-to-end has to stay under ~1 second, a cold start on the critical path is a non-starter. That's exactly why this accelerator keeps the audio loop in an always-on service: you plug MAF in at the reason stage and let Voice Live or your own pooled STT/TTS handle audio, but the hot path never waits on a container warmup.</p>
+      </div>
+
+      <h3 style="margin-top:28px">2 · The 1-second turn budget</h3>
+      <p>Conversational research is clear: anything over ~1 second between the caller finishing their sentence and hearing a reply feels like lag and breaks turn-taking. That cap drives everything downstream.</p>
+
+      <div class="az-diagram" data-diagram="turn-latency-budget">
+        <figcaption class="az-diagram-caption">A single turn, broken down. We have ~120 ms of headroom — that's why we pool clients, stream LLM tokens straight into TTS, and never block on a full response.</figcaption>
+      </div>
+
+      <h3 style="margin-top:28px">3 · Barge-in — the user can talk over the agent</h3>
+      <p>The instant the caller starts speaking, the agent has to stop, drain its audio buffer, and start listening again — all within roughly 150 ms or it feels rude. This is the single biggest reason for the custom orchestrator: we have to be able to cancel in-flight TTS at any moment, which means we have to own the handle.</p>
+
+      <div class="az-diagram" data-diagram="barge-in-flow">
+        <figcaption class="az-diagram-caption">VAD fires → orchestrator cancels the turn → TTS flushes its buffer → STT re-arms. Every arrow here is a real call site you can grep in the codebase.</figcaption>
+      </div>
+
+      <div class="callout tip">
+        <p><strong>The takeaway:</strong> the complexity isn't accidental. Each layer (pools, VAD, streaming pipeline, cancellation paths, MemoManager) is paying for a specific real-time constraint. If you're extending this codebase, ask "which constraint does this serve?" before adding abstractions that hide the seams.</p>
+      </div>
+
+      <hr>
+
+      <!-- Design Decisions -->
+      <h2 id="design-decisions">Key Design Decisions</h2>
+
+      <table>
+        <thead><tr><th>Decision</th><th>Why</th><th>Implication</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>Custom orchestrator (not Microsoft Agent Framework)</strong></td>
+            <td>Framework wasn't GA at build time; voice needs turn-level control over latency, streaming, and barge-in</td>
+            <td>Extend the existing orchestrators in <code>apps/artagent/backend/voice/</code>. Don't wrap them in higher-level agent abstractions that hide the per-stage seams.</td>
+          </tr>
+          <tr>
+            <td><strong>YAML-first agents</strong></td>
+            <td>Non-developers can modify behavior</td>
+            <td>Don't create agent subclasses. Extend via YAML.</td>
+          </tr>
+          <tr>
+            <td><strong>Scenario-based handoffs</strong></td>
+            <td>Same agent works differently in different scenarios</td>
+            <td>Change routing in <code>orchestration.yaml</code>, not agent code.</td>
+          </tr>
+          <tr>
+            <td><strong>Centralized tool registry</strong></td>
+            <td>Prevents duplication, enables discovery</td>
+            <td>Always use <code>@register_tool</code>. Never define tools inline.</td>
+          </tr>
+          <tr>
+            <td><strong>Connection pooling</strong></td>
+            <td>Client creation costs 100-500ms</td>
+            <td>Use <code>get_tts_client()</code> / <code>get_stt_client()</code>. Never instantiate directly.</td>
+          </tr>
+          <tr>
+            <td><strong>MemoManager for state</strong></td>
+            <td>Enables stateless container scaling</td>
+            <td>Never store conversation state in-memory globals.</td>
+          </tr>
+        </tbody>
+      </table>
+
+    </div>
+  </main>
+</div>
+
+<script src="js/main.js?v=2"></script>
+<script src="js/diagrams.js?v=2"></script>
+<script src="js/search.js?v=2"></script>
+</body>
+</html>

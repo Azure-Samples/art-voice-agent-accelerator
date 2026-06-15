@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API Reference — ART Agent Docs</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/syntax.css">
+</head>
+<body>
+
+<header class="site-header">
+  <a href="index.html" class="logo">◆ <span>ART</span> Agent Docs</a>
+  <nav class="header-nav">
+    <a href="index.html">Home</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="guides.html">Guides</a>
+    <a href="agents.html">Agents</a>
+    <a href="api.html">API</a>
+    <a href="certification.html">Certify</a>
+  </nav>
+  <div class="header-actions">
+    <button class="search-trigger" type="button" aria-label="Search docs (Cmd+K)">
+      <span class="search-trigger-icon" aria-hidden="true">⌕</span>
+      <span class="search-trigger-label">Search docs…</span>
+      <span class="search-trigger-kbd">⌘K</span>
+    </button>
+    <a id="legacy-docs-link" class="legacy-link" href="legacy-site/index.html" title="Original mkdocs documentation site">Legacy ↗</a>
+    <a href="https://github.com/Azure-Samples/art-voice-agent-accelerator" class="gh-link" target="_blank">GitHub ↗</a>
+    <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <h4>Endpoints</h4>
+      <a href="#health" class="active">Health & Monitoring</a>
+      <a href="#calls">Call Management</a>
+      <a href="#media">Media Streaming</a>
+      <a href="#genesys-api">Genesys AudioConnector</a>
+      <a href="#browser">Browser Conversations</a>
+      <a href="#agents-api">Agents</a>
+      <a href="#sessions">Sessions</a>
+      <a href="#scenarios">Scenarios</a>
+      <a href="#profiles">Demo Profiles</a>
+    </div>
+    <div class="sidebar-section">
+      <h4>WebSocket</h4>
+      <a href="#ws-media">Media Stream</a>
+      <a href="#ws-browser">Browser Stream</a>
+    </div>
+    <div class="sidebar-section">
+      <h4>Reference</h4>
+      <a href="#config">Configuration</a>
+    </div>
+  </aside>
+
+  <main class="content">
+    <div class="content-inner">
+
+      <h1>API Reference</h1>
+      <p class="subtitle">REST endpoints and WebSocket protocols for the FastAPI backend.</p>
+
+      <div class="callout">
+        <p><strong>Base URL:</strong> <code>/api/v1/</code> — Interactive OpenAPI docs available at <code>/docs</code> when running locally.</p>
+      </div>
+
+      <!-- ==================== Health ==================== -->
+
+      <h2 id="health">Health & Monitoring</h2>
+      <table>
+        <thead><tr><th>Endpoint</th><th>Method</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>/health</code></td><td>GET</td><td>Liveness check. Returns 200 when server is running. Use for K8s liveness probes.</td></tr>
+          <tr><td><code>/ready</code></td><td>GET</td><td>Readiness check. Returns 200 when warmup tasks (MCP, pools) are complete.</td></tr>
+          <tr><td><code>/readiness</code></td><td>GET</td><td>Deep health check. Validates all Azure service dependencies.</td></tr>
+          <tr><td><code>/pools</code></td><td>GET</td><td>Resource pool metrics — TTS/STT client availability and utilization.</td></tr>
+          <tr><td><code>/appconfig</code></td><td>GET</td><td>Azure App Configuration provider status.</td></tr>
+          <tr><td><code>/appconfig/refresh</code></td><td>POST</td><td>Force refresh App Configuration cache.</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Example</h3>
+<pre><code><span class="tok-cmt"># Check if backend is ready to serve calls</span>
+curl https://your-backend.azurecontainerapps.io/api/v1/ready
+
+<span class="tok-cmt"># Response</span>
+{
+  <span class="tok-attr">"status"</span>: <span class="tok-str">"ready"</span>,
+  <span class="tok-attr">"mcp"</span>: <span class="tok-str">"connected"</span>,
+  <span class="tok-attr">"pools"</span>: { <span class="tok-attr">"tts"</span>: <span class="tok-num">5</span>, <span class="tok-attr">"stt"</span>: <span class="tok-num">5</span> }
+}</code></pre>
+
+      <hr>
+
+      <!-- ==================== Calls ==================== -->
+
+      <h2 id="calls">Call Management</h2>
+      <table>
+        <thead><tr><th>Endpoint</th><th>Method</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>/calls/initiate</code></td><td>POST</td><td>Start an outbound call. Body: <code>{ "phone_number": "+1..." }</code></td></tr>
+          <tr><td><code>/calls/</code></td><td>GET</td><td>List active/recent calls with pagination.</td></tr>
+          <tr><td><code>/calls/terminate</code></td><td>POST</td><td>End an active call. Body: <code>{ "connection_id": "..." }</code></td></tr>
+          <tr><td><code>/calls/answer</code></td><td>POST</td><td>Handle inbound call from ACS Event Grid webhook.</td></tr>
+          <tr><td><code>/calls/callbacks</code></td><td>POST</td><td>Process ACS callback events (call state changes, DTMF, etc.)</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Initiate a call</h3>
+<pre><code>curl -X POST https://your-backend/api/v1/calls/initiate \
+  -H <span class="tok-str">"Content-Type: application/json"</span> \
+  -d <span class="tok-str">'{"phone_number": "+18165019907", "scenario": "banking"}'</span></code></pre>
+
+      <hr>
+
+      <!-- ==================== Media ==================== -->
+
+      <h2 id="media">Media Streaming</h2>
+      <table>
+        <thead><tr><th>Endpoint</th><th>Type</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>/media/status</code></td><td>GET</td><td>Media streaming configuration and active stream count.</td></tr>
+          <tr><td><code>/media/stream</code></td><td>WebSocket</td><td>ACS bidirectional audio stream. See <a href="#ws-media">WebSocket protocol</a>.</td></tr>
+        </tbody>
+      </table>
+
+      <hr>
+
+      <!-- ==================== Genesys ==================== -->
+
+      <h2 id="genesys-api">Genesys AudioConnector</h2>
+      <p>AudioHook v2 bridge for Genesys Cloud telephony. See the <a href="guides.html#genesys">Genesys Cloud Integration guide</a> for setup, the simulator, and troubleshooting.</p>
+      <table>
+        <thead><tr><th>Endpoint</th><th>Type</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>/genesys/health</code></td><td>GET</td><td>Liveness check — returns <code>{"status":"ok","service":"genesys-audiohook"}</code>.</td></tr>
+          <tr><td><code>/genesys/stream</code></td><td>WebSocket</td><td>AudioHook v2 audio + control stream (subprotocol <code>audiohook-v2</code>, µ-law 8&nbsp;kHz). Bridges Genesys Cloud AudioConnector to Azure VoiceLive.</td></tr>
+        </tbody>
+      </table>
+
+      <hr>
+
+      <!-- ==================== Browser ==================== -->
+
+      <h2 id="browser">Browser Conversations</h2>
+      <table>
+        <thead><tr><th>Endpoint</th><th>Type</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>/browser/status</code></td><td>GET</td><td>Active browser connections and service status.</td></tr>
+          <tr><td><code>/browser/conversation</code></td><td>WebSocket</td><td>Browser-based voice conversation. See <a href="#ws-browser">WebSocket protocol</a>.</td></tr>
+          <tr><td><code>/browser/dashboard/relay</code></td><td>WebSocket</td><td>Real-time dashboard events (audio levels, transcripts, agent state).</td></tr>
+        </tbody>
+      </table>
+
+      <hr>
+
+      <!-- ==================== Agents API ==================== -->
+
+      <h2 id="agents-api">Agent Management</h2>
+      <table>
+        <thead><tr><th>Endpoint</th><th>Method</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>/agents</code></td><td>GET</td><td>List all loaded agents with their configuration.</td></tr>
+          <tr><td><code>/agents/{name}</code></td><td>GET</td><td>Get specific agent details (prompt, tools, handoff trigger).</td></tr>
+          <tr><td><code>/agents/{name}</code></td><td>PUT</td><td>Update agent runtime configuration (model, temperature, etc.).</td></tr>
+          <tr><td><code>/agents</code></td><td>POST</td><td>Create a new agent at runtime (session-scoped).</td></tr>
+        </tbody>
+      </table>
+
+      <hr>
+
+      <!-- ==================== Sessions ==================== -->
+
+      <h2 id="sessions">Sessions</h2>
+      <table>
+        <thead><tr><th>Endpoint</th><th>Method</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>/sessions/{id}</code></td><td>GET</td><td>Get session state (scenario, active agent, conversation history).</td></tr>
+          <tr><td><code>/sessions/{id}/reset</code></td><td>POST</td><td>Reset session — new ID, clear state, fresh conversation.</td></tr>
+        </tbody>
+      </table>
+
+      <hr>
+
+      <!-- ==================== Scenarios ==================== -->
+
+      <h2 id="scenarios">Scenarios</h2>
+      <table>
+        <thead><tr><th>Endpoint</th><th>Method</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>/scenarios</code></td><td>GET</td><td>List available scenarios (built-in + session-created).</td></tr>
+          <tr><td><code>/scenarios</code></td><td>POST</td><td>Create a session-scoped scenario from the Scenario Builder.</td></tr>
+          <tr><td><code>/scenarios/{name}</code></td><td>GET</td><td>Get scenario details (agents, handoffs, start agent).</td></tr>
+        </tbody>
+      </table>
+
+      <hr>
+
+      <!-- ==================== Profiles ==================== -->
+
+      <h2 id="profiles">Demo Profiles</h2>
+      <table>
+        <thead><tr><th>Endpoint</th><th>Method</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>/profiles/generate</code></td><td>POST</td><td>Generate a random demo customer profile (name, accounts, MFA).</td></tr>
+          <tr><td><code>/profiles/{id}</code></td><td>GET</td><td>Retrieve a generated profile by ID.</td></tr>
+        </tbody>
+      </table>
+
+      <hr>
+
+      <!-- ==================== WebSocket: Media ==================== -->
+
+      <h2 id="ws-media">WebSocket: Media Stream</h2>
+      <p><code>wss://your-backend/api/v1/media/stream</code></p>
+      <p>Bidirectional audio streaming for ACS. The backend receives raw audio from ACS and sends synthesized audio back.</p>
+
+      <h3>Message types (server → client)</h3>
+      <table>
+        <thead><tr><th>Type</th><th>Payload</th></tr></thead>
+        <tbody>
+          <tr><td><code>audio</code></td><td>Base64-encoded PCM audio chunk</td></tr>
+          <tr><td><code>transcript</code></td><td>STT recognition result (interim or final)</td></tr>
+          <tr><td><code>agent_response</code></td><td>LLM text response before TTS</td></tr>
+          <tr><td><code>handoff</code></td><td>Agent handoff notification (from, to, type)</td></tr>
+          <tr><td><code>tool_call</code></td><td>Tool invocation event (name, args, result)</td></tr>
+        </tbody>
+      </table>
+
+      <hr>
+
+      <!-- ==================== WebSocket: Browser ==================== -->
+
+      <h2 id="ws-browser">WebSocket: Browser Conversation</h2>
+      <p><code>wss://your-backend/api/v1/browser/conversation?session_id=...</code></p>
+      <p>Browser-based voice conversation using the Web Audio API. Same orchestration pipeline as phone calls.</p>
+
+      <h3>Message types (client → server)</h3>
+      <table>
+        <thead><tr><th>Type</th><th>Payload</th></tr></thead>
+        <tbody>
+          <tr><td><code>audio_data</code></td><td>Base64 PCM audio from browser microphone</td></tr>
+          <tr><td><code>control</code></td><td>Start/stop/pause/reset commands</td></tr>
+          <tr><td><code>config</code></td><td>Session configuration (scenario, agent overrides)</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Message types (server → client)</h3>
+      <table>
+        <thead><tr><th>Type</th><th>Payload</th></tr></thead>
+        <tbody>
+          <tr><td><code>audio</code></td><td>Base64 PCM audio for playback</td></tr>
+          <tr><td><code>transcript</code></td><td>User speech recognition</td></tr>
+          <tr><td><code>response</code></td><td>Agent text response</td></tr>
+          <tr><td><code>event</code></td><td>Session events (handoff, tool call, state change)</td></tr>
+          <tr><td><code>audio_levels</code></td><td>Input/output amplitude for visualization</td></tr>
+        </tbody>
+      </table>
+
+      <hr>
+
+      <!-- ==================== Configuration ==================== -->
+
+      <h2 id="config">Configuration Reference</h2>
+      <p>All configuration via environment variables. <code>azd up</code> generates a <code>.env.local</code> with all values.</p>
+
+      <h3>Core</h3>
+      <table>
+        <thead><tr><th>Variable</th><th>Description</th><th>Default</th></tr></thead>
+        <tbody>
+          <tr><td><code>ACS_STREAMING_MODE</code></td><td>Orchestration mode: <code>MEDIA</code>, <code>TRANSCRIPTION</code>, or <code>VOICE_LIVE</code></td><td><code>MEDIA</code></td></tr>
+          <tr><td><code>BASE_URL</code></td><td>Public callback URL ACS uses to reach the backend (dev tunnel URL for local dev)</td><td>—</td></tr>
+          <tr><td><code>ENVIRONMENT</code></td><td><code>development</code> or <code>production</code></td><td><code>development</code></td></tr>
+        </tbody>
+      </table>
+
+      <h3>Azure Services</h3>
+      <table>
+        <thead><tr><th>Prefix</th><th>Service</th><th>Key variables</th></tr></thead>
+        <tbody>
+          <tr><td><code>ACS_*</code></td><td>Communication Services</td><td><code>ACS_ENDPOINT</code>, <code>ACS_PHONE_NUMBER</code></td></tr>
+          <tr><td><code>AZURE_OPENAI_*</code></td><td>Azure OpenAI</td><td><code>AZURE_OPENAI_ENDPOINT</code>, <code>AZURE_OPENAI_DEPLOYMENT</code></td></tr>
+          <tr><td><code>AZURE_SPEECH_*</code></td><td>Speech Services</td><td><code>AZURE_SPEECH_REGION</code>, <code>AZURE_SPEECH_KEY</code></td></tr>
+          <tr><td><code>REDIS_*</code></td><td>Azure Redis</td><td><code>REDIS_HOST</code>, <code>REDIS_PORT</code></td></tr>
+          <tr><td><code>AZURE_COSMOS_*</code></td><td>Cosmos DB</td><td><code>AZURE_COSMOS_ENDPOINT</code>, <code>AZURE_COSMOS_DATABASE</code></td></tr>
+        </tbody>
+      </table>
+
+      <h3>Voice settings</h3>
+      <table>
+        <thead><tr><th>Variable</th><th>Description</th><th>Default</th></tr></thead>
+        <tbody>
+          <tr><td><code>TTS_VOICE</code></td><td>Azure neural voice name</td><td><code>en-US-AvaMultilingualNeural</code></td></tr>
+          <tr><td><code>TTS_STYLE</code></td><td>Voice style (<code>chat</code>, <code>friendly</code>, etc.)</td><td><code>chat</code></td></tr>
+          <tr><td><code>TTS_RATE</code></td><td>Speech rate adjustment</td><td><code>+3%</code></td></tr>
+          <tr><td><code>STT_LANGUAGE</code></td><td>Recognition language</td><td><code>en-US</code></td></tr>
+          <tr><td><code>VAD_SILENCE_TIMEOUT</code></td><td>Silence before turn end (ms)</td><td><code>500</code></td></tr>
+        </tbody>
+      </table>
+
+    </div>
+  </main>
+</div>
+
+<script src="js/main.js?v=2"></script>
+<script src="js/search.js?v=2"></script>
+</body>
+</html>

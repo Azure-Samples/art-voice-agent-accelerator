@@ -100,6 +100,7 @@ DEFAULT_TEMPERATURE=0.7
 |----------|------|---------|-------------|
 | `ACS_ENDPOINT` | string | `""` | ACS resource endpoint |
 | `ACS_CONNECTION_STRING` | string | `""` | Full connection string |
+| `ACS_AUTH_MODE` | string | `"auto"` | `auto`, `entra`, or `connection_string` for Call Automation auth |
 | `ACS_SOURCE_PHONE_NUMBER` | string | `""` | Outbound caller ID (E.164 format) |
 | `BASE_URL` | string | `""` | Public callback URL for ACS events |
 | `ACS_STREAMING_MODE` | string | `"media"` | `media`, `transcription`, or `voice_live` |

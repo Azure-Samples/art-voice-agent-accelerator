@@ -1,0 +1,26 @@
+/* ============================================================
+   Syntax highlighting — GitHub-dark inspired, no dependencies
+   ============================================================ */
+
+/* Base token classes (works with highlight.js or manual spans) */
+.hljs-keyword,  .tok-kw   { color: #ff7b72; }
+.hljs-string,   .tok-str  { color: #a5d6ff; }
+.hljs-comment,  .tok-cmt  { color: #8b949e; font-style: italic; }
+.hljs-number,   .tok-num  { color: #79c0ff; }
+.hljs-function, .tok-fn   { color: #d2a8ff; }
+.hljs-title,    .tok-type { color: #ffa657; }
+.hljs-built_in, .tok-bi   { color: #ffa657; }
+.hljs-variable, .tok-var  { color: #ffa657; }
+.hljs-attr,     .tok-attr { color: #79c0ff; }
+.hljs-meta,     .tok-meta { color: #8b949e; }
+.hljs-property             { color: #c9d1d9; }
+.hljs-params               { color: #c9d1d9; }
+.hljs-literal              { color: #79c0ff; }
+
+/* YAML specific */
+.hljs-bullet  { color: #79c0ff; }
+.hljs-section { color: #d2a8ff; font-weight: 600; }
+
+/* Shell specific */
+.hljs-meta.hljs-prompt { color: #8b949e; user-select: none; }
+.hljs-variable { color: #ffa657; }

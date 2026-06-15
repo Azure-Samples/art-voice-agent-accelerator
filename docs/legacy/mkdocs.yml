@@ -4,7 +4,7 @@ site_description: Azure-powered real-time voice agent with text-to-speech and sp
 repo_url: https://github.com/Azure-Samples/art-voice-agent-accelerator/
 repo_name: Azure-Samples/art-voice-agent-accelerator
 docs_dir: .
-site_dir: ../site
+site_dir: ../legacy-site
 
 theme:
   name: material

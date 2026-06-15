@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ART Agent — Real-Time Voice Agent Accelerator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/syntax.css">
+  <link rel="stylesheet" href="css/diagrams.css">
+</head>
+<body>
+
+<!-- ============ Header ============ -->
+<header class="site-header">
+  <a href="index.html" class="logo">◆ <span>ART</span> Agent Docs</a>
+  <nav class="header-nav">
+    <a href="index.html">Home</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="guides.html">Guides</a>
+    <a href="agents.html">Agents</a>
+    <a href="api.html">API</a>
+    <a href="certification.html">Certify</a>
+  </nav>
+  <div class="header-actions">
+    <button class="search-trigger" type="button" aria-label="Search docs (Cmd+K)">
+      <span class="search-trigger-icon" aria-hidden="true">⌕</span>
+      <span class="search-trigger-label">Search docs…</span>
+      <span class="search-trigger-kbd">⌘K</span>
+    </button>
+    <a id="legacy-docs-link" class="legacy-link" href="legacy-site/index.html" title="Original mkdocs documentation site">Legacy ↗</a>
+    <a href="https://github.com/Azure-Samples/art-voice-agent-accelerator" class="gh-link" target="_blank" rel="noopener">
+      GitHub ↗
+    </a>
+    <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+  </div>
+</header>
+
+<!-- ============ Layout ============ -->
+<div class="layout">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <h4>On this page</h4>
+      <a href="#top" class="active">Overview</a>
+      <a href="#quickstart">Quick Start</a>
+      <a href="#regions">Regions</a>
+      <a href="#modes">Two Modes</a>
+      <a href="#features">Features</a>
+      <a href="#repo-structure">Repo Structure</a>
+      <a href="#next-steps">Next Steps</a>
+    </div>
+    <div class="sidebar-section">
+      <h4>Resources</h4>
+      <a href="https://www.youtube.com/watch?v=H_uAA5_h40E" target="_blank" rel="noopener">Video Overview ↗</a>
+      <a href="https://vimeo.com/1115976100" target="_blank" rel="noopener">Demo Walkthrough ↗</a>
+      <a id="legacy-docs-sidebar-link" href="legacy-site/index.html" title="Original mkdocs documentation site">Legacy docs (mkdocs) ↗</a>
+    </div>
+  </aside>
+
+  <!-- Content -->
+  <main class="content">
+    <div class="content-inner">
+
+      <!-- Hero -->
+      <div class="hero" id="top">
+        <div class="hero-layout">
+          <div class="hero-copy">
+            <h1>Build real-time voice agents on Azure</h1>
+            <p class="subtitle">
+              Code-first framework for production voice AI. Handles telephony, audio streaming,
+              STT → LLM → TTS orchestration, and multi-agent handoffs so you focus on your domain logic.
+            </p>
+            <div class="hero-actions">
+              <a href="#quickstart" class="btn btn-primary">Quick Start →</a>
+              <a href="architecture.html" class="btn btn-secondary">Architecture</a>
+            </div>
+          </div>
+          <img class="hero-logo" src="images/ARTAGENT.png" alt="ART Agent Logo">
+        </div>
+      </div>
+
+      <div class="az-diagram hero-diagram" data-diagram="omnichannel-hero">
+        <figcaption class="az-diagram-caption">Every channel converges on the same ART Agent core — dual orchestration modes, live multi-agent handoffs, shared tools and memory.</figcaption>
+      </div>
+
+      <details class="hero-legacy">
+        <summary>Show original conceptual PNG (legacy reference) →</summary>
+        <figure class="arch-diagram contain hero-legacy-diagram" data-expandable>
+          <img src="images/omnichannel_rt_voice.png" alt="Omnichannel voice experience — web, phone, and CCaaS all routing to RTAgent with human escalation">
+          <figcaption>Original PowerPoint sketch — kept for reference</figcaption>
+        </figure>
+      </details>
+
+      <!-- What you get -->
+      <div class="feature-grid" id="features">
+        <div class="feature">
+          <div class="feature-icon">📞</div>
+          <h3>Telephony built in</h3>
+          <p>ACS integration for PSTN, SIP, IVR, barge-in. Works with contact centers out of the box.</p>
+        </div>
+        <div class="feature">
+          <div class="feature-icon">🔄</div>
+          <h3>Two orchestration modes</h3>
+          <p>SpeechCascade for full control, VoiceLive for lowest latency. Same agent framework for both.</p>
+        </div>
+        <div class="feature">
+          <div class="feature-icon">🤖</div>
+          <h3>Multi-agent handoffs</h3>
+          <p>YAML-defined agents with scenario-based routing. No code changes to rewire agent flows.</p>
+        </div>
+        <div class="feature">
+          <div class="feature-icon">🔧</div>
+          <h3>Tool registry</h3>
+          <p>Shared tool store with MCP support. Every agent gets the same capabilities without duplication.</p>
+        </div>
+        <div class="feature">
+          <div class="feature-icon">⚡</div>
+          <h3>Sub-second latency</h3>
+          <p>Connection pooling, streaming TTS, async everywhere. End-to-end turn target &lt; 1 second.</p>
+        </div>
+        <div class="feature">
+          <div class="feature-icon">📊</div>
+          <h3>Observable</h3>
+          <p>OpenTelemetry traces, Application Insights, structured logging. Debug voice pipelines in production.</p>
+        </div>
+      </div>
+
+      <hr>
+
+      <!-- Quick Start -->
+      <h2 id="quickstart">Quick Start (~25 min)</h2>
+      <p>From clone to a working voice agent talking on the phone.</p>
+
+      <div class="quickstart-block">
+        <p class="quickstart-intro">
+          The first run is mostly doing the boring but necessary platform work: pulling the repo, logging into Azure,
+          provisioning the runtime, building the containers, and waiting for Azure to finish wiring the services together.
+          Once that foundation exists, local iteration is much faster.
+        </p>
+
+        <div class="quickstart-reasons">
+          <div class="quickstart-reason">
+            <h4>1. Azure has to provision the platform</h4>
+            <p><code>azd up</code> creates the Azure resources, deploys the backend, and publishes the frontend URL.</p>
+          </div>
+          <div class="quickstart-reason">
+            <h4>2. Container builds take real time</h4>
+            <p>The repo ships both Python and web assets, so the first build compiles images instead of just starting a script.</p>
+          </div>
+          <div class="quickstart-reason">
+            <h4>3. The long part is mostly waiting</h4>
+            <p>Human effort is closer to a few minutes. The rest is Azure provisioning, image pushes, and service warm-up.</p>
+          </div>
+        </div>
+
+        <div class="quickstart-highlights">
+          <span class="quickstart-chip">Clone + authenticate</span>
+          <span class="quickstart-chip">Provision Azure resources</span>
+          <span class="quickstart-chip">Build and publish containers</span>
+          <span class="quickstart-chip">Open the phone-ready frontend</span>
+        </div>
+
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-content">
+            <div class="step-label">Clone repository</div>
+            <div class="clone-callout">
+              <span class="clone-badge">Azure-Samples/art-voice-agent-accelerator</span>
+              <p class="clone-hint">Use HTTPS to get started quickly, then switch remotes later if you prefer SSH.</p>
+            </div>
+            <pre><code><span class="tok-cmt"># Clone and enter the repo</span>
+git clone https://github.com/Azure-Samples/art-voice-agent-accelerator.git
+cd art-voice-agent-accelerator</code></pre>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-content">
+            <div class="step-label">Authenticate</div>
+            <pre><code>az login && azd auth login</code></pre>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-content">
+            <div class="step-label">Deploy everything</div>
+            <pre><code>azd up</code></pre>
+            <div class="step-note">The estimate is roughly 15-20 minutes of Azure provisioning plus 5-10 minutes for the initial container build and publish.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="callout warn">
+        <p><strong>⚠️ Two extra steps before phones ring.</strong> <code>azd up</code> stands up the platform, but it does <strong>not</strong> deploy your app code or buy a phone number for you. To get a working voice agent on the phone, follow these two guides next:</p>
+        <ol style="margin:10px 0 0; padding-left:20px;">
+          <li><a href="guides.html#deploy"><strong>Deploy to Azure</strong></a> — push the backend + frontend to your provisioned Container Apps.</li>
+          <li><a href="guides.html#enable-phone-calling"><strong>Enable Phone Calling (ACS)</strong></a> — buy a phone number and wire the Event Grid subscription that routes inbound calls to your backend.</li>
+        </ol>
+      </div>
+
+      <div class="callout tip">
+        <p><strong>Prerequisites:</strong> Azure CLI, Azure Developer CLI, Docker (or Podman), Azure subscription with Contributor access. See <a href="guides.html#prerequisites">full prerequisites</a>.</p>
+      </div>
+
+      <h3>Run locally instead</h3>
+<pre><code><span class="tok-cmt"># After azd up has created your Azure resources:</span>
+make install          <span class="tok-cmt"># Install Python + Node deps</span>
+make start_backend    <span class="tok-cmt"># FastAPI on :8010</span>
+make start_frontend   <span class="tok-cmt"># Vite on :5173</span></code></pre>
+
+      <p>The backend needs a dev tunnel for ACS callbacks. See <a href="guides.html#local-development">local development guide</a>.</p>
+
+      <hr>
+
+      <!-- Regions -->
+      <h2 id="regions">Recommended Regions</h2>
+      <p>
+        Pick a region with full coverage of the two binding AI dependencies:
+        the <strong><code>gpt-realtime</code></strong> audio model (powers VoiceLive mode and the realtime
+        cascade variant) and the <strong>Azure AI Voice Live</strong> endpoint. ACS, Speech, Cosmos, Redis,
+        and Container Apps are broadly available — the realtime audio surface is what narrows your choices.
+      </p>
+
+      <div class="callout info regions-note">
+        <p class="regions-note-text">
+          <strong>Model naming as of mid-2026:</strong>
+          The current realtime audio model is <code>gpt-realtime</code> (GA 2025-08-28), with
+          <code>gpt-realtime-mini</code>, <code>gpt-realtime-1.5</code> (2026-02-23), and
+          <code>gpt-realtime-2</code> (2026-05-06) as newer variants. The legacy
+          <code>gpt-4o-realtime-preview</code> name is superseded — this accelerator defaults to
+          <code>gpt-realtime</code> across all agent configs.
+        </p>
+      </div>
+
+      <table class="compare-table">
+        <thead>
+          <tr>
+            <th>Region</th>
+            <th><code>gpt-realtime</code></th>
+            <th>Voice Live</th>
+            <th>Speech / ACS / Cosmos / Redis</th>
+            <th>Recommendation</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>East US 2</strong></td>
+            <td>✅</td><td>✅ Regional + Global</td><td>✅</td>
+            <td><span class="badge badge-green">Default — full coverage</span></td>
+          </tr>
+          <tr>
+            <td><strong>Sweden Central</strong></td>
+            <td>✅</td><td>✅ Regional + Global</td><td>✅</td>
+            <td><span class="badge badge-green">EU data residency</span></td>
+          </tr>
+          <tr>
+            <td><strong>West US 2</strong></td>
+            <td>✅</td><td>✅ Regional + Global</td><td>✅</td>
+            <td><span class="badge badge-blue">US West pairing</span></td>
+          </tr>
+          <tr>
+            <td><strong>Southeast Asia</strong></td>
+            <td>—</td><td>✅ Regional + Global</td><td>✅</td>
+            <td><span class="badge badge-blue">APAC — Voice Live only</span></td>
+          </tr>
+          <tr>
+            <td><strong>Japan East</strong></td>
+            <td>—</td><td>✅ Regional + Global</td><td>✅</td>
+            <td><span class="badge badge-blue">APAC — Voice Live only</span></td>
+          </tr>
+          <tr>
+            <td>Other major regions <small>(East US, UK South, West Europe, France Central, Australia East, Brazil South…)</small></td>
+            <td>—</td><td>✅ Global standard</td><td>✅</td>
+            <td><span class="badge badge-amber">Voice Live works; <code>gpt-realtime</code> via auto-fallback →</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p class="regions-footnote">
+        Voice Live has expanded well beyond its original four-region preview footprint —
+        Global Standard deployment is now live across most major Americas / Europe / APAC regions.
+        The five regions above additionally support <strong>Regional</strong> deployment
+        (data pinned to that region) and have hosted <code>gpt-realtime</code> since GA.
+      </p>
+
+      <div class="callout tip">
+        <p>
+          <strong>Not in a supported region? You don't need to move.</strong>
+          The <code>azd up</code> preflight detects when your primary <code>AZURE_LOCATION</code>
+          lacks <code>gpt-realtime</code> / Voice Live and will <strong>provision the Voice Live
+          Foundry endpoint in a supported region for you</strong> (defaulting to <code>eastus2</code>).
+          Your app, ACS, Cosmos, and the rest of the stack stay in your chosen region — only the
+          realtime AI endpoint is split out.
+        </p>
+      </div>
+
+<pre><code><span class="tok-cmt"># Pin the Voice Live region explicitly (optional — azd will prompt otherwise)</span>
+azd env set AZURE_LOCATION             westeurope      <span class="tok-cmt"># app + ACS + Cosmos here</span>
+azd env set TF_VAR_voice_live_location swedencentral   <span class="tok-cmt"># gpt-realtime + Voice Live here</span>
+azd up</code></pre>
+
+      <p class="regions-links">
+        Always-current source of truth (region tables shift as Foundry expands availability):
+        <a href="https://learn.microsoft.com/azure/ai-foundry/foundry-models/concepts/models-sold-directly-by-azure-region-availability" target="_blank" rel="noopener"><code>gpt-realtime</code> regional availability ↗</a>
+        ·
+        <a href="https://learn.microsoft.com/azure/ai-services/speech-service/regions?tabs=voice-live" target="_blank" rel="noopener">Voice Live regions ↗</a>
+      </p>
+
+      <hr>
+
+      <!-- Two Modes -->
+      <h2 id="modes">Two Orchestration Modes</h2>
+      <p>Same agent framework, different audio pipelines. Choose based on your latency and control requirements.</p>
+
+      <table class="compare-table">
+        <thead>
+          <tr><th></th><th>SpeechCascade</th><th>VoiceLive</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Audio path</td><td>Azure Speech STT → LLM → TTS</td><td>Azure VoiceLive SDK (managed)</td></tr>
+          <tr><td>Latency</td><td>~400ms</td><td>~200ms</td></tr>
+          <tr><td>VAD</td><td>Custom (your thresholds)</td><td>Server-side (automatic)</td></tr>
+          <tr><td>Voices</td><td>400+ Azure neural voices</td><td>HD voices (Ava, etc.)</td></tr>
+          <tr><td>STT customization</td><td>Custom Speech models, phrase lists</td><td>Built-in</td></tr>
+          <tr><td>Best for</td><td>On-prem, compliance, full control</td><td>Speed to production, lowest latency</td></tr>
+        </tbody>
+      </table>
+
+<pre><code><span class="tok-cmt"># Sets the DEFAULT orchestration mode for ACS telephony calls</span>
+<span class="tok-kw">export</span> ACS_STREAMING_MODE=MEDIA       <span class="tok-cmt"># SpeechCascade (default)</span>
+<span class="tok-kw">export</span> ACS_STREAMING_MODE=VOICE_LIVE  <span class="tok-cmt"># VoiceLive</span></code></pre>
+
+      <p><code>ACS_STREAMING_MODE</code> only sets the <strong>default</strong> pipeline that inbound ACS phone calls use — it doesn't change the agent framework. Both modes run the same agents.</p>
+
+      <p><a href="architecture.html#orchestration">Full orchestration architecture →</a></p>
+
+      <hr>
+
+      <!-- Repo Structure -->
+      <h2 id="repo-structure">Repository Structure</h2>
+<pre><code>art-voice-agent-accelerator/
+├── apps/artagent/
+│   ├── backend/              <span class="tok-cmt"># FastAPI + WebSockets voice pipeline</span>
+│   │   ├── voice/            <span class="tok-cmt"># Orchestrators (cascade, voicelive)</span>
+│   │   └── registries/       <span class="tok-cmt"># Agents (YAML), tools, scenarios</span>
+│   └── frontend/             <span class="tok-cmt"># Vite + React demo client</span>
+├── src/                      <span class="tok-cmt"># Core libraries (ACS, Speech, AOAI, Redis, Cosmos)</span>
+├── infra/                    <span class="tok-cmt"># Terraform + Bicep IaC</span>
+├── tests/                    <span class="tok-cmt"># Unit, integration, load tests</span>
+├── samples/                  <span class="tok-cmt"># Tutorials and labs</span>
+└── utils/                    <span class="tok-cmt"># Logging, telemetry helpers</span></code></pre>
+
+      <hr>
+
+      <!-- Next Steps -->
+      <h2 id="next-steps">Next Steps</h2>
+      <div class="card-grid">
+        <a href="architecture.html" class="card">
+          <span class="badge badge-blue">Understand</span>
+          <h4>Architecture</h4>
+          <p>Data flows, orchestration modes, agent framework, storage tiers.</p>
+        </a>
+        <a href="guides.html" class="card">
+          <span class="badge badge-green">Build</span>
+          <h4>Guides</h4>
+          <p>Create agents, add tools, deploy to production, run locally.</p>
+        </a>
+        <a href="agents.html" class="card">
+          <span class="badge badge-amber">Explore</span>
+          <h4>Agents & Scenarios</h4>
+          <p>Pre-built agents for banking, insurance, healthcare. Scenario wiring.</p>
+        </a>
+        <a href="api.html" class="card">
+          <span class="badge badge-blue">Reference</span>
+          <h4>API Reference</h4>
+          <p>REST endpoints, WebSocket protocol, MCP integration.</p>
+        </a>
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<script src="js/main.js?v=2"></script>
+<script src="js/diagrams.js?v=2"></script>
+<script src="js/search.js?v=2"></script>
+</body>
+</html>

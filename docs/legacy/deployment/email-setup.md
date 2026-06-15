@@ -9,6 +9,15 @@ After deploying infrastructure, configure Azure Communication Services (ACS) Ema
 
 ## Quick Setup
 
+!!! tip "Managed Identity (default in Azure)"
+    When the backend runs in Azure (Container Apps / App Service) it authenticates
+    to ACS — including the Email Communication Service — via the backend's
+    user-assigned managed identity. The Terraform grants `Contributor` on the
+    ACS resource, which covers Calling, Email, and SMS data planes. **No
+    connection string is required in production**; just set `ACS_ENDPOINT` and
+    `AZURE_EMAIL_SENDER_ADDRESS`. The connection-string path below is only
+    needed for local development without `az login`.
+
 ### Step 1: Get Connection String
 
 1. Go to [Azure Portal](https://portal.azure.com) → your **ACS resource**
@@ -26,9 +35,14 @@ After deploying infrastructure, configure Azure Communication Services (ACS) Ema
 Add to your `.env`:
 
 ```bash
-# ACS Email Configuration
-AZURE_COMMUNICATION_EMAIL_CONNECTION_STRING=endpoint=https://<your-acs>.communication.azure.com/;accesskey=<key>
+# Production (managed identity — preferred):
+ACS_ENDPOINT=https://<your-acs>.communication.azure.com/
 AZURE_EMAIL_SENDER_ADDRESS=DoNotReply@<your-domain>.azurecomm.net
+
+# Optional local-dev override (connection string):
+AZURE_COMMUNICATION_EMAIL_CONNECTION_STRING=endpoint=https://<your-acs>.communication.azure.com/;accesskey=<key>
+# Force connection-string mode even in Azure if needed:
+# ACS_USE_MANAGED_IDENTITY=false
 ```
 
 ### Step 4: Restart Backend
@@ -63,8 +77,10 @@ curl -X POST "http://localhost:8010/api/v1/tools/test-email" \
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `AZURE_COMMUNICATION_EMAIL_CONNECTION_STRING` | Yes | ACS connection string with email permissions |
+| `ACS_ENDPOINT` | Yes (prod) | ACS resource endpoint, used with managed identity |
 | `AZURE_EMAIL_SENDER_ADDRESS` | Yes | Sender email (e.g., `DoNotReply@xxx.azurecomm.net`) |
+| `AZURE_COMMUNICATION_EMAIL_CONNECTION_STRING` | Local dev | ACS connection string (used only if MI is unavailable) |
+| `ACS_USE_MANAGED_IDENTITY` | No | `true`/`false` override. Default: auto-detect Azure-hosted environment |
 
 ---
 

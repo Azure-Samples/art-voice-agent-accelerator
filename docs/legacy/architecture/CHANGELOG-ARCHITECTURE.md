@@ -120,7 +120,7 @@ All completed tasks have been verified. Summary:
 |----------|---------|
 | **handoff-strategies.md** | Modernized to reflect tool-based handoffs, `build_handoff_map()`, new code examples |
 | **llm-orchestration.md** | Converted to redirect page pointing to new orchestration docs |
-| **docs/mkdocs.yml** | Updated navigation with new structure |
+| **docs/legacy/mkdocs.yml** | Updated navigation with new structure |
 
 ### Code Simplified (Phase 2 & 3)
 

@@ -333,6 +333,7 @@ async def handle_call_disconnected(context: CallEventContext) -> None:
 |----------|---------|-------------|
 | `ACS_STREAMING_MODE` | `media` | Handler mode selection |
 | `ACS_CALLBACK_URL` | — | Webhook URL for ACS events |
+| `ACS_AUTH_MODE` | `auto` | `entra` for Microsoft Entra ID auth, `connection_string` for access-key auth |
 | `ACS_CONNECTION_STRING` | — | ACS resource connection string |
 | `STT_PROCESSING_TIMEOUT` | `30` | Speech recognition timeout (seconds) |
 

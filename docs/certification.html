@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ARTist Certification — ART Agent Docs</title>
+  <meta name="description" content="The ARTist Certification Program — a structured path from local deployment to production leadership with the ART Voice Agent Accelerator.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/syntax.css">
+</head>
+<body>
+
+<header class="site-header">
+  <a href="index.html" class="logo">◆ <span>ART</span> Agent Docs</a>
+  <nav class="header-nav">
+    <a href="index.html">Home</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="guides.html">Guides</a>
+    <a href="agents.html">Agents</a>
+    <a href="api.html">API</a>
+    <a href="certification.html" class="active">Certify</a>
+  </nav>
+  <div class="header-actions">
+    <button class="search-trigger" type="button" aria-label="Search docs (Cmd+K)">
+      <span class="search-trigger-icon" aria-hidden="true">⌕</span>
+      <span class="search-trigger-label">Search docs…</span>
+      <span class="search-trigger-kbd">⌘K</span>
+    </button>
+    <a id="legacy-docs-link" class="legacy-link" href="legacy-site/index.html" title="Original mkdocs documentation site">Legacy ↗</a>
+    <a href="https://github.com/Azure-Samples/art-voice-agent-accelerator" class="gh-link" target="_blank" rel="noopener">GitHub ↗</a>
+    <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <h4>On this page</h4>
+      <a href="#top" class="active">Overview</a>
+      <a href="#levels">Three Levels</a>
+      <a href="#apprentice">Level 1: Apprentice</a>
+      <a href="#creator">Level 2: Creator</a>
+      <a href="#maestro">Level 3: Maestro</a>
+      <a href="#process">How to get certified</a>
+      <a href="#workshops">Workshop fast-track</a>
+      <a href="#hall-of-fame">Hall of Fame</a>
+      <a href="#profile">Add to your profile</a>
+      <a href="#contact">Contact</a>
+    </div>
+    <div class="sidebar-section">
+      <h4>Resources</h4>
+      <a href="guides.html">Get started guide</a>
+      <a href="agents.html">Agent catalog</a>
+      <a href="https://github.com/Azure-Samples/art-voice-agent-accelerator/discussions" target="_blank" rel="noopener">GitHub Discussions ↗</a>
+    </div>
+  </aside>
+
+  <main class="content">
+    <div class="content-inner">
+
+      <!-- Hero -->
+      <div class="hero" id="top">
+        <h1>ARTist Certification Program</h1>
+        <p class="subtitle">
+          A three-level path that validates real-world skill with the ART Voice Agent Accelerator —
+          from your first local call, to custom agents, to production at scale.
+        </p>
+        <div class="hero-actions">
+          <a href="#levels" class="btn btn-primary">Choose your level →</a>
+          <a href="#process" class="btn btn-secondary">How it works</a>
+        </div>
+      </div>
+
+      <p style="color:var(--c-text-2);margin-top:-8px;">
+        <strong>ARTist</strong> = Artist + ART (Azure Real-Time Voice Agent Framework). The program recognizes
+        practitioners who can deploy, extend, and operate real-time voice agents in production.
+      </p>
+
+      <div class="callout tip">
+        <p><strong>Brand new?</strong> Start with the <a href="guides.html#prerequisites">Get started guide</a>,
+        run a call end-to-end, then come back here and aim for <a href="#apprentice">Apprentice</a> first.</p>
+      </div>
+
+      <!-- ============ Levels Overview ============ -->
+      <h2 id="levels">Three levels, one path</h2>
+      <p>Each level builds on the last. Pick the one that matches where you are today.</p>
+
+      <div class="cert-overview">
+        <a href="#apprentice" class="cert-card">
+          <img src="badges/artistapprentice.png" alt="ARTist Apprentice badge">
+          <div class="level-num">Level 1</div>
+          <h3>Apprentice</h3>
+          <p>Run the framework locally, demo it confidently, and explain the end-to-end voice pipeline.</p>
+          <span class="cert-card-cta">View requirements →</span>
+        </a>
+        <a href="#creator" class="cert-card">
+          <img src="badges/artistacreator.png" alt="ARTist Creator badge">
+          <div class="level-num">Level 2</div>
+          <h3>Creator</h3>
+          <p>Build a custom YAML agent, integrate a tool, and contribute back to the community.</p>
+          <span class="cert-card-cta">View requirements →</span>
+        </a>
+        <a href="#maestro" class="cert-card">
+          <img src="badges/artistamaestro.png" alt="ARTist Maestro badge">
+          <div class="level-num">Level 3</div>
+          <h3>Maestro</h3>
+          <p>Ship to production with observability, security, performance budgets, and mentor others.</p>
+          <span class="cert-card-cta">View requirements →</span>
+        </a>
+      </div>
+
+      <!-- ============ Level 1: Apprentice ============ -->
+      <h2 id="apprentice">Level 1 — Apprentice</h2>
+
+      <section class="cert-level">
+        <div class="cert-level-badge">
+          <img src="badges/artistapprentice.png" alt="ARTist Apprentice badge">
+          <div class="level-tag">Entry level</div>
+        </div>
+        <div class="cert-level-body">
+          <h3>Run it. Demo it. Explain it.</h3>
+          <p class="lead">
+            You can stand the framework up on your own machine, drive an end-to-end voice call,
+            and explain how audio flows from the phone to the model and back.
+          </p>
+
+          <h4>Technical checklist</h4>
+          <ul class="checklist">
+            <li>Run the UI (frontend + backend) locally</li>
+            <li>Successfully demo the framework to others</li>
+            <li>Understand the end-to-end call flow</li>
+            <li>Explain ACS → Speech (STT/TTS) → LLM</li>
+            <li>Describe Voice Live vs Speech Cascade modes</li>
+            <li>Use the Agent Builder to run a custom flow</li>
+            <li>Complete one end-to-end voice call demo</li>
+          </ul>
+
+          <h4>Documentation review</h4>
+          <ul class="checklist">
+            <li>Read the <a href="architecture.html">architecture overview</a></li>
+            <li>Navigate the <a href="api.html">API reference</a></li>
+            <li>Review the <a href="agents.html">agent catalog</a></li>
+          </ul>
+
+          <h4>Portfolio evidence</h4>
+          <ul class="checklist single-col">
+            <li>Screenshot of successful local deployment</li>
+            <li>Brief architecture explanation (5–10 sentences)</li>
+            <li>Recording or log of a completed voice call</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- ============ Level 2: Creator ============ -->
+      <h2 id="creator">Level 2 — Creator</h2>
+
+      <section class="cert-level">
+        <div class="cert-level-badge">
+          <img src="badges/artistacreator.png" alt="ARTist Creator badge">
+          <div class="level-tag">Practitioner</div>
+        </div>
+        <div class="cert-level-body">
+          <h3>Build something that talks back.</h3>
+          <p class="lead">
+            You design custom agents in YAML, wire them to real tools, and ship the result —
+            then help the next person do the same.
+          </p>
+
+          <h4>Custom agent development</h4>
+          <ul class="checklist">
+            <li>Create a custom agent (<code>agents/&lt;name&gt;/agent.yaml</code>)</li>
+            <li>Define prompt, greeting, and return greeting</li>
+            <li>Configure handoff triggers for multi-agent flows</li>
+            <li>Customize voice (name, rate, pitch) for your use case</li>
+            <li>Test end-to-end with speech input + tool calls</li>
+          </ul>
+
+          <h4>Tool integration <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--c-text-3);">(choose one or more)</span></h4>
+          <ul class="checklist">
+            <li>External REST API (CRM, ticketing, payments)</li>
+            <li>Database (Cosmos DB, PostgreSQL, etc.)</li>
+            <li>Custom business-logic tool</li>
+            <li>Third-party service (Twilio, Stripe, etc.)</li>
+          </ul>
+
+          <h4>Community contributions</h4>
+          <ul class="checklist">
+            <li>File a bug report with reproduction steps</li>
+            <li>Submit a documentation improvement PR</li>
+            <li>Answer a question in GitHub Discussions</li>
+          </ul>
+
+          <h4>Portfolio evidence</h4>
+          <ul class="checklist single-col">
+            <li>Link to a GitHub repo with your custom agent YAML</li>
+            <li>Demo video or call recording (2–5 minutes)</li>
+            <li>Code snippet showing your tool integration</li>
+            <li>Links to your GitHub contributions (issues, PRs, discussions)</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- ============ Level 3: Maestro ============ -->
+      <h2 id="maestro">Level 3 — Maestro</h2>
+
+      <section class="cert-level">
+        <div class="cert-level-badge">
+          <img src="badges/artistamaestro.png" alt="ARTist Maestro badge">
+          <div class="level-tag">Expert</div>
+        </div>
+        <div class="cert-level-body">
+          <h3>Ship it. Operate it. Teach it.</h3>
+          <p class="lead">
+            You run real-time voice systems in production with observability, security guardrails,
+            performance budgets, and contribute back to the framework itself.
+          </p>
+
+          <h4>Production deployment</h4>
+          <ul class="checklist">
+            <li>Deploy to Azure with Bicep or Terraform</li>
+            <li>Configure ACS for PSTN or SIP integration</li>
+            <li>Implement health checks and readiness probes</li>
+            <li>Document deployment architecture and runbooks</li>
+          </ul>
+
+          <h4>Observability &amp; performance</h4>
+          <ul class="checklist">
+            <li>Instrument code with OpenTelemetry spans</li>
+            <li>Set up tracing in App Insights or Jaeger</li>
+            <li>Hit &lt; 1s P95 for STT → LLM → TTS</li>
+            <li>Configure connection pooling (Warmable / OnDemand)</li>
+            <li>Implement resource limits and backpressure</li>
+          </ul>
+
+          <h4>Advanced development <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--c-text-3);">(choose one or more)</span></h4>
+          <ul class="checklist">
+            <li>Extend ACS event handlers for custom call control</li>
+            <li>Build custom media processing (VAD tuning, audio prep)</li>
+            <li>Implement stateful handoffs and context transfer</li>
+            <li>Contribute a framework enhancement (new pool, etc.)</li>
+          </ul>
+
+          <h4>Security &amp; compliance</h4>
+          <ul class="checklist">
+            <li>Implement authentication flow (<code>auth_agent</code> pattern)</li>
+            <li>PII detection / redaction (Content Safety or custom)</li>
+            <li>Audit logging for HIPAA / GDPR / PCI-DSS</li>
+            <li>Secret management with Key Vault + Managed Identity</li>
+          </ul>
+
+          <h4>Community leadership</h4>
+          <ul class="checklist">
+            <li>Review and merge community PRs</li>
+            <li>Lead a workshop or create a video tutorial</li>
+            <li>Mentor 2+ developers through certification</li>
+          </ul>
+
+          <h4>Portfolio evidence</h4>
+          <ul class="checklist single-col">
+            <li>Production deployment URL or architecture diagram</li>
+            <li>Observability dashboard screenshot (traces, metrics, logs)</li>
+            <li>Performance report demonstrating P95 latency &lt; 1s</li>
+            <li>Security documentation (auth flow, PII handling, compliance)</li>
+            <li>Evidence of mentorship (PR reviews, workshop slides, tutorials)</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- ============ Process ============ -->
+      <h2 id="process">How to get certified</h2>
+      <p>The self-assessment path. Five steps from "I think I'm ready" to badge in hand.</p>
+
+      <div class="cert-process">
+        <div class="cert-process-step">
+          <div class="step-num">1</div>
+          <div class="step-body">
+            <h4>Complete the technical checklist for your level</h4>
+            <p>Work through every item under <a href="#apprentice">Apprentice</a>, <a href="#creator">Creator</a>, or <a href="#maestro">Maestro</a>. Tick them off as you go.</p>
+          </div>
+        </div>
+
+        <div class="cert-process-step">
+          <div class="step-num">2</div>
+          <div class="step-body">
+            <h4>Assemble your portfolio evidence</h4>
+            <p>Gather the screenshots, repo links, recordings, and reports listed under <em>Portfolio evidence</em> for your level. Keep links public.</p>
+          </div>
+        </div>
+
+        <div class="cert-process-step">
+          <div class="step-num">3</div>
+          <div class="step-body">
+            <h4>Open a GitHub Discussion</h4>
+            <p>Title format: <code>[ARTist Certification] &lt;Level&gt; - &lt;Your Name&gt;</code>. Paste in your portfolio links and a short summary.</p>
+          </div>
+        </div>
+
+        <div class="cert-process-step">
+          <div class="step-num">4</div>
+          <div class="step-body">
+            <h4>Program maintainers review</h4>
+            <p>Expected response time: <strong>5 business days</strong>. Reviewers may ask follow-up questions in the same thread.</p>
+          </div>
+        </div>
+
+        <div class="cert-process-step">
+          <div class="step-num">5</div>
+          <div class="step-body">
+            <h4>Receive your badge &amp; Hall of Fame entry</h4>
+            <p>On approval you get the badge image, a Hall of Fame listing, and the markdown snippet to drop into your GitHub profile.</p>
+          </div>
+        </div>
+      </div>
+
+      <div style="text-align:center;margin:24px 0 36px;">
+        <a href="https://github.com/Azure-Samples/art-voice-agent-accelerator/discussions/new?category=general" target="_blank" rel="noopener" class="btn btn-primary">Start your submission on GitHub ↗</a>
+      </div>
+
+      <!-- ============ Workshop fast-track ============ -->
+      <h2 id="workshops">Workshop fast-track</h2>
+      <p>Skip the self-assessment queue by attending an official workshop. Participants get expedited review.</p>
+
+      <table>
+        <thead>
+          <tr><th>Level</th><th>Format</th><th>Duration</th><th>Outcome</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Apprentice</strong></td>
+            <td>Onboarding session</td>
+            <td>2 hours</td>
+            <td>Deployment + architecture review</td>
+          </tr>
+          <tr>
+            <td><strong>Creator</strong></td>
+            <td>Hands-on lab</td>
+            <td>Full day</td>
+            <td>Build a custom agent with guidance</td>
+          </tr>
+          <tr>
+            <td><strong>Maestro</strong></td>
+            <td>Architecture review + mentorship</td>
+            <td>Ongoing</td>
+            <td>Production readiness assessment</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout">
+        <p><strong>Want to host or attend a workshop?</strong> Open a GitHub Discussion and tag the maintainers — see <a href="#contact">Contact</a>.</p>
+      </div>
+
+      <!-- ============ Hall of Fame ============ -->
+      <h2 id="hall-of-fame">Hall of Fame</h2>
+      <p>Practitioners recognized for expertise in real-time voice AI.</p>
+
+      <div class="hall-of-fame">
+        <details open>
+          <summary>Maestros <span class="hof-tag maestro">Level 3</span></summary>
+          <table>
+            <thead><tr><th>Name</th><th>GitHub</th><th>Organization</th></tr></thead>
+            <tbody>
+              <tr><td>Pablo Salvador Lopez</td><td><a href="https://github.com/pablosalvador10" target="_blank" rel="noopener">@pablosalvador10</a></td><td>Microsoft</td></tr>
+              <tr><td>Jin Lee</td><td><a href="https://github.com/JinLee794" target="_blank" rel="noopener">@JinLee794</a></td><td>Microsoft</td></tr>
+            </tbody>
+          </table>
+        </details>
+
+        <details>
+          <summary>Creators <span class="hof-tag creator">Level 2</span></summary>
+          <table>
+            <thead><tr><th>Name</th><th>GitHub</th><th>Organization</th></tr></thead>
+            <tbody>
+              <tr><td colspan="3" style="text-align:center;color:var(--c-text-2);font-style:italic;">Be the first Creator!</td></tr>
+            </tbody>
+          </table>
+        </details>
+
+        <details>
+          <summary>Apprentices <span class="hof-tag apprentice">Level 1</span></summary>
+          <table>
+            <thead><tr><th>Name</th><th>GitHub</th><th>Organization</th></tr></thead>
+            <tbody>
+              <tr><td colspan="3" style="text-align:center;color:var(--c-text-2);font-style:italic;">Complete onboarding to join!</td></tr>
+            </tbody>
+          </table>
+        </details>
+      </div>
+
+      <!-- ============ Add to profile ============ -->
+      <h2 id="profile">Add the badge to your profile</h2>
+      <p>Show off your certification on GitHub. Replace the badge filename with the level you earned.</p>
+
+      <div class="profile-snippet">
+        <div class="snippet-preview">
+          <img src="badges/artistacreator.png" alt="ARTist Creator preview badge">
+          <div class="snippet-text">
+            <strong>Certified ARTist — Creator</strong>
+            <span>Crafting real-time voice AI with the ART framework.</span>
+          </div>
+        </div>
+<pre><code><span class="tok-cmt">&lt;!-- In your GitHub profile README.md --&gt;</span>
+&lt;img src="https://raw.githubusercontent.com/Azure-Samples/art-voice-agent-accelerator/main/docs/badges/<span class="tok-str">artistacreator</span>.png" alt="ARTist Creator" width="200"/&gt;
+
+Certified ARTist — crafting real-time voice AI with the ART framework.
+
+[About ARTist Certification →](https://azure-samples.github.io/art-voice-agent-accelerator/certification.html)</code></pre>
+      </div>
+
+      <h4>Badge filenames</h4>
+      <table>
+        <thead><tr><th>Level</th><th>Filename</th><th>Recommended width</th></tr></thead>
+        <tbody>
+          <tr><td>Apprentice</td><td><code>badges/artistapprentice.png</code></td><td>200&nbsp;px</td></tr>
+          <tr><td>Creator</td><td><code>badges/artistacreator.png</code></td><td>200&nbsp;px</td></tr>
+          <tr><td>Maestro</td><td><code>badges/artistamaestro.png</code></td><td>200&nbsp;px</td></tr>
+        </tbody>
+      </table>
+
+      <!-- ============ Contact ============ -->
+      <h2 id="contact">Contact &amp; support</h2>
+
+      <div class="card-grid">
+        <a class="card" href="https://github.com/Azure-Samples/art-voice-agent-accelerator/discussions" target="_blank" rel="noopener">
+          <span class="badge badge-blue">Certification</span>
+          <h4>Submit for review</h4>
+          <p>Open a Discussion titled <code>[ARTist Certification] &lt;Level&gt; - &lt;Name&gt;</code>. Tag <code>@pablosalvador10</code> or <code>@JinLee794</code>.</p>
+        </a>
+        <a class="card" href="https://github.com/Azure-Samples/art-voice-agent-accelerator/issues" target="_blank" rel="noopener">
+          <span class="badge badge-amber">Technical</span>
+          <h4>Bugs &amp; features</h4>
+          <p>File a GitHub Issue with repro steps for bugs, or a feature request for new capabilities.</p>
+        </a>
+        <a class="card" href="https://github.com/Azure-Samples/art-voice-agent-accelerator/discussions" target="_blank" rel="noopener">
+          <span class="badge badge-green">Community</span>
+          <h4>Questions &amp; ideas</h4>
+          <p>Architecture, implementation, and "how should I…?" go in Discussions. Expected response: 5 business days.</p>
+        </a>
+      </div>
+
+      <p style="color:var(--c-text-3);font-size:13px;margin-top:32px;text-align:center;">
+        <em>The ARTist certification program is maintained by the ART Voice Agent Accelerator community.</em>
+      </p>
+
+    </div>
+  </main>
+</div>
+
+<script src="js/main.js"></script>
+<script src="js/search.js"></script>
+</body>
+</html>

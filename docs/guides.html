@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Guides — ART Agent Docs</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/syntax.css">
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a href="index.html" class="logo">◆ <span>ART</span> Agent Docs</a>
+  <nav class="header-nav">
+    <a href="index.html">Home</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="guides.html">Guides</a>
+    <a href="agents.html">Agents</a>
+    <a href="api.html">API</a>
+    <a href="certification.html">Certify</a>
+  </nav>
+  <div class="header-actions">
+    <button class="search-trigger" type="button" aria-label="Search docs (Cmd+K)">
+      <span class="search-trigger-icon" aria-hidden="true">⌕</span>
+      <span class="search-trigger-label">Search docs…</span>
+      <span class="search-trigger-kbd">⌘K</span>
+    </button>
+    <a id="legacy-docs-link" class="legacy-link" href="legacy-site/index.html" title="Original mkdocs documentation site">Legacy ↗</a>
+    <a href="https://github.com/Azure-Samples/art-voice-agent-accelerator" class="gh-link" target="_blank">GitHub ↗</a>
+    <button class="theme-toggle" aria-label="Toggle theme">🌙</button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <h4>Getting started</h4>
+      <a href="#prerequisites" class="active">Prerequisites</a>
+      <a href="#deploy">Deploy to Azure</a>
+      <a href="#enable-phone-calling">Enable Phone Calling</a>
+      <a href="#genesys">Genesys Cloud Integration</a>
+      <a href="#local-development">Local Development</a>
+    </div>
+    <div class="sidebar-section">
+      <h4>Extend</h4>
+      <a href="#create-agent">Create an Agent</a>
+      <a href="#add-tool">Add a Tool</a>
+      <a href="#create-scenario">Create a Scenario</a>
+    </div>
+    <div class="sidebar-section">
+      <h4>Operations</h4>
+      <a href="#production">Production Deployment</a>
+      <a href="#monitoring">Monitoring</a>
+      <a href="#testing">Testing</a>
+      <a href="#troubleshooting">Troubleshooting</a>
+    </div>
+  </aside>
+
+  <main class="content">
+    <div class="content-inner">
+
+      <h1>Guides</h1>
+      <p class="subtitle">Step-by-step instructions for setup, extension, and operations.</p>
+
+      <!-- ==================== Getting Started ==================== -->
+
+      <h2 id="prerequisites">Prerequisites</h2>
+
+      <table>
+        <thead><tr><th>Requirement</th><th>Install</th><th>Verify</th></tr></thead>
+        <tbody>
+          <tr><td>Azure CLI</td><td><code>brew install azure-cli</code></td><td><code>az --version</code></td></tr>
+          <tr><td>Azure Developer CLI</td><td><code>brew install azd</code></td><td><code>azd version</code></td></tr>
+          <tr><td>Docker or Podman</td><td><code>brew install --cask docker</code></td><td><code>docker --version</code></td></tr>
+          <tr><td>Python 3.11+</td><td><code>brew install python@3.11</code></td><td><code>python3 --version</code></td></tr>
+          <tr><td>Node.js 18+</td><td><code>brew install node</code></td><td><code>node --version</code></td></tr>
+          <tr><td>Azure Subscription</td><td>With Contributor access</td><td><code>az account show</code></td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout">
+        <p><strong>Azure OpenAI access:</strong> You need GPT-4o or GPT-4o-mini deployed in a supported region. The <code>azd up</code> command handles this provisioning.</p>
+      </div>
+
+      <hr>
+
+      <h2 id="deploy">Deploy to Azure</h2>
+      <p>One command deploys everything: infrastructure, backend, frontend.</p>
+
+      <figure class="arch-diagram contain" data-expandable>
+        <img src="images/MVPDeploy_infratf.png" alt="Infrastructure deployment — Terraform and Bicep provisioning Azure resources">
+        <figcaption>Infrastructure provisioned by <code>azd up</code> — Terraform/Bicep IaC</figcaption>
+      </figure>
+
+<pre><code><span class="tok-cmt"># 1. Clone and enter the repo</span>
+git clone https://github.com/Azure-Samples/art-voice-agent-accelerator.git
+cd art-voice-agent-accelerator
+
+<span class="tok-cmt"># 2. Login</span>
+az login
+azd auth login
+
+<span class="tok-cmt"># 3. Deploy (~25 min total)</span>
+azd up</code></pre>
+
+      <p>What <code>azd up</code> creates:</p>
+      <table>
+        <thead><tr><th>Resource</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td>Azure OpenAI</td><td>GPT-4o for conversations</td></tr>
+          <tr><td>Azure Speech Services</td><td>STT and TTS processing</td></tr>
+          <tr><td>Azure Communication Services</td><td>Telephony and media streaming</td></tr>
+          <tr><td>Cosmos DB</td><td>Conversation persistence</td></tr>
+          <tr><td>Azure Redis</td><td>Session state</td></tr>
+          <tr><td>Container Apps (×2)</td><td>Backend + Frontend hosting</td></tr>
+          <tr><td>Storage Account</td><td>Blob storage for app files</td></tr>
+          <tr><td>App Configuration</td><td>Dynamic configuration</td></tr>
+          <tr><td>Application Insights</td><td>Monitoring and tracing</td></tr>
+        </tbody>
+      </table>
+
+      <p>After deployment, <code>azd</code> prints the frontend URL. Open it to start a conversation.</p>
+
+      <hr>
+
+      <!-- ==================== Enable Phone Calling (ACS) ==================== -->
+
+      <h2 id="enable-phone-calling">Enable Phone Calling (ACS)</h2>
+      <p><code>azd up</code> provisions the Azure Communication Services (ACS) resource, but it does <strong>not</strong> buy a phone number or wire up call routing for you — those are deliberate, billable, one-time steps. To receive inbound PSTN calls you need to do three things: <strong>(1)</strong> purchase a phone number, <strong>(2)</strong> point an Event Grid subscription at your backend so ACS knows where to deliver the call, and <strong>(3)</strong> let the backend answer it.</p>
+
+      <h3 id="acs-call-flow">How an inbound call reaches your agent</h3>
+      <p>When someone dials your ACS number, ACS doesn't talk to your backend directly. It raises an <code>IncomingCall</code> event to <strong>Azure Event Grid</strong>, which fans that event out to whatever webhook you've subscribed. That webhook is a single backend endpoint:</p>
+      <div class="code-label">Event Grid webhook (the one URL ACS needs to know)</div>
+<pre><code>POST https://&lt;your-backend-host&gt;/api/v1/calls/answer</code></pre>
+      <p>That same endpoint does double duty: it answers Event Grid's one-time <code>SubscriptionValidationEvent</code> handshake <em>and</em> handles the runtime <code>Microsoft.Communication.IncomingCall</code> events. The flow:</p>
+      <ol>
+        <li><strong>Caller dials</strong> your purchased ACS number.</li>
+        <li><strong>ACS emits</strong> a <code>Microsoft.Communication.IncomingCall</code> event to Event Grid.</li>
+        <li><strong>Event Grid delivers</strong> that event to your subscribed webhook (<code>/api/v1/calls/answer</code>).</li>
+        <li><strong>The backend answers</strong> the call, opens the media WebSocket, and the orchestrator starts the conversation.</li>
+      </ol>
+
+      <div class="callout">
+        <p><strong>The one URL that matters:</strong> <code>/api/v1/calls/answer</code>. In production this is your Container App's public FQDN; in local dev it's your dev tunnel URL (see <a href="#dev-tunnel">Dev tunnel</a> below). Everything in this section is about getting ACS to deliver <code>IncomingCall</code> events to that path.</p>
+      </div>
+
+      <h3 id="acs-buy-number">Step 1 — Purchase a phone number in ACS</h3>
+      <p>Buy a number directly on the ACS resource that <code>azd up</code> created.</p>
+
+      <p><strong>Via the Azure Portal:</strong></p>
+      <ol>
+        <li>Open the <a href="https://portal.azure.com" target="_blank" rel="noopener">Azure Portal</a> → your <strong>Communication Services</strong> resource.</li>
+        <li>In the left menu under <em>Telephony and SMS</em>, select <strong>Phone numbers</strong> → <strong>+ Get</strong>.</li>
+        <li>Choose <strong>Country/Region</strong> (e.g. United States), number type <strong>Toll-free</strong> or <strong>Local</strong>, and enable the <strong>Calling — Make &amp; receive calls</strong> capability (inbound is what you need to receive calls).</li>
+        <li>Search, select an available number, review the monthly + per-minute pricing, and <strong>Place order</strong>.</li>
+      </ol>
+
+      <div class="callout warn">
+        <p><strong>Heads up:</strong> phone numbers are billed (a monthly lease plus usage), and toll-free numbers may require a one-time <strong>regulatory / verification</strong> review before they can carry traffic. Buy the number early so the verification clears before you demo.</p>
+      </div>
+
+      <p><strong>Via the Azure CLI</strong> (the <code>communication</code> extension installs on first use):</p>
+<pre><code><span class="tok-cmt"># Search for an available toll-free US number with inbound calling</span>
+az communication phonenumber search-available \
+  --resource-group &lt;your-rg&gt; \
+  --communication-service &lt;your-acs-name&gt; \
+  --country-code US \
+  --phone-number-type tollFree \
+  --assignment-type application \
+  --calling-capabilities inbound
+
+<span class="tok-cmt"># Purchase using the search-id returned above</span>
+az communication phonenumber purchase \
+  --resource-group &lt;your-rg&gt; \
+  --communication-service &lt;your-acs-name&gt; \
+  --search-id &lt;search-id&gt;
+
+<span class="tok-cmt"># Confirm the number is on the resource</span>
+az communication phonenumber list-purchased \
+  --resource-group &lt;your-rg&gt; \
+  --communication-service &lt;your-acs-name&gt;</code></pre>
+
+      <h3 id="acs-event-subscription">Step 2 — Route the call: create an Event Grid subscription</h3>
+      <p>This is the step that connects ACS to your backend. You're subscribing to the ACS resource's <code>IncomingCall</code> events and telling Event Grid to deliver them to your <code>/api/v1/calls/answer</code> webhook.</p>
+
+      <p><strong>Via the Azure Portal:</strong></p>
+      <ol>
+        <li>Open your <strong>Communication Services</strong> resource → <strong>Events</strong> (left menu) → <strong>+ Event Subscription</strong>.</li>
+        <li><strong>Name</strong> it (e.g. <code>incoming-call-to-backend</code>).</li>
+        <li>Under <strong>Filter to Event Types</strong>, select <strong>only</strong> <code>Incoming Call</code> (<code>Microsoft.Communication.IncomingCall</code>). Deselecting the rest keeps noise off your webhook.</li>
+        <li>Set <strong>Endpoint Type</strong> = <strong>Web Hook</strong>.</li>
+        <li>For <strong>Endpoint</strong>, paste your backend's answer URL:
+          <div class="code-label">Production (Container App FQDN)</div>
+<pre><code>https://&lt;your-backend&gt;.&lt;region&gt;.azurecontainerapps.io/api/v1/calls/answer</code></pre>
+        </li>
+        <li>Click <strong>Create</strong>. Event Grid immediately fires a <code>SubscriptionValidationEvent</code> to that URL; the backend's <code>/answer</code> endpoint auto-completes the handshake, so the subscription goes <em>green</em> within a few seconds. If it stays in a failed/validating state, your endpoint wasn't reachable — see the troubleshooting note below.</li>
+      </ol>
+
+      <p><strong>Via the Azure CLI:</strong></p>
+<pre><code><span class="tok-cmt"># Resolve the ACS resource ID (the Event Grid "source")</span>
+ACS_ID=$(az communication show \
+  --name &lt;your-acs-name&gt; \
+  --resource-group &lt;your-rg&gt; \
+  --query id -o tsv)
+
+<span class="tok-cmt"># Subscribe IncomingCall events → backend /api/v1/calls/answer</span>
+az eventgrid event-subscription create \
+  --name incoming-call-to-backend \
+  --source-resource-id "$ACS_ID" \
+  --endpoint "https://&lt;your-backend&gt;.&lt;region&gt;.azurecontainerapps.io/api/v1/calls/answer" \
+  --endpoint-type webhook \
+  --included-event-types Microsoft.Communication.IncomingCall</code></pre>
+
+      <div class="callout tip">
+        <p><strong>Validation must succeed or no calls flow.</strong> Event Grid only delivers <code>IncomingCall</code> events <em>after</em> the one-time validation handshake completes. The backend must be running and publicly reachable at the moment you create the subscription. If the endpoint is down, the subscription will fail and you'll need to re-create it once the backend is up.</p>
+      </div>
+
+      <h3 id="acs-verify">Step 3 — Verify</h3>
+      <ol>
+        <li>Confirm the Event Subscription shows <strong>Provisioning state: Succeeded</strong> under <em>Events</em> on the ACS resource.</li>
+        <li>Call your purchased number from any phone.</li>
+        <li>Watch the backend logs — you should see the <code>SubscriptionValidationEvent</code> (once, at creation) and then a <code>Microsoft.Communication.IncomingCall</code> event followed by the call being answered.</li>
+      </ol>
+
+      <h3 id="acs-local">Local development — making ACS reach your laptop</h3>
+      <p>In production the webhook is a public Container App URL, so ACS can reach it. On your laptop, <code>http://localhost:8010/api/v1/calls/answer</code> is invisible to Azure. The fix is exactly the same three steps above, with one change: the <strong>Endpoint</strong> you give the Event Grid subscription is your <strong>dev tunnel</strong> URL instead of the Container App FQDN:</p>
+      <div class="code-label">Event Grid endpoint for local dev</div>
+<pre><code>https://abc123-8010.usw3.devtunnels.ms/api/v1/calls/answer</code></pre>
+      <p>The dev tunnel gives <code>localhost:8010</code> a public, internet-routable HTTPS address that ACS can deliver events to. See <a href="#dev-tunnel">Dev tunnel — enabling telephony on your laptop</a> for setup, and remember to update both the Event Grid subscription endpoint and the backend <code>BASE_URL</code> whenever you create a fresh tunnel.</p>
+
+      <div class="callout warn">
+        <p><strong>Re-create the subscription when the tunnel ID changes.</strong> Each new <code>devtunnel create</code> mints a new random URL. An Event Grid subscription pinned to a dead tunnel silently drops every <code>IncomingCall</code> event. Either keep a stable tunnel for the day or update/re-create the subscription endpoint after each rotation.</p>
+      </div>
+
+      <hr>
+
+      <!-- ==================== Genesys Cloud Integration ==================== -->
+
+      <h2 id="genesys">Genesys Cloud Integration</h2>
+      <p>The accelerator ships with a <strong>built-in Genesys Cloud AudioConnector bridge</strong>, so you can put the same multi-agent voice orchestrator behind a Genesys contact-center flow <em>without</em> Azure Communication Services or a PSTN number. Genesys streams the live call audio to the backend over a WebSocket, the backend runs the conversation through Azure VoiceLive and the agent/tool/handoff stack, and synthesized speech streams back to the caller — all in real time.</p>
+
+      <p>This is an <strong>alternative telephony front-end</strong> that sits alongside the ACS path above. ACS and Genesys share the exact same agents, tools, scenarios, and handoff logic; only the audio transport differs.</p>
+
+      <div class="callout">
+        <p><strong>When to use this:</strong> you already run Genesys Cloud as your contact-center platform and want to route a queue, IVR branch, or a single flow action to an Azure AI voice agent. Genesys owns the PSTN leg and caller experience; the accelerator provides the AI brain.</p>
+      </div>
+
+      <h3 id="genesys-how-it-works">How it works</h3>
+      <p>Genesys Cloud's <strong>AudioConnector</strong> integration speaks the <a href="https://developer.genesys.cloud/devapps/audiohook/" target="_blank" rel="noopener">AudioHook v2</a> WebSocket protocol. The accelerator implements the full server side of that protocol and bridges it to Azure VoiceLive:</p>
+
+      <div class="mermaid">
+flowchart LR
+    caller([📞 Caller]) --- gc
+
+    subgraph GENESYS["☁️ Genesys Cloud"]
+        gc["AudioConnector<br/><small>Architect flow</small>"]
+    end
+
+    subgraph ART["⚙️ ART Backend &mdash; /api/v1/genesys/stream"]
+        direction TB
+        proto["AudioHook v2 protocol<br/><small>handshake · seq · ping · DTMF · barge-in</small>"]
+        codec["Audio codec<br/><small>µ-law 8kHz ⇄ PCM16 24kHz</small>"]
+        handler["GenesysVoiceLiveHandler"]
+        proto --- handler
+        codec --- handler
+    end
+
+    subgraph CORE["🧠 Shared multi-agent core (same as ACS)"]
+        direction TB
+        orch["LiveOrchestrator"]
+        agents["Agents · Tools · Handoffs"]
+        memo["MemoManager<br/><small>Redis session + caller context</small>"]
+        orch --- agents
+        orch --- memo
+    end
+
+    vl["Azure VoiceLive API<br/><small>STT · LLM · TTS (managed)</small>"]
+
+    gc <== "WebSocket · µ-law 8kHz + JSON" ==> proto
+    handler <== "PCM16 24kHz · base64" ==> vl
+    handler --> orch
+
+    classDef callerNode fill:#FFFFFF,stroke:#605E5C,color:#1A1A1A
+    classDef gNode fill:#FFF8E1,stroke:#C8960A,color:#3D2F00
+    classDef aNode fill:#E3F0FF,stroke:#0078D4,color:#0A2540
+    classDef cNode fill:#E6FAEA,stroke:#107C10,color:#0B3D0B
+    classDef vNode fill:#F1E6FF,stroke:#8764B8,color:#2E1A47
+
+    class caller callerNode
+    class gc gNode
+    class proto,codec,handler aNode
+    class orch,agents,memo cNode
+    class vl vNode
+
+    style GENESYS fill:#FFFBF0,stroke:#FFB900,color:#3D2F00
+    style ART fill:#F0F7FF,stroke:#0078D4,color:#0A2540
+    style CORE fill:#F0FBF2,stroke:#107C10,color:#0B3D0B
+      </div>
+
+      <p>The bridge does three jobs on every call:</p>
+      <ul>
+        <li><strong>Protocol</strong> — Implements the AudioHook v2 server handshake (<code>open</code>/<code>opened</code>), keep-alive (<code>ping</code>/<code>pong</code>), sequence-number tracking, DTMF, barge-in, and graceful <code>close</code>/<code>disconnect</code>.</li>
+        <li><strong>Audio codec</strong> — Genesys sends <strong>µ-law (PCMU) 8&nbsp;kHz</strong> mono; VoiceLive expects <strong>PCM16 24&nbsp;kHz</strong>. The handler decodes + upsamples 3× inbound, and downsamples + µ-law encodes outbound, with paced 250&nbsp;ms chunking back to Genesys.</li>
+        <li><strong>Orchestration</strong> — On session open it connects to VoiceLive, resolves the same agent set / scenario / handoff map used by the ACS path, and starts the <code>LiveOrchestrator</code>. Caller context from the Genesys flow is injected into the agent's working memory.</li>
+      </ul>
+
+      <div class="callout">
+        <p><strong>Genesys is VoiceLive-only today.</strong> Unlike the ACS path (which honors <code>ACS_STREAMING_MODE</code> and can run the SpeechCascade orchestrator), the Genesys bridge is wired exclusively to Azure VoiceLive via <code>GenesysVoiceLiveHandler</code> → <code>LiveOrchestrator</code> — there is no SpeechCascade code path for Genesys. This keeps end-to-end latency lowest for contact-center traffic. Your VoiceLive settings must be configured (see Step&nbsp;1) regardless of what <code>ACS_STREAMING_MODE</code> is set to. The agents, tools, and handoff logic are identical to the cascade path, so the same scenarios work either way.</p>
+      </div>
+
+      <h3 id="genesys-builtin">What the accelerator gives you out of the box</h3>
+      <p>The integration is already wired into the backend — there is nothing to build. Once the backend is running it exposes:</p>
+      <table>
+        <thead><tr><th>Endpoint</th><th>Type</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td><code>/api/v1/genesys/stream</code></td><td>WebSocket</td><td>AudioHook v2 audio + control stream (subprotocol <code>audiohook-v2</code>)</td></tr>
+          <tr><td><code>/api/v1/genesys/health</code></td><td>GET</td><td>Liveness check — returns <code>{"status":"ok","service":"genesys-audiohook"}</code></td></tr>
+        </tbody>
+      </table>
+
+      <p>Caller context configured as <strong>input variables</strong> on the Genesys AudioConnector action is delivered in the <code>open</code> message and made available to your agents. A few well-known keys are promoted to system variables; <em>all</em> input variables are also stored in the session's working memory (<code>MemoManager</code>) so tools and prompts can read them:</p>
+      <table>
+        <thead><tr><th>Genesys input variable</th><th>Exposed to agents as</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td><code>phoneNumber</code></td><td><code>caller_phone</code></td><td>Caller's number from the Genesys flow</td></tr>
+          <tr><td><code>emailAddress</code></td><td><code>caller_email</code></td><td>Caller email, if collected</td></tr>
+          <tr><td><code>promptName</code></td><td><code>genesys_prompt</code></td><td>Scenario / prompt hint from the flow</td></tr>
+          <tr><td><em>any other key</em></td><td>working memory</td><td>Stored verbatim in <code>MemoManager</code> for the session</td></tr>
+        </tbody>
+      </table>
+
+      <h3 id="genesys-step1">Step 1 — Configure Azure VoiceLive</h3>
+      <p>The bridge connects to Azure VoiceLive on session open, so these must be set in the backend environment (they are populated by <code>azd up</code> when VoiceLive is provisioned):</p>
+      <div class="code-label">.env (repo root)</div>
+<pre><code><span class="tok-cmt"># Azure VoiceLive — required for the Genesys bridge</span>
+AZURE_VOICELIVE_ENDPOINT=https://&lt;your-voicelive-resource&gt;.cognitiveservices.azure.com
+AZURE_VOICELIVE_MODEL=gpt-4o-realtime-preview
+
+<span class="tok-cmt"># Auth: managed identity (recommended) OR an API key</span>
+USE_DEFAULT_CREDENTIAL=true
+<span class="tok-cmt"># AZURE_VOICELIVE_API_KEY=&lt;key&gt;   # only if not using managed identity</span>
+
+<span class="tok-cmt"># Recommended: Redis-backed session memory so caller context + handoffs persist</span>
+REDIS_HOST=&lt;your-redis-host&gt;
+REDIS_PORT=6380</code></pre>
+
+      <h3 id="genesys-step2">Step 2 — Point Genesys at your endpoint</h3>
+      <p>In <strong>Genesys Cloud Admin</strong>, create an <strong>AudioConnector</strong> integration and set its connection URI to your backend's Genesys WebSocket endpoint (always <code>wss://</code> — Genesys requires TLS):</p>
+      <div class="code-label">AudioConnector connection URI</div>
+<pre><code>wss://&lt;your-backend&gt;.&lt;region&gt;.azurecontainerapps.io/api/v1/genesys/stream</code></pre>
+      <p>Then reference that integration from an <strong>Audio Connector</strong> action inside an Architect <em>inbound call</em> flow, and map any caller context you want the agent to receive into the action's <strong>input variables</strong> (e.g. <code>phoneNumber</code>, <code>promptName</code>). When a call hits that flow action, Genesys opens the WebSocket and the AI agent takes over the conversation.</p>
+
+      <div class="callout warn">
+        <p><strong>Public, TLS, and reachable.</strong> Genesys Cloud connects from its own cloud infrastructure, so the endpoint must be a public <code>wss://</code> URL. For local development, expose the backend through a <a href="#dev-tunnel">dev tunnel</a> and use the tunnel's <code>wss://</code> address — exactly as you would for ACS, but pointing at <code>/api/v1/genesys/stream</code>.</p>
+      </div>
+
+      <h3 id="genesys-step3">Step 3 — Test without Genesys (simulator)</h3>
+      <p>The repo ships a local <strong>AudioConnector simulator</strong> at <code>tools/genesys_simulator/</code> that emulates a Genesys client end-to-end — it negotiates AudioHook v2, captures your microphone, streams µ-law audio, and plays the agent's response — so you can validate the full pipeline before touching real Genesys infrastructure.</p>
+<pre><code><span class="tok-cmt"># 1) Start the backend (if not already running)</span>
+python -m uvicorn apps.artagent.backend.main:app --host 0.0.0.0 --port 8081
+
+<span class="tok-cmt"># 2) Run the simulator against it</span>
+cd tools/genesys_simulator
+python -m venv .venv &amp;&amp; source .venv/bin/activate
+pip install -r requirements.txt
+python genesys_client_simulator.py ws://localhost:8081/api/v1/genesys/stream</code></pre>
+      <p>Speak into your mic and you should hear the agent respond. See <code>tools/genesys_simulator/README.md</code> for configuration (prompt/scenario name, org/conversation IDs, and the input variables it sends).</p>
+
+      <h3 id="genesys-expect">What you should expect to see</h3>
+      <p>A healthy call produces this log sequence in the backend (loggers <code>api.v1.endpoints.genesys</code>, <code>genesys.protocol</code>, and <code>genesys.handler</code>). Every line is tagged with the AudioHook <code>session=</code> so you can follow a single call:</p>
+      <div class="code-label">Backend logs — successful Genesys session</div>
+<pre><code>[Genesys] WebSocket connect | session=&lt;sid&gt;
+[Genesys] Handler started | session=&lt;sid&gt;
+[GenesysProtocol] Session opened | conversation=&lt;conv&gt; org=&lt;org&gt; media={"format":"PCMU","rate":8000,...}
+[Genesys] VoiceLive connected | connect_ms=312.4 session=&lt;sid&gt;
+[Genesys] Agents resolved | count=8 start=Concierge session=&lt;sid&gt;
+[Genesys] Orchestrator started | session=&lt;sid&gt;
+[Genesys] User transcript: 'I want to check my balance' | session=&lt;sid&gt;
+[Genesys] First audio chunk for response=&lt;rid&gt; | session=&lt;sid&gt;
+[Genesys] Speech started → barge-in | session=&lt;sid&gt;   <span class="tok-cmt"># caller interrupted; playback stops</span></code></pre>
+      <ul>
+        <li><strong>Handshake:</strong> <code>WebSocket connect</code> → <code>Session opened</code> within a second. If you never see <code>Session opened</code>, Genesys and the backend failed to agree on a media format.</li>
+        <li><strong>Audio both ways:</strong> <code>VoiceLive connected</code> then <code>First audio chunk</code> means the agent is talking back; <code>User transcript</code> lines confirm inbound speech is being recognized.</li>
+        <li><strong>Barge-in:</strong> <code>Speech started → barge-in</code> appears when the caller interrupts the agent — the bridge tells Genesys to stop the current playback.</li>
+      </ul>
+
+      <h3 id="genesys-debug">Debugging &amp; troubleshooting via monitor logs</h3>
+      <p>All Genesys activity flows through the standard OpenTelemetry → Application Insights pipeline (see <a href="#monitoring">Monitoring</a>). Filter on the <code>[Genesys]</code> / <code>[GenesysProtocol]</code> tags or a specific <code>session=</code> to isolate one call.</p>
+
+      <p><strong>Application Insights (Logs / KQL):</strong></p>
+      <div class="code-label">All Genesys activity in the last hour</div>
+<pre><code>traces
+| where timestamp &gt; ago(1h)
+| where message has "[Genesys]" or message has "[GenesysProtocol]"
+| project timestamp, message, severityLevel, operation_Id
+| order by timestamp asc</code></pre>
+      <div class="code-label">Trace a single call end-to-end</div>
+<pre><code>traces
+| where message has "session=&lt;your-session-id&gt;"
+| order by timestamp asc</code></pre>
+
+      <p><strong>Container App live logs (Azure CLI):</strong></p>
+<pre><code><span class="tok-cmt"># Tail the backend and filter to Genesys lines</span>
+az containerapp logs show \
+  --name &lt;your-backend-app&gt; \
+  --resource-group &lt;your-rg&gt; \
+  --follow --tail 100 | grep -i genesys
+
+<span class="tok-cmt"># Quick liveness check of the Genesys endpoint</span>
+curl https://&lt;your-backend&gt;.&lt;region&gt;.azurecontainerapps.io/api/v1/genesys/health</code></pre>
+
+      <p><strong>Common issues</strong> — the log line in the right column tells you which stage failed:</p>
+      <table>
+        <thead><tr><th>Symptom</th><th>Likely cause</th><th>What to check / log signal</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>WebSocket connects, then drops right after <code>open</code></td>
+            <td>VoiceLive not configured or credential failure</td>
+            <td>Look for <code>[Genesys] Failed to connect to VoiceLive</code>. Verify <code>AZURE_VOICELIVE_ENDPOINT</code>/<code>AZURE_VOICELIVE_MODEL</code> and that the managed identity (or API key) can reach VoiceLive.</td>
+          </tr>
+          <tr>
+            <td>No <code>opened</code> response / session never starts</td>
+            <td>Media format mismatch</td>
+            <td><code>[GenesysProtocol] No supported media format found</code>. The AudioConnector must offer <strong>PCMU @ 8000&nbsp;Hz</strong> on the <code>external</code> channel.</td>
+          </tr>
+          <tr>
+            <td>Session rejected with a disconnect</td>
+            <td>Out-of-order or duplicate frames (proxy/network)</td>
+            <td><code>[GenesysProtocol] Invalid client seq</code> or <code>Session ID mismatch</code>. Check for a proxy reordering WebSocket frames between Genesys and the backend.</td>
+          </tr>
+          <tr>
+            <td>Garbled, robotic, or sped-up audio</td>
+            <td>Codec conversion problem</td>
+            <td>Inspect the <code>[Genesys] Audio delta: input_type=… → µ-law_size=…</code> debug line. Confirm Genesys is sending 8&nbsp;kHz µ-law mono.</td>
+          </tr>
+          <tr>
+            <td>Agent greets with the wrong persona / scenario</td>
+            <td>Scenario or start-agent resolution</td>
+            <td><code>[Genesys] Agents resolved | count=… start=…</code> shows which agent set and start agent were selected. Adjust the <code>promptName</code> input variable or scenario config.</td>
+          </tr>
+          <tr>
+            <td>Caller context (phone/email) missing in the agent</td>
+            <td>Input variables not mapped, or Redis unavailable</td>
+            <td>Confirm the AudioConnector action sets <code>inputVariables</code>; without Redis (<code>REDIS_*</code>) the <code>MemoManager</code> is skipped and context isn't persisted across handoffs.</td>
+          </tr>
+          <tr>
+            <td>Calls connect locally with the simulator but not from Genesys</td>
+            <td>Endpoint not publicly reachable over TLS</td>
+            <td>Genesys requires a public <code>wss://</code> URL. Use the Container App FQDN in production or a <a href="#dev-tunnel">dev tunnel</a> locally — pointed at <code>/api/v1/genesys/stream</code>.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <hr>
+
+      <h2 id="local-development">Local Development</h2>
+
+      <h3>Install dependencies</h3>
+<pre><code>make install  <span class="tok-cmt"># Installs Python (pip) + Node (npm) dependencies</span></code></pre>
+
+      <h3>Environment setup</h3>
+      <p>After <code>azd up</code>, a <code>.env.local</code> file is generated at the repo root with all connection strings. For local development, copy it to <code>.env</code> (which the backend loads by default):</p>
+<pre><code>cp .env.local .env</code></pre>
+
+      <h3 id="dev-tunnel">Dev tunnel — enabling telephony on your laptop</h3>
+
+      <div class="callout warn">
+        <p><strong>Why a dev tunnel is required.</strong> The voice agent is driven by <strong>Azure Communication Services (ACS)</strong>, a cloud service that places phone calls and streams audio <em>into</em> your backend via webhooks (<code>/api/v1/calls/answer</code>, media WebSocket, etc.). <code>localhost:8010</code> is invisible to Azure — ACS literally cannot reach it. A dev tunnel gives your laptop a public, internet-routable HTTPS URL that ACS can call into, which is what turns local development into a working PSTN endpoint.</p>
+        <p style="margin-top:8px;">Skip the tunnel and you'll still get a working browser UI, but <strong>no phone calls will connect</strong> and ACS event subscriptions will fail validation.</p>
+      </div>
+
+      <p>Use <a href="https://learn.microsoft.com/azure/developer/dev-tunnels/overview" target="_blank" rel="noopener">Azure Dev Tunnels</a>:</p>
+<pre><code><span class="tok-cmt"># Install</span>
+brew install --cask devtunnel
+
+<span class="tok-cmt"># Login and create a tunnel with anonymous access (required for ACS — see below)</span>
+devtunnel user login
+devtunnel create --allow-anonymous
+
+<span class="tok-cmt"># Expose backend port 8010 and start hosting</span>
+devtunnel port create -p 8010 --protocol https
+devtunnel host</code></pre>
+
+      <p>Copy the HTTPS URL it prints (e.g. <code>https://abc123-8010.usw3.devtunnels.ms</code>) — you'll wire it into <code>BASE_URL</code> below.</p>
+
+      <h3 id="dev-tunnel-security">Securing the tunnel (RBAC + compensating controls)</h3>
+
+      <div class="callout">
+        <p><strong>The constraint:</strong> ACS webhooks are unauthenticated HTTPS <code>POST</code>s from Azure infrastructure — ACS cannot present a user's Entra ID token to your tunnel. That means the tunnel path ACS hits <strong>must allow anonymous traffic</strong>, so you can't simply put Entra RBAC in front of the callback URL and call it a day. Instead, layer defenses around it.</p>
+      </div>
+
+      <h4>1. Restrict who can create tunnels in your tenant</h4>
+      <p>Tenant admins can lock down the Dev Tunnels service itself so only approved users (and only inside the corporate tenant) can host tunnels. From the <a href="https://learn.microsoft.com/azure/developer/dev-tunnels/security" target="_blank" rel="noopener">Dev Tunnels security docs</a>:</p>
+<pre><code><span class="tok-cmt"># Tenant admin: require Entra ID auth + restrict tunnel creation to a group</span>
+<span class="tok-cmt"># (configured in the Entra admin center under Enterprise applications →</span>
+<span class="tok-cmt">#  "Visual Studio Tunnel Service" → Users and groups + Conditional Access)</span></code></pre>
+      <p>This doesn't protect the data plane that ACS hits, but it stops random tenants/users from spinning up tunnels that look like yours.</p>
+
+      <h4>2. Treat the tunnel URL as a secret</h4>
+      <p>Each tunnel ID is a high-entropy random string (e.g. <code>abc123</code> in <code>abc123-8010.usw3.devtunnels.ms</code>). That ID is effectively a bearer secret for the callback path. Don't paste it in Teams, don't commit it, and rotate it often:</p>
+<pre><code><span class="tok-cmt"># Tear down at end of day</span>
+devtunnel delete &lt;tunnel-id&gt;
+
+<span class="tok-cmt"># Or recycle with a fresh ID</span>
+devtunnel create --allow-anonymous</code></pre>
+
+      <h4>3. Use Entra-restricted tunnels for non-ACS surfaces</h4>
+      <p>If you also expose the frontend or an admin UI through a tunnel (i.e. anything a <em>human in a browser</em> consumes — not ACS), you can drop <code>--allow-anonymous</code> and add tenant- or user-scoped RBAC. Callers will be challenged for an Entra ID token before reaching your service:</p>
+<pre><code><span class="tok-cmt"># Create a tunnel with no anonymous access (default = owner only)</span>
+devtunnel create
+
+<span class="tok-cmt"># Grant your whole tenant access (members must sign in with Entra ID)</span>
+devtunnel access create &lt;tunnel-id&gt; --tenant &lt;your-tenant-id&gt;
+
+<span class="tok-cmt"># Or grant a specific user</span>
+devtunnel access create &lt;tunnel-id&gt; --user alice@contoso.com
+
+<span class="tok-cmt"># Inspect / revoke</span>
+devtunnel access list   &lt;tunnel-id&gt;
+devtunnel access delete &lt;tunnel-id&gt; --access-id &lt;id&gt;</code></pre>
+      <p>A common split-brain pattern: <strong>two tunnels per laptop</strong> — one anonymous tunnel exposing only the backend port for ACS callbacks, and one Entra-restricted tunnel exposing the frontend so only your tenant can load the UI.</p>
+
+      <h4>4. Validate ACS callbacks at the application layer</h4>
+      <p>Even with an anonymous tunnel, the backend should still verify incoming ACS events. The ACS Event Grid integration performs a one-time <code>SubscriptionValidation</code> handshake, and runtime events ship as CloudEvents 1.0 with a known schema — reject anything that doesn't match.</p>
+
+      <div class="callout tip">
+        <p><strong>Bottom line:</strong> for the ACS callback path, anonymous + a random tunnel ID + short-lived tunnels is the realistic posture. Use Entra RBAC where it actually helps (tunnel <em>creation</em>, frontend/admin UIs), and never use a dev tunnel for anything beyond local development.</p>
+      </div>
+
+      <h3>Wire <code>BASE_URL</code> into the backend <code>.env</code></h3>
+      <p>The backend reads <code>BASE_URL</code> as the public callback endpoint it gives to ACS for media streaming and call events. Edit the root <code>.env</code>:</p>
+      <div class="code-label">.env (repo root)</div>
+<pre><code><span class="tok-cmt"># Public URL ACS uses to reach your backend (from `devtunnel host`)</span>
+BASE_URL=https://abc123-8010.usw3.devtunnels.ms</code></pre>
+      <p>Every time you create a new tunnel, update this value — a stale <code>BASE_URL</code> is the #1 cause of dropped calls and 404 callbacks.</p>
+
+      <h3>Wire the frontend <code>.env</code></h3>
+      <p>The frontend is a Vite/React app, so its environment variables are <strong>baked into the bundle at build time</strong> (Vite inlines anything prefixed <code>VITE_</code> when <code>npm run dev</code> or <code>npm run build</code> starts). Changing this file requires restarting the Vite dev server.</p>
+      <p>Create <code>apps/artagent/frontend/.env</code> from the sample:</p>
+<pre><code>cp apps/artagent/frontend/.env.sample apps/artagent/frontend/.env</code></pre>
+      <div class="code-label">apps/artagent/frontend/.env</div>
+<pre><code><span class="tok-cmt"># Local backend (default)</span>
+VITE_BACKEND_BASE_URL=http://localhost:8010
+
+<span class="tok-cmt"># Or, when testing the browser client against your dev tunnel:</span>
+<span class="tok-cmt"># VITE_BACKEND_BASE_URL=https://abc123-8010.usw3.devtunnels.ms</span></code></pre>
+      <p>Use <code>localhost</code> for normal browser-only development. Point it at the tunnel URL only when you need an external device (phone, another machine) to hit your backend through the browser UI.</p>
+
+      <h3>Start the services</h3>
+<pre><code>make start_backend    <span class="tok-cmt"># FastAPI on http://localhost:8010</span>
+make start_frontend   <span class="tok-cmt"># Vite dev server on http://localhost:5173</span></code></pre>
+
+      <hr>
+
+      <!-- ==================== Extend ==================== -->
+
+      <h2 id="create-agent">Create an Agent</h2>
+      <p>Agents are YAML files — no Python required.</p>
+
+      <h3>1. Create the agent directory</h3>
+<pre><code>mkdir -p apps/artagent/backend/registries/agentstore/my_agent</code></pre>
+
+      <h3>2. Define the agent</h3>
+      <div class="code-label">my_agent/agent.yaml</div>
+<pre><code><span class="tok-attr">name</span>: MyAgent
+<span class="tok-attr">description</span>: Handles widget inquiries
+<span class="tok-attr">handoff</span>:
+  <span class="tok-attr">trigger</span>: handoff_my_agent
+<span class="tok-attr">greeting</span>: <span class="tok-str">"Hi! I can help with widget questions."</span>
+<span class="tok-attr">tools</span>:
+  - lookup_widget
+  - handoff_concierge  <span class="tok-cmt"># Always include a way back</span>
+<span class="tok-attr">prompts</span>:
+  <span class="tok-attr">path</span>: prompt.jinja</code></pre>
+
+      <h3>3. Write the system prompt</h3>
+      <div class="code-label">my_agent/prompt.jinja</div>
+<pre><code>You are a widget specialist for {{ company_name }}.
+Help the caller find the right widget. Be concise and friendly.
+If you can't help, use the handoff_concierge tool to transfer back.</code></pre>
+
+      <h3>4. Add to a scenario</h3>
+      <div class="code-label">scenariostore/my_scenario/orchestration.yaml</div>
+<pre><code><span class="tok-attr">start_agent</span>: Concierge
+<span class="tok-attr">handoffs</span>:
+  - <span class="tok-attr">from</span>: Concierge
+    <span class="tok-attr">to</span>: MyAgent
+    <span class="tok-attr">tool</span>: handoff_my_agent
+    <span class="tok-attr">type</span>: announced
+  - <span class="tok-attr">from</span>: MyAgent
+    <span class="tok-attr">to</span>: Concierge
+    <span class="tok-attr">tool</span>: handoff_concierge
+    <span class="tok-attr">type</span>: discrete</code></pre>
+
+      <p>The agent is auto-discovered on next restart. No registration code needed.</p>
+
+      <hr>
+
+      <h2 id="add-tool">Add a Tool</h2>
+      <p>Tools are Python functions registered in the centralized tool store.</p>
+
+      <div class="code-label">toolstore/lookup_widget.py</div>
+<pre><code><span class="tok-kw">from</span> registries.toolstore.registry <span class="tok-kw">import</span> register_tool
+
+<span class="tok-meta">@register_tool</span>(
+    <span class="tok-attr">name</span>=<span class="tok-str">"lookup_widget"</span>,
+    <span class="tok-attr">description</span>=<span class="tok-str">"Look up widget details by SKU or name"</span>,
+)
+<span class="tok-kw">async def</span> <span class="tok-fn">lookup_widget</span>(query: <span class="tok-type">str</span>) -> <span class="tok-type">dict</span>:
+    <span class="tok-cmt"># Your business logic here</span>
+    <span class="tok-kw">return</span> {<span class="tok-str">"sku"</span>: <span class="tok-str">"W-123"</span>, <span class="tok-str">"name"</span>: <span class="tok-str">"Premium Widget"</span>}</code></pre>
+
+      <div class="callout tip">
+        <p><strong>Rules:</strong> Always use <code>@register_tool</code>. Make tools <code>async</code>. Never define tools inline in agents. The tool is immediately available to any agent that lists it.</p>
+      </div>
+
+      <hr>
+
+      <h2 id="create-scenario">Create a Scenario</h2>
+      <p>Scenarios define how agents connect. Same agents, different wiring.</p>
+
+      <div class="code-label">scenariostore/my_scenario/orchestration.yaml</div>
+<pre><code><span class="tok-attr">name</span>: my_scenario
+<span class="tok-attr">description</span>: Widget support flow
+<span class="tok-attr">start_agent</span>: Concierge
+<span class="tok-attr">agents</span>:
+  - Concierge
+  - MyAgent
+  - AuthAgent
+<span class="tok-attr">handoffs</span>:
+  - <span class="tok-attr">from</span>: Concierge
+    <span class="tok-attr">to</span>: AuthAgent
+    <span class="tok-attr">tool</span>: handoff_auth_agent
+    <span class="tok-attr">type</span>: announced
+  - <span class="tok-attr">from</span>: AuthAgent
+    <span class="tok-attr">to</span>: MyAgent
+    <span class="tok-attr">tool</span>: handoff_my_agent
+    <span class="tok-attr">type</span>: discrete
+<span class="tok-attr">agent_defaults</span>:
+  <span class="tok-attr">company_name</span>: <span class="tok-str">"Contoso Widgets"</span></code></pre>
+
+      <p>Handoff types:</p>
+      <table>
+        <thead><tr><th>Type</th><th>Behavior</th></tr></thead>
+        <tbody>
+          <tr><td><code>announced</code></td><td>Agent tells the caller they're being transferred</td></tr>
+          <tr><td><code>discrete</code></td><td>Silent handoff — caller doesn't know</td></tr>
+        </tbody>
+      </table>
+
+      <hr>
+
+      <!-- ==================== Operations ==================== -->
+
+      <h2 id="production">Production Deployment</h2>
+
+      <h3>Checklist</h3>
+      <table>
+        <thead><tr><th>Category</th><th>Item</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Identity</strong></td><td>Use managed identity (not connection strings) for all Azure services</td></tr>
+          <tr><td><strong>Networking</strong></td><td>VNet integration, private endpoints for Redis/Cosmos/Speech</td></tr>
+          <tr><td><strong>Scaling</strong></td><td>Container Apps min replicas ≥ 2, scale on concurrent connections</td></tr>
+          <tr><td><strong>Monitoring</strong></td><td>Application Insights connected, alerts on latency &amp; error rate</td></tr>
+          <tr><td><strong>Secrets</strong></td><td>Key Vault for any non-managed-identity credentials</td></tr>
+          <tr><td><strong>Availability</strong></td><td>Multi-region ACS, geo-redundant Cosmos, Redis HA</td></tr>
+        </tbody>
+      </table>
+
+      <hr>
+
+      <h2 id="monitoring">Monitoring</h2>
+      <p>The system emits OpenTelemetry traces through Application Insights.</p>
+
+      <h3>Key metrics to watch</h3>
+      <table>
+        <thead><tr><th>Metric</th><th>What it means</th><th>Alert threshold</th></tr></thead>
+        <tbody>
+          <tr><td>End-to-end turn latency</td><td>User speech end → response start</td><td>&gt; 2 seconds</td></tr>
+          <tr><td>STT recognition time</td><td>Audio → transcript</td><td>&gt; 500ms p95</td></tr>
+          <tr><td>TTS first byte</td><td>Text → first audio chunk</td><td>&gt; 300ms p95</td></tr>
+          <tr><td>Active connections</td><td>Concurrent WebSocket sessions</td><td>&gt; 80% of limit</td></tr>
+          <tr><td>Tool execution time</td><td>Function call duration</td><td>&gt; 5 seconds</td></tr>
+        </tbody>
+      </table>
+
+      <hr>
+
+      <h2 id="testing">Testing</h2>
+
+      <h3>Run tests</h3>
+<pre><code><span class="tok-cmt"># Unit tests</span>
+make test
+
+<span class="tok-cmt"># With coverage</span>
+make test_coverage
+
+<span class="tok-cmt"># Load testing</span>
+make load_test</code></pre>
+
+      <h3>Test structure</h3>
+      <table>
+        <thead><tr><th>Type</th><th>Location</th><th>What it covers</th></tr></thead>
+        <tbody>
+          <tr><td>Unit</td><td><code>tests/unit/</code></td><td>Individual functions, agents, tools</td></tr>
+          <tr><td>Integration</td><td><code>tests/integration/</code></td><td>API endpoints, WebSocket flows</td></tr>
+          <tr><td>Evaluation</td><td><code>tests/evaluation/</code></td><td>LLM response quality, scenario correctness</td></tr>
+          <tr><td>Load</td><td><code>tests/load/</code></td><td>Concurrent calls, latency under stress</td></tr>
+        </tbody>
+      </table>
+
+      <hr>
+
+      <h2 id="troubleshooting">Troubleshooting</h2>
+
+      <table>
+        <thead><tr><th>Problem</th><th>Likely cause</th><th>Fix</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>No audio response</td>
+            <td>TTS client pool exhausted</td>
+            <td>Check <code>/api/v1/pools</code> for available clients. Increase pool size.</td>
+          </tr>
+          <tr>
+            <td>Agent not responding</td>
+            <td>Azure OpenAI rate limit</td>
+            <td>Check Application Insights for 429 errors. Increase TPM quota.</td>
+          </tr>
+          <tr>
+            <td>Call drops immediately</td>
+            <td>ACS callback URL unreachable</td>
+            <td>Verify <code>BASE_URL</code> in <code>.env</code> matches your current <code>devtunnel host</code> URL and the tunnel is still running.</td>
+          </tr>
+          <tr>
+            <td>Handoff loops</td>
+            <td>Circular handoff routes in scenario</td>
+            <td>Check <code>orchestration.yaml</code> for cycles. Each agent should have a clear return path.</td>
+          </tr>
+          <tr>
+            <td>High latency (&gt; 2s)</td>
+            <td>Cold client connections</td>
+            <td>Ensure pools are warm. Check <code>/api/v1/ready</code> for warmup status.</td>
+          </tr>
+          <tr>
+            <td>Session state lost</td>
+            <td>Redis connectivity</td>
+            <td>Check Redis connection. Verify <code>REDIS_*</code> environment variables.</td>
+          </tr>
+        </tbody>
+      </table>
+
+    </div>
+  </main>
+</div>
+
+<script src="js/main.js?v=2"></script>
+<script src="js/search.js?v=2"></script>
+</body>
+</html>

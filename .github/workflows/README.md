@@ -7,7 +7,7 @@ This directory contains GitHub Actions workflows for automated deployment of you
 | Workflow | File | Description |
 |----------|------|-------------|
 | **Deploy to Azure** | [`deploy-azd-complete.yml`](./deploy-azd-complete.yml) | Main deployment workflow - use this one |
-| **Deploy Documentation** | [`docs.yml`](./docs.yml) | Builds and deploys docs to GitHub Pages |
+| **Deploy Documentation** | [`docs.yml`](./docs.yml) | Deploys static HTML docs to GitHub Pages |
 | **Test AZD Hooks** | [`test-azd-hooks.yml`](./test-azd-hooks.yml) | Tests preprovision/postprovision hooks across platforms |
 | **_template-deploy-azd** | [`_template-deploy-azd.yml`](./_template-deploy-azd.yml) | ⚠️ Internal template - do not run directly |
 
