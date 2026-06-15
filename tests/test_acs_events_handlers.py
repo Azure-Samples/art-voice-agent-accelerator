@@ -5,11 +5,13 @@ Test ACS Events Handler Functionality
 Focused tests for the refactored ACS events handling.
 """
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from apps.artagent.backend.api.v1.events.handlers import CallEventHandlers
+from apps.artagent.backend.api.v1.events.processor import CallEventProcessor
 from apps.artagent.backend.api.v1.events.types import (
     ACSEventTypes,
     CallEventContext,
@@ -225,6 +227,61 @@ class TestCallEventHandlers:
 
         mock_event.assert_awaited()
         assert mock_event.await_args.kwargs["event_type"] == "call_transfer_failed"
+
+    @patch(
+        "apps.artagent.backend.api.v1.events.acs_events.broadcast_session_envelope",
+        new_callable=AsyncMock,
+    )
+    async def test_call_disconnected_signals_and_closes_media_connection(
+        self, mock_broadcast, mock_context
+    ):
+        mock_context.event_type = ACSEventTypes.CALL_DISCONNECTED
+        mock_context.event.data = {
+            "callConnectionId": "test_123",
+            "callConnectionState": "disconnected",
+            "callConnectionProperties": {"endTime": "2026-06-04T12:00:00Z"},
+        }
+
+        disconnect_event = asyncio.Event()
+        conn_manager = SimpleNamespace(
+            get_call_context=AsyncMock(return_value={"browser_session_id": "browser-session"}),
+            get_connection_ids_by_call_id=AsyncMock(return_value=["media-conn"]),
+            unregister=AsyncMock(),
+        )
+        mock_context.app_state = SimpleNamespace(
+            redis=mock_context.redis_mgr,
+            conn_manager=conn_manager,
+            acs_disconnect_events={"test_123": disconnect_event},
+        )
+
+        await CallEventHandlers.handle_call_disconnected(mock_context)
+
+        assert disconnect_event.is_set()
+        conn_manager.get_connection_ids_by_call_id.assert_awaited_once_with(
+            "test_123",
+            client_type="media",
+        )
+        conn_manager.unregister.assert_awaited_once_with("media-conn")
+        assert mock_broadcast.await_count == 2
+        assert mock_broadcast.await_args_list[0].kwargs["session_id"] == "browser-session"
+
+
+class TestCallEventProcessor:
+    """Test callback correlation behavior."""
+
+    def test_extracts_nested_call_connection_id(self):
+        processor = CallEventProcessor()
+        event = CloudEvent(
+            source="test",
+            type=ACSEventTypes.CALL_DISCONNECTED,
+            data={
+                "callConnectionProperties": {
+                    "callConnectionId": "nested_call_123",
+                }
+            },
+        )
+
+        assert processor._extract_call_connection_id(event) == "nested_call_123"
 
 
 class TestEventProcessingFlow:

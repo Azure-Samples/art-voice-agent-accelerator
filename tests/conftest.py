@@ -49,6 +49,7 @@ if "config" not in sys.modules:
     config_mock.ENABLE_ACS_CALL_RECORDING = False
     # ACS settings
     config_mock.ACS_CALL_CALLBACK_PATH = "/api/v1/calls/callback"
+    config_mock.ACS_AUTH_MODE = "auto"
     config_mock.ACS_CONNECTION_STRING = "test-connection-string"
     config_mock.ACS_ENDPOINT = "https://test.communication.azure.com"
     config_mock.ACS_SOURCE_PHONE_NUMBER = "+15551234567"
