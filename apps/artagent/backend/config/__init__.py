@@ -64,6 +64,7 @@ from .constants import (  # API Paths; Voice; Messages; Audio; Languages
 )
 from .settings import (  # Azure Communication Services; Security; Azure Identity; Azure OpenAI; Azure Speech; Azure Storage & Cosmos; Azure AI Foundry; Voice & TTS (per-agent voice is defined in agent.yaml); Feature Flags; Documentation; Monitoring; Connection Management; Pool Settings; Session Management; Speech Recognition; Warm Pool Settings; Validation
     ACS_AUDIENCE,
+    ACS_AUTH_MODE,
     ACS_CONNECTION_STRING,
     AZURE_AI_FOUNDRY_PROJECT_ENDPOINT,
     ACS_ENDPOINT,

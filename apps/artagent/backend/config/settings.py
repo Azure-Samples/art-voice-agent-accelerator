@@ -174,6 +174,7 @@ AZURE_VOICE_LIVE_MODEL: str = os.getenv("AZURE_VOICELIVE_MODEL", "") or os.geten
 
 ACS_ENDPOINT: str = os.getenv("ACS_ENDPOINT", "")
 ACS_CONNECTION_STRING: str = os.getenv("ACS_CONNECTION_STRING", "")
+ACS_AUTH_MODE: str = os.getenv("ACS_AUTH_MODE", "auto").strip().lower()
 ACS_SOURCE_PHONE_NUMBER: str = os.getenv("ACS_SOURCE_PHONE_NUMBER", "")
 BASE_URL: str = os.getenv("BASE_URL", "")
 
@@ -462,6 +463,20 @@ def validate_settings() -> dict:
     # Voice settings - DEFAULT_TTS_VOICE is the primary fallback
     if not DEFAULT_TTS_VOICE:
         issues.append("DEFAULT_TTS_VOICE is empty")
+
+    if ACS_AUTH_MODE not in {
+        "auto",
+        "connection_string",
+        "connection-string",
+        "key",
+        "access_key",
+        "entra",
+        "entra_id",
+        "aad",
+        "managed_identity",
+        "default_credential",
+    }:
+        issues.append("ACS_AUTH_MODE must be auto, connection_string, or entra")
 
     # Count settings
     import sys

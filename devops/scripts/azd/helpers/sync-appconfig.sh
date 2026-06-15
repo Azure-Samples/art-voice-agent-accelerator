@@ -181,6 +181,7 @@ set_kv "azure/speech/resource-id" "$(get_azd_value AZURE_SPEECH_RESOURCE_ID)" &&
 
 # Azure Communication Services
 set_kv "azure/acs/endpoint" "$(get_azd_value ACS_ENDPOINT)" && ((++count)) || errors+=("azure/acs/endpoint")
+set_kv "azure/acs/auth-mode" "${ACS_AUTH_MODE:-entra}" && ((++count)) || errors+=("azure/acs/auth-mode")
 set_kv "azure/acs/immutable-id" "$(get_azd_value ACS_IMMUTABLE_ID)" && ((++count)) || errors+=("azure/acs/immutable-id")
 # NOTE: ACS now authenticates Call Automation via the backend user-assigned managed
 # identity (Microsoft Entra ID), not the access-key connection string. The app uses

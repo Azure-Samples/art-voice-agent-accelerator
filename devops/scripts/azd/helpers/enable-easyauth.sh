@@ -366,19 +366,43 @@ configure_container_app_secret() {
     header "🔒 Step 3: Container App Secret"
 
     local secret_name="override-use-mi-fic-assertion-client-id"
-    
+
     log "Setting secret '$secret_name' with UAMI client ID..."
     log "UAMI Client ID: $UAMI_CLIENT_ID"
-    
-    # Azure Container Apps require secrets for the clientSecretSettingName
-    # When using FIC, we store the UAMI's client ID as the "secret"
-    az containerapp secret set \
+
+    # The UAMI client ID is the value stored in the magic secret. If it's empty
+    # the authConfig in Step 4 would reference a secret that resolves to nothing,
+    # which surfaces as an empty "Client secret setting name" in the portal and
+    # breaks the login flow. Fail loudly instead.
+    if [[ -z "$UAMI_CLIENT_ID" ]]; then
+        fail "UAMI client ID is empty; cannot create '$secret_name' secret. Aborting before auth config is written."
+    fi
+
+    # Azure Container Apps require a secret for the clientSecretSettingName.
+    # When using FIC, we store the UAMI's client ID as the "secret".
+    # Do NOT swallow errors here: if the secret fails to land, Step 4 would
+    # write an authConfig pointing at a non-existent secret.
+    if ! az containerapp secret set \
         --resource-group "$RESOURCE_GROUP" \
         --name "$CONTAINER_APP" \
         --secrets "${secret_name}=${UAMI_CLIENT_ID}" \
-        --output none 2>/dev/null || true
+        --output none; then
+        fail "Failed to set container app secret '$secret_name'. Aborting before auth config is written."
+    fi
 
-    success "Secret configured"
+    # Verify the secret is actually present before proceeding to Step 4.
+    local present
+    present=$(az containerapp secret list \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "$CONTAINER_APP" \
+        --query "[?name=='${secret_name}'].name" \
+        -o tsv 2>/dev/null || echo "")
+
+    if [[ -z "$present" ]]; then
+        fail "Secret '$secret_name' was not found after creation. Aborting before auth config is written."
+    fi
+
+    success "Secret configured and verified"
     footer
 }
 

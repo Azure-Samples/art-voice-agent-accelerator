@@ -131,6 +131,7 @@ APPCONFIG_KEY_MAP: dict[str, str] = {
     "azure/speech/resource-id": "AZURE_SPEECH_RESOURCE_ID",
     # Azure Communication Services
     "azure/acs/endpoint": "ACS_ENDPOINT",
+    "azure/acs/auth-mode": "ACS_AUTH_MODE",
     "azure/acs/immutable-id": "ACS_IMMUTABLE_ID",
     "azure/acs/source-phone-number": "ACS_SOURCE_PHONE_NUMBER",
     "azure/acs/connection-string": "ACS_CONNECTION_STRING",
