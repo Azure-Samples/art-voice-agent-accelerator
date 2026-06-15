@@ -66,14 +66,6 @@ DISCONNECT_ERROR = "error"
 SUPPORTED_FORMAT = "PCMU"
 SUPPORTED_RATE = 8000
 
-# Connection-probe sentinel. When an AudioConnector integration is activated or
-# saved, Genesys runs a connectivity probe: it opens a synthetic AudioHook session
-# with ``conversationId`` and ``participant.id`` set to the null UUID. The server
-# must complete the open/opened and close/closed transactions for the probe to
-# pass, but should NOT allocate downstream session resources (VoiceLive, etc.).
-# https://developer.genesys.cloud/devapps/audiohook/patterns-and-practices#connection-probe
-NULL_UUID = "00000000-0000-0000-0000-000000000000"
-
 
 class GenesysProtocol:
     """Manages AudioHook v2 protocol state and message construction.
@@ -180,17 +172,6 @@ class GenesysProtocol:
         logger.warning("[GenesysProtocol] No supported media format found in open message")
         return None
 
-    def is_connection_probe(self, msg: dict[str, Any]) -> bool:
-        """Return True if an 'open' message is a Genesys connection probe.
-
-        Genesys validates an AudioConnector integration on activate/save by opening
-        a synthetic session whose ``conversationId`` is the null UUID. The server
-        should short-circuit the open transaction (respond ``opened`` then handle the
-        ``close``) without allocating VoiceLive/orchestrator resources for the probe.
-        """
-        params = msg.get("parameters", {})
-        return params.get("conversationId") == NULL_UUID
-
     # ─────────────────────────────────────────────────────────────────────────
     # Outbound message construction
     # ─────────────────────────────────────────────────────────────────────────
@@ -207,20 +188,9 @@ class GenesysProtocol:
             "parameters": parameters,
         }
 
-    def create_opened(
-        self, media: dict[str, Any], *, start_paused: bool = False
-    ) -> dict[str, Any]:
-        """Create 'opened' response confirming media selection.
-
-        Includes ``startPaused`` to match the AudioHook v2 'opened' schema example.
-        The field is *optional* per the schema, so its absence is not by itself a
-        protocol error (verified empirically: a deployment omitting it still passes
-        the Genesys connection probe). Emitting it explicitly is simply the
-        conformant shape every Genesys 'opened' example uses.
-        """
-        return self._create_server_message(
-            SERVER_MSG_OPENED, {"startPaused": start_paused, "media": [media]}
-        )
+    def create_opened(self, media: dict[str, Any]) -> dict[str, Any]:
+        """Create 'opened' response confirming media selection."""
+        return self._create_server_message(SERVER_MSG_OPENED, {"media": [media]})
 
     def create_pong(self) -> dict[str, Any]:
         """Create 'pong' keep-alive response."""

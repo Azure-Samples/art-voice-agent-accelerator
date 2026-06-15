@@ -823,6 +823,8 @@ class VoiceHandler:
         4. Notifies thread bridge
         """
         logger.info("[%s] Barge-in triggered", self._session_short)
+        _barge_in_effect_start = time.perf_counter()
+        _tts_was_playing = self._tts is not None
 
         # Signal TTS cancellation
         if self._context.cancel_event:
@@ -868,14 +870,91 @@ class VoiceHandler:
                 task.cancel()
         self._orchestration_tasks.clear()
 
+        # Report barge-in latency: from detection (first meaningful partial in the
+        # STT thread) to the point TTS/orchestration are actually cancelled. This
+        # is the "how long until barge-in takes effect" KPI.
+        self._report_barge_in_latency(_barge_in_effect_start, _tts_was_playing)
+
         # Reset cancel event for next turn (after longer delay for TTS to see it)
         await asyncio.sleep(0.2)
         if self._context.cancel_event:
             self._context.cancel_event.clear()
 
+    def _report_barge_in_latency(self, effect_done_ts: float, tts_was_playing: bool) -> None:
+        """Log + record barge-in latency (detection -> effect)."""
+        try:
+            from apps.artagent.backend.voice.speech_cascade.metrics import record_barge_in
+
+            now = time.perf_counter()
+            detected_ts = getattr(self._thread_bridge, "last_barge_in_detected_ts", None)
+            # Effect latency: time spent inside the cancel path this turn.
+            effect_ms = (now - effect_done_ts) * 1000
+            # Detection->effect latency when the STT thread stamped a detection time.
+            detect_to_effect_ms = (now - detected_ts) * 1000 if detected_ts else effect_ms
+
+            logger.info(
+                "[%s] Barge-in took effect | latency=%.0fms (cancel_path=%.0fms) tts_was_playing=%s",
+                self._session_short,
+                detect_to_effect_ms,
+                effect_ms,
+                tts_was_playing,
+            )
+
+            record_barge_in(
+                detect_to_effect_ms,
+                session_id=self._session_id or "",
+                call_connection_id=self._context.call_connection_id,
+                trigger="partial",
+                tts_was_playing=tts_was_playing,
+            )
+        except Exception:
+            logger.debug("[%s] Failed to record barge-in latency", self._session_short, exc_info=True)
+
     async def _on_barge_in(self) -> None:
         """Internal callback for barge-in detection."""
         await self.handle_barge_in()
+
+    # =========================================================================
+    # Turn telemetry bridge (orchestrator -> active ConversationTurnSpan)
+    # =========================================================================
+
+    def record_tts_first_audio(self) -> None:
+        """Record first-audio-out on the active turn span (called on first TTS chunk).
+
+        Lets the orchestration layer mark TTS time-to-first-byte against the
+        headline ``voice.turn.N.total`` span owned by the route-turn thread.
+        """
+        if self._route_turn_thread:
+            self._route_turn_thread.record_tts_first_audio()
+
+    def add_turn_metadata(self, key: str, value: Any) -> None:
+        """Attach a KPI value (e.g. response_e2e_ms) to the active turn span."""
+        if self._route_turn_thread:
+            self._route_turn_thread.add_turn_metadata(key, value)
+
+    def record_turn_kpis(
+        self,
+        *,
+        llm_ttft_ms: float | None = None,
+        tts_ttfb_ms: float | None = None,
+        turn_wall_ms: float | None = None,
+        agent_name: str | None = None,
+    ) -> None:
+        """Stamp consolidated turn KPIs onto the headline voice.turn.N.total span."""
+        if self._route_turn_thread:
+            self._route_turn_thread.record_turn_kpis(
+                llm_ttft_ms=llm_ttft_ms,
+                tts_ttfb_ms=tts_ttfb_ms,
+                turn_wall_ms=turn_wall_ms,
+                agent_name=agent_name,
+            )
+
+    @property
+    def turn_number(self) -> int | None:
+        """Current turn number from the route-turn thread (for KPI correlation)."""
+        if self._route_turn_thread:
+            return self._route_turn_thread.turn_number
+        return None
 
     # =========================================================================
     # Callbacks (from threads → main loop)

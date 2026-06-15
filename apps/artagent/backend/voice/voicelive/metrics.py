@@ -96,8 +96,8 @@ def record_llm_ttft(
     )
 
     _llm_ttft_histogram.record(ttft_ms, attributes=attributes)
-    logger.info(
-        "📊 LLM TTFT metric recorded: %.2fms | session=%s turn=%d agent=%s",
+    logger.debug(
+        "voicelive.llm.ttft recorded: %.2fms | session=%s turn=%d agent=%s",
         ttft_ms,
         session_id,
         turn_number,
@@ -143,8 +143,8 @@ def record_tts_ttfb(
     attributes["latency.reference"] = reference
 
     _tts_ttfb_histogram.record(ttfb_ms, attributes=attributes)
-    logger.info(
-        "📊 TTS TTFB metric recorded: %.2fms | session=%s turn=%d ref=%s agent=%s",
+    logger.debug(
+        "voicelive.tts.ttfb recorded: %.2fms | session=%s turn=%d ref=%s agent=%s",
         ttfb_ms,
         session_id,
         turn_number,
@@ -185,8 +185,8 @@ def record_stt_latency(
     )
 
     _stt_latency_histogram.record(latency_ms, attributes=attributes)
-    logger.info(
-        "📊 STT latency metric recorded: %.2fms | session=%s turn=%d",
+    logger.debug(
+        "voicelive.stt.latency recorded: %.2fms | session=%s turn=%d",
         latency_ms,
         session_id,
         turn_number,
@@ -247,9 +247,10 @@ def record_turn_complete(
     # Increment turn counter
     _turn_counter.add(1, attributes=base_attributes)
 
-    # Log summary
-    logger.info(
-        "📊 Turn complete metric: duration=%.2fms stt=%s llm=%s tts=%s | session=%s turn=%d",
+    # Component breakdown is logged once by the handler's turn summary; keep the
+    # metric-layer log at DEBUG to avoid duplicate INFO rows per turn.
+    logger.debug(
+        "voicelive.turn.duration recorded: %.2fms stt=%s llm=%s tts=%s | session=%s turn=%d",
         duration_ms,
         f"{stt_latency_ms:.2f}ms" if stt_latency_ms else "N/A",
         f"{llm_ttft_ms:.2f}ms" if llm_ttft_ms else "N/A",

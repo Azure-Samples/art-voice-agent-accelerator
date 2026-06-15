@@ -443,6 +443,12 @@ async def route_turn(
     ) as span:
         redis_mgr = app_state.redis
 
+        # Turn-level KPI tracking (parity with VoiceLive annotations):
+        #   turn_start_ts  -> orchestration entry (final transcript ready)
+        #   tts_ttfb_holder -> perf_counter of first audio chunk dispatched
+        turn_start_ts = time.perf_counter()
+        tts_ttfb_holder: list[float] = []
+
         try:
             # Build session context from MemoManager for prompt rendering
             active_agent = cm.get_value_from_corememory("active_agent") or adapter.current_agent
@@ -547,6 +553,18 @@ async def route_turn(
                 """Queue TTS and broadcast structured assistant streaming envelopes."""
                 if not text or not text.strip():
                     return
+
+                # First audio chunk for this turn → mark TTS time-to-first-byte.
+                # Bridges to the headline voice.turn.N.total span so the turn's
+                # end-to-end latency (STT complete → first audio) is recorded.
+                if not tts_ttfb_holder:
+                    tts_ttfb_holder.append(time.perf_counter())
+                    speech_cascade = getattr(ws.state, "speech_cascade", None)
+                    if speech_cascade is not None:
+                        try:
+                            speech_cascade.record_tts_first_audio()
+                        except Exception:
+                            logger.debug("Failed to record tts_first_audio on turn span", exc_info=True)
 
                 normalized = text.strip()
                 stream_cache = _ensure_stream_cache(ws)
@@ -670,6 +688,19 @@ async def route_turn(
             span.set_attribute("orchestrator.response_length", len(result.response_text or ""))
             span.set_attribute("orchestrator.agent", result.agent_name or "unknown")
 
+            # ─── Turn KPI summary (parity with VoiceLive turn-complete annotation) ───
+            _emit_turn_kpis(
+                span=span,
+                result=result,
+                adapter=adapter,
+                ws=ws,
+                cm=cm,
+                session_id=session_id,
+                call_connection_id=call_connection_id,
+                turn_start_ts=turn_start_ts,
+                tts_ttfb_holder=tts_ttfb_holder,
+            )
+
             if result.error:
                 span.set_attribute("orchestrator.error", result.error)
                 logger.warning(
@@ -769,6 +800,109 @@ async def route_turn(
                     session_id,
                     persist_exc,
                 )
+
+
+def _emit_turn_kpis(
+    *,
+    span,
+    result,
+    adapter,
+    ws,
+    cm: MemoManager,
+    session_id: str,
+    call_connection_id: str | None,
+    turn_start_ts: float,
+    tts_ttfb_holder: list[float],
+) -> None:
+    """Emit consolidated turn KPIs (TTFT / TTFB / wall time) for the cascade turn.
+
+    Mirrors the VoiceLive turn-complete annotation so both orchestration modes
+    surface the same key metrics in logs and App Insights:
+      - llm_ttft_ms     : LLM request → first streamed token
+      - tts_ttfb_ms     : turn start → first audio chunk out (response E2E)
+      - turn.wall_ms    : full orchestration wall time
+
+    KPIs are stamped on the ``unified_orchestrator.route_turn`` span as queryable
+    dimensions and mirrored onto the headline ``voice.turn.N.total`` span.
+    """
+    turn_wall_ms = (time.perf_counter() - turn_start_ts) * 1000
+    llm_ttft_ms = getattr(result, "ttft_ms", None)
+    tts_ttfb_ms = (tts_ttfb_holder[0] - turn_start_ts) * 1000 if tts_ttfb_holder else None
+    final_agent = result.agent_name or adapter.current_agent or "unknown"
+
+    speech_cascade = getattr(ws.state, "speech_cascade", None)
+    turn_no = getattr(speech_cascade, "turn_number", None) if speech_cascade else None
+
+    # Stamp queryable per-turn dimensions on the route_turn span.
+    span.set_attribute("turn.wall_ms", round(turn_wall_ms, 1))
+    if llm_ttft_ms is not None:
+        span.set_attribute("turn.llm_ttft_ms", round(llm_ttft_ms, 1))
+    if tts_ttfb_ms is not None:
+        span.set_attribute("turn.tts_ttfb_ms", round(tts_ttfb_ms, 1))
+        span.set_attribute("turn.response_e2e_ms", round(tts_ttfb_ms, 1))
+
+    # Stamp the consolidated KPI summary onto the headline voice.turn.N.total span
+    # so the end-to-end picture and core latency drivers live on the turn itself
+    # (parity with the VoiceLive turn-complete annotation).
+    if speech_cascade is not None:
+        try:
+            speech_cascade.record_turn_kpis(
+                llm_ttft_ms=llm_ttft_ms,
+                tts_ttfb_ms=tts_ttfb_ms,
+                turn_wall_ms=turn_wall_ms,
+                agent_name=final_agent,
+            )
+        except Exception:
+            logger.debug("Failed to stamp turn KPIs on headline span", exc_info=True)
+
+    # Emit OTel metrics for the App Insights Performance view.
+    try:
+        from apps.artagent.backend.voice.speech_cascade.metrics import (
+            record_llm_ttft,
+            record_tts_ttfb,
+            record_turn_processing,
+        )
+
+        if llm_ttft_ms is not None:
+            record_llm_ttft(
+                llm_ttft_ms,
+                session_id=session_id,
+                call_connection_id=call_connection_id,
+                turn_number=turn_no,
+                agent_name=final_agent,
+                memo_manager=cm,
+            )
+        if tts_ttfb_ms is not None:
+            record_tts_ttfb(
+                tts_ttfb_ms,
+                session_id=session_id,
+                call_connection_id=call_connection_id,
+                turn_number=turn_no,
+                agent_name=final_agent,
+                memo_manager=cm,
+            )
+        record_turn_processing(
+            turn_wall_ms,
+            session_id=session_id,
+            call_connection_id=call_connection_id,
+            turn_number=turn_no,
+            has_tool_calls=bool(result.tool_calls),
+            memo_manager=cm,
+        )
+    except Exception:
+        logger.debug("Failed to record turn KPI metrics", exc_info=True)
+
+    # Single consolidated KPI log line (mirrors the VoiceLive turn-complete log).
+    logger.info(
+        "[Cascade] Turn %s complete | response_e2e=%s (llm_ttft=%s -> first_audio) "
+        "| turn_wall=%.0fms | session=%s agent=%s",
+        turn_no if turn_no is not None else "?",
+        f"{tts_ttfb_ms:.0f}ms" if tts_ttfb_ms is not None else "N/A",
+        f"{llm_ttft_ms:.0f}ms" if llm_ttft_ms is not None else "N/A",
+        turn_wall_ms,
+        session_id,
+        final_agent,
+    )
 
 
 def _get_conversation_history(cm: MemoManager) -> list[dict]:

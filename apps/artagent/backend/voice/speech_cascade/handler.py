@@ -86,6 +86,9 @@ class SpeechEvent:
     speaker_id: str | None = None
     confidence: float | None = None
     timestamp: float | None = field(default_factory=time.time)
+    # Wall-clock time (time.time) of the first partial for this utterance, i.e.
+    # when the user started speaking. Used to draw a real STT recognition span.
+    recognition_start_ts: float | None = None
     # Voice configuration for TTS events
     voice_name: str | None = None
     voice_style: str | None = None
@@ -139,6 +142,9 @@ class ThreadBridge:
         self._suppress_barge_in = threading.Event()
         # Lock for atomic queue eviction operations
         self._queue_lock = threading.Lock()
+        # perf_counter timestamp of the most recent barge-in detection, used to
+        # measure how long barge-in takes to take effect (detection -> TTS stop).
+        self.last_barge_in_detected_ts: float | None = None
 
     def set_main_loop(self, loop: asyncio.AbstractEventLoop, connection_id: str = None) -> None:
         """
@@ -194,6 +200,9 @@ class ThreadBridge:
                 f"[{self.connection_id}] Barge-in skipped (suppressed during handoff/greeting)"
             )
             return
+
+        # Stamp detection time so the handler can report barge-in effect latency.
+        self.last_barge_in_detected_ts = time.perf_counter()
 
         if not self.main_loop or self.main_loop.is_closed():
             logger.warning(f"[{self.connection_id}] No main loop for barge-in scheduling")
@@ -354,6 +363,9 @@ class SpeechSDKThread:
         self.recognizer_started = False
         self.stop_event = threading.Event()
         self._stopped = False
+        # Wall-clock time of the first partial of the current utterance (user
+        # started speaking). Reset after each final. Drives the STT span.
+        self._utterance_start_ts: float | None = None
 
         self._setup_callbacks()
         self._pre_initialize_recognizer()
@@ -385,6 +397,10 @@ class SpeechSDKThread:
             logger.info(
                 f"[{self._conn_short}] Partial speech: '{text}' ({lang}) len={len(text.strip())}"
             )
+            # Stamp the start of this utterance (user started speaking) on the
+            # first partial so we can draw an accurate STT recognition span.
+            if self._utterance_start_ts is None:
+                self._utterance_start_ts = time.time()
             if len(text.strip()) > 3:
                 try:
                     self.thread_bridge.schedule_barge_in(self.barge_in_handler)
@@ -409,8 +425,11 @@ class SpeechSDKThread:
                     text=text,
                     language=lang,
                     speaker_id=speaker_id,
+                    recognition_start_ts=self._utterance_start_ts,
                 )
                 self.thread_bridge.queue_speech_result(self.speech_queue, event)
+            # Reset utterance start for the next utterance.
+            self._utterance_start_ts = None
 
         def on_error(error: str):
             logger.error(f"[{self._conn_short}] Speech error: {error}")
@@ -696,13 +715,17 @@ class RouteTurnThread:
         )
 
         # Create ConversationTurnSpan for end-to-end turn tracking
-        # Manually manage span lifecycle to cover async TTS events
+        # Manually manage span lifecycle to cover async TTS events.
+        # Backdate the span to when the user started speaking (first partial) so
+        # voice.turn.N.total frames the full STT → LLM → TTS pipeline.
+        recognition_start_ts = getattr(event, "recognition_start_ts", None)
         turn = ConversationTurnSpan(
             call_connection_id=self.connection_id,
             session_id=session_id,
             turn_number=self._turn_number,
             transport_type="cascade",
             user_intent_preview=event.text[:50] if event.text else None,
+            start_time_ns=int(recognition_start_ts * 1e9) if recognition_start_ts else None,
         )
         await turn.__aenter__()
         self._active_turn_span = turn
@@ -713,61 +736,76 @@ class RouteTurnThread:
             language=event.language,
         )
 
-        with tracer.start_as_current_span(
-            "route_turn_thread.process_speech",
-            kind=SpanKind.INTERNAL,  # INTERNAL for in-process orchestration (not external call)
-            attributes={
-                "speech.text": event.text,
-                "speech.language": event.language,
-                "turn.number": self._turn_number,
-            },
-        ):
-            try:
-                if not self.memory_manager:
-                    logger.error(f"[{self._conn_short}] No memory manager available")
-                    return
+        # Draw a real STT recognition span (user started speaking → final) so STT
+        # shows as its own timeline line item instead of an unexplained gap.
+        if recognition_start_ts:
+            turn.add_stt_recognition_span(
+                start_ts=recognition_start_ts,
+                end_ts=event.timestamp,
+                text=event.text,
+                language=event.language,
+            )
 
-                # Emit user transcript via callback (for transport coordination)
-                if self.on_user_transcript:
-                    try:
-                        await self.on_user_transcript(event.text)
-                    except Exception as e:
-                        logger.warning(
-                            f"[{self._conn_short}] Failed to invoke on_user_transcript: {e}"
+        # Parent the orchestrator work under the turn span so voice.turn.N.total
+        # visually frames the whole turn (STT → LLM → TTS) instead of floating as
+        # a sibling. trace.use_span activates the turn span as current context
+        # without ending it (it stays open for later TTS events / barge-in).
+        with trace.use_span(turn.span, end_on_exit=False):
+            with tracer.start_as_current_span(
+                "route_turn_thread.process_speech",
+                kind=SpanKind.INTERNAL,  # INTERNAL for in-process orchestration (not external call)
+                attributes={
+                    "speech.text": event.text,
+                    "speech.language": event.language,
+                    "turn.number": self._turn_number,
+                },
+            ):
+                try:
+                    if not self.memory_manager:
+                        logger.error(f"[{self._conn_short}] No memory manager available")
+                        return
+
+                    # Emit user transcript via callback (for transport coordination)
+                    if self.on_user_transcript:
+                        try:
+                            await self.on_user_transcript(event.text)
+                        except Exception as e:
+                            logger.warning(
+                                f"[{self._conn_short}] Failed to invoke on_user_transcript: {e}"
+                            )
+
+                    # Legacy: emit via transcript emitter (deprecated)
+                    if self.transcript_emitter:
+                        try:
+                            await self.transcript_emitter.emit_user_transcript(event.text)
+                        except Exception as e:
+                            logger.warning(f"[{self._conn_short}] Failed to emit user transcript: {e}")
+
+                    # Call orchestrator (LLM processing happens here)
+                    if self.orchestrator_func:
+                        # Record LLM start (approximation - actual first token comes from agent)
+                        turn.record_tts_start()  # TTS will start streaming during orchestrator
+
+                        coro = self.orchestrator_func(
+                            cm=self.memory_manager,
+                            transcript=event.text,
                         )
+                        if coro:
+                            self.current_response_task = asyncio.create_task(coro)
+                            await self.current_response_task
 
-                # Legacy: emit via transcript emitter (deprecated)
-                if self.transcript_emitter:
-                    try:
-                        await self.transcript_emitter.emit_user_transcript(event.text)
-                    except Exception as e:
-                        logger.warning(f"[{self._conn_short}] Failed to emit user transcript: {e}")
-
-                # Call orchestrator (LLM processing happens here)
-                if self.orchestrator_func:
-                    # Record LLM start (approximation - actual first token comes from agent)
-                    turn.record_tts_start()  # TTS will start streaming during orchestrator
-
-                    coro = self.orchestrator_func(
-                        cm=self.memory_manager,
-                        transcript=event.text,
+                except asyncio.CancelledError:
+                    logger.info(
+                        f"[{self._conn_short}] Orchestrator processing cancelled (turn {self._turn_number})"
                     )
-                    if coro:
-                        self.current_response_task = asyncio.create_task(coro)
-                        await self.current_response_task
-
-            except asyncio.CancelledError:
-                logger.info(
-                    f"[{self._conn_short}] Orchestrator processing cancelled (turn {self._turn_number})"
-                )
-                raise
-            except Exception as e:
-                logger.error(f"[{self._conn_short}] Error processing speech with orchestrator: {e}")
-            finally:
-                if self.current_response_task and not self.current_response_task.done():
-                    self.current_response_task.cancel()
-                self.current_response_task = None
-                # Do NOT clear _active_turn_span here - it stays open for TTS events
+                    raise
+                except Exception as e:
+                    logger.error(f"[{self._conn_short}] Error processing speech with orchestrator: {e}")
+                finally:
+                    if self.current_response_task and not self.current_response_task.done():
+                        self.current_response_task.cancel()
+                    self.current_response_task = None
+                    # Do NOT clear _active_turn_span here - it stays open for TTS events
 
     def record_llm_first_token(self) -> None:
         """Record LLM first token timing on the active turn span (call from agent)."""
@@ -799,6 +837,28 @@ class RouteTurnThread:
         """Record TTS completion on the active turn span."""
         if self._active_turn_span:
             self._active_turn_span.record_tts_complete(total_ms=total_ms)
+
+    def add_turn_metadata(self, key: str, value: Any) -> None:
+        """Attach a KPI value to the active turn span (turn.metadata.<key>)."""
+        if self._active_turn_span:
+            self._active_turn_span.add_metadata(key, value)
+
+    def record_turn_kpis(
+        self,
+        *,
+        llm_ttft_ms: float | None = None,
+        tts_ttfb_ms: float | None = None,
+        turn_wall_ms: float | None = None,
+        agent_name: str | None = None,
+    ) -> None:
+        """Stamp consolidated turn KPIs onto the active voice.turn.N.total span."""
+        if self._active_turn_span:
+            self._active_turn_span.record_turn_kpis(
+                llm_ttft_ms=llm_ttft_ms,
+                tts_ttfb_ms=tts_ttfb_ms,
+                turn_wall_ms=turn_wall_ms,
+                agent_name=agent_name,
+            )
 
     @property
     def turn_number(self) -> int:

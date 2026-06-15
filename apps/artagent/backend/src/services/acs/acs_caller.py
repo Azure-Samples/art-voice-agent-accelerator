@@ -11,16 +11,10 @@ from __future__ import annotations
 import os
 
 from apps.artagent.backend.src.services.acs.acs_helpers import construct_websocket_url
-
 from config import (
+    ACS_AUTH_MODE,
     ACS_CALL_CALLBACK_PATH,
-    ACS_CONNECTION_STRING,
-    ACS_ENDPOINT,
-    ACS_SOURCE_PHONE_NUMBER,
     ACS_WEBSOCKET_PATH,
-    AZURE_SPEECH_ENDPOINT,
-    AZURE_STORAGE_CONTAINER_URL,
-    BASE_URL,
 )
 from src.acs.acs_helper import AcsCaller
 from utils.ml_logging import get_logger
@@ -41,6 +35,7 @@ def _get_config_dynamic() -> dict:
     return {
         "ACS_CONNECTION_STRING": os.getenv("ACS_CONNECTION_STRING", ""),
         "ACS_ENDPOINT": os.getenv("ACS_ENDPOINT", ""),
+        "ACS_AUTH_MODE": os.getenv("ACS_AUTH_MODE", ACS_AUTH_MODE),
         "ACS_SOURCE_PHONE_NUMBER": os.getenv("ACS_SOURCE_PHONE_NUMBER", ""),
         "AZURE_SPEECH_ENDPOINT": os.getenv("AZURE_SPEECH_ENDPOINT", ""),
         "AZURE_STORAGE_CONTAINER_URL": os.getenv("AZURE_STORAGE_CONTAINER_URL", ""),
@@ -69,6 +64,7 @@ def initialize_acs_caller_instance() -> AcsCaller | None:
     acs_phone = cfg["ACS_SOURCE_PHONE_NUMBER"]
     acs_conn_string = cfg["ACS_CONNECTION_STRING"]
     acs_endpoint = cfg["ACS_ENDPOINT"]
+    acs_auth_mode = cfg["ACS_AUTH_MODE"]
     base_url = cfg["BASE_URL"]
     speech_endpoint = cfg["AZURE_SPEECH_ENDPOINT"]
     storage_url = cfg["AZURE_STORAGE_CONTAINER_URL"]
@@ -94,6 +90,7 @@ def initialize_acs_caller_instance() -> AcsCaller | None:
             source_number=acs_phone,
             acs_connection_string=acs_conn_string,
             acs_endpoint=acs_endpoint,
+            acs_auth_mode=acs_auth_mode,
             callback_url=callback_url,
             websocket_url=ws_url,
             cognitive_services_endpoint=speech_endpoint,

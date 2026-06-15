@@ -49,6 +49,13 @@ def register_core_state_step(manager: LifecycleManager, app: FastAPI) -> None:
 
         set_redis_manager(app.state.redis)
 
+        # Wire up session agent persistence (survives reloads / multi-worker)
+        from apps.artagent.backend.src.orchestration.session_agents import (
+            set_redis_manager as set_agents_redis_manager,
+        )
+
+        set_agents_redis_manager(app.state.redis)
+
         # Import unified orchestrator to register scenario callbacks
         import apps.artagent.backend.src.orchestration.unified  # noqa: F401
 

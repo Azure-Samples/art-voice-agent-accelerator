@@ -51,6 +51,20 @@ _turn_processing_histogram: LazyHistogram = _meter.histogram(
     unit="ms",
 )
 
+# LLM time-to-first-token (LLM request -> first streamed token)
+_llm_ttft_histogram: LazyHistogram = _meter.histogram(
+    name="speech_cascade.llm.ttft",
+    description="LLM time-to-first-token latency in milliseconds",
+    unit="ms",
+)
+
+# TTS time-to-first-byte (STT final -> first audio chunk dispatched)
+_tts_ttfb_histogram: LazyHistogram = _meter.histogram(
+    name="speech_cascade.tts.ttfb",
+    description="TTS time-to-first-byte latency (turn start -> first audio out) in milliseconds",
+    unit="ms",
+)
+
 # Barge-in detection latency
 _barge_in_histogram: LazyHistogram = _meter.histogram(
     name="speech_cascade.barge_in.latency",
@@ -187,6 +201,97 @@ def record_turn_processing(
         metric_type="turn_duration",  # Map to consistent naming
         value_ms=latency_ms,
         metadata={"has_tool_calls": has_tool_calls},
+        turn_number=turn_number,
+    )
+
+
+def record_llm_ttft(
+    latency_ms: float,
+    *,
+    session_id: str,
+    call_connection_id: str | None = None,
+    turn_number: int | None = None,
+    agent_name: str | None = None,
+    memo_manager=None,
+) -> None:
+    """
+    Record LLM time-to-first-token (TTFT) latency metric.
+
+    Measures the time from the LLM request being issued to the first streamed
+    token arriving. This is the primary "is the model responsive?" KPI and the
+    cascade equivalent of the VoiceLive ``record_llm_ttft`` metric.
+
+    :param latency_ms: TTFT latency in milliseconds
+    :param session_id: Session identifier for correlation
+    :param call_connection_id: Call connection ID
+    :param turn_number: Turn number within the conversation
+    :param agent_name: Active agent that produced the response
+    :param memo_manager: Optional memo manager for core memory updates
+    """
+    attributes = build_session_attributes(
+        session_id,
+        call_connection_id=call_connection_id,
+        turn_number=turn_number,
+        metric_type="llm_ttft",
+    )
+    if agent_name:
+        attributes["agent.name"] = agent_name
+
+    _llm_ttft_histogram.record(latency_ms, attributes=attributes)
+    logger.debug("📊 LLM TTFT metric: %.2fms | session=%s agent=%s", latency_ms, session_id, agent_name)
+
+    schedule_core_memory_update(
+        memo_manager=memo_manager,
+        session_id=session_id,
+        metric_type="llm_ttft",  # Consistent naming with VoiceLive
+        value_ms=latency_ms,
+        metadata={"agent_name": agent_name},
+        turn_number=turn_number,
+    )
+
+
+def record_tts_ttfb(
+    latency_ms: float,
+    *,
+    session_id: str,
+    call_connection_id: str | None = None,
+    turn_number: int | None = None,
+    agent_name: str | None = None,
+    memo_manager=None,
+) -> None:
+    """
+    Record TTS time-to-first-byte (TTFB) latency metric.
+
+    Measures the time from turn start (final transcript ready) to the first
+    audio chunk being dispatched to TTS. This is the cascade equivalent of the
+    VoiceLive ``record_tts_ttfb`` metric and represents the user-perceived
+    "how long until I hear a response" latency.
+
+    :param latency_ms: TTFB latency in milliseconds
+    :param session_id: Session identifier for correlation
+    :param call_connection_id: Call connection ID
+    :param turn_number: Turn number within the conversation
+    :param agent_name: Active agent that produced the response
+    :param memo_manager: Optional memo manager for core memory updates
+    """
+    attributes = build_session_attributes(
+        session_id,
+        call_connection_id=call_connection_id,
+        turn_number=turn_number,
+        metric_type="tts_ttfb",
+    )
+    if agent_name:
+        attributes["agent.name"] = agent_name
+
+    _tts_ttfb_histogram.record(latency_ms, attributes=attributes)
+    logger.debug("📊 TTS TTFB metric: %.2fms | session=%s agent=%s", latency_ms, session_id, agent_name)
+
+    schedule_core_memory_update(
+        memo_manager=memo_manager,
+        session_id=session_id,
+        metric_type="tts_ttfb",  # Consistent naming with VoiceLive
+        value_ms=latency_ms,
+        metadata={"agent_name": agent_name},
         turn_number=turn_number,
     )
 
@@ -338,6 +443,8 @@ def record_tts_streaming(
 __all__ = [
     "record_stt_recognition",
     "record_turn_processing",
+    "record_llm_ttft",
+    "record_tts_ttfb",
     "record_barge_in",
     "record_tts_synthesis",
     "record_tts_streaming",

@@ -36,7 +36,9 @@ from .orchestrator import CascadeOrchestratorAdapter, StateKeys
 # Metrics are lightweight - direct import
 from .metrics import (
     record_barge_in,
+    record_llm_ttft,
     record_stt_recognition,
+    record_tts_ttfb,
     record_turn_processing,
 )
 
@@ -80,5 +82,7 @@ __all__ = [
     # Metrics (direct import)
     "record_stt_recognition",
     "record_turn_processing",
+    "record_llm_ttft",
+    "record_tts_ttfb",
     "record_barge_in",
 ]

@@ -288,7 +288,9 @@ class CascadeOrchestratorAdapter:
             call_connection_id=self.config.call_connection_id,
             session_id=self.config.session_id,
         )
-        
+        # Per-turn LLM time-to-first-token (ms), populated during streaming.
+        self._last_turn_ttft_ms: float | None = None
+
         if not self.agents:
             self._load_agents()
 
@@ -971,6 +973,8 @@ class CascadeOrchestratorAdapter:
         """
         self._cancel_event.clear()
         self._metrics.start_turn()  # Increments turn count and resets TTFT tracking
+        # Reset per-turn LLM time-to-first-token (captured during streaming).
+        self._last_turn_ttft_ms = None
 
         # Support both calling patterns: context OR direct parameters
         if context is None:
@@ -1319,6 +1323,7 @@ class CascadeOrchestratorAdapter:
                         interrupted=self._cancel_event.is_set(),
                         input_tokens=self._metrics.input_tokens,
                         output_tokens=self._metrics.output_tokens,
+                        ttft_ms=self._last_turn_ttft_ms,
                     )
 
                 except asyncio.CancelledError:
@@ -1567,40 +1572,38 @@ class CascadeOrchestratorAdapter:
                 )
 
                 # Use asyncio.Queue for thread-safe async communication
+                # Items are (sanitized_text, raw_display_text) tuples.
                 # Special markers: None = stream end, "__HANDOFF_DETECTED__" = discard prior text
-                tts_queue: asyncio.Queue[str | None] = asyncio.Queue()
+                tts_queue: asyncio.Queue[tuple[str, str] | str | None] = asyncio.Queue()
                 tool_buffers: dict[str, dict[str, Any]] = {}
                 collected_text: list[str] = []
                 stream_error: list[Exception] = []
                 stream_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+                # TTFT capture: request_start set before the API call, first_token
+                # set when the first content/tool delta arrives. Read on the async
+                # side after the stream completes to derive llm.ttft_ms.
+                ttft_tracker: dict[str, float] = {}
                 loop = asyncio.get_running_loop()
                 tool_call_detected = False  # Track if tool calls are streaming
                 handoff_tool_detected = False  # Track if specifically a handoff tool
 
                 # Sentence buffer state for sentence-based TTS streaming
                 sentence_buffer = ""
+                # Parallel raw buffer preserving markdown for the UI envelope
+                raw_sentence_buffer = ""
                 # Primary breaks: sentence endings
                 primary_terms = ".!?"
-                # Secondary breaks: only used for the FIRST chunk so audio
-                # starts ~1 clause earlier. After the first dispatch we revert
-                # to primary-only — each TTS chunk pays a fresh TTFA through
-                # the speech serialization lock, so over-fragmenting later
-                # chunks would add cumulative latency.
-                secondary_terms = ",;:"
-                # Minimum characters before a secondary boundary is eligible.
-                # Avoids dispatching "Sure," (5 chars) alone — wait until the
-                # clause is long enough that the audio is meaningful.
-                FIRST_CHUNK_MIN_CHARS = 25
-                first_chunk_dispatched = False
 
-                def _put_chunk(text: str) -> None:
-                    """Thread-safe put to async queue."""
+                def _put_chunk(sanitized: str, raw: str | None = None) -> None:
+                    """Thread-safe put to async queue as (sanitized, raw) tuple."""
                     # Don't send text to TTS if tool calls are being made
                     # The LLM sometimes outputs explanatory text alongside tool calls
                     if tool_call_detected:
                         return
-                    if text and text.strip():
-                        loop.call_soon_threadsafe(tts_queue.put_nowait, text)
+                    if sanitized and sanitized.strip():
+                        loop.call_soon_threadsafe(
+                            tts_queue.put_nowait, (sanitized, raw or sanitized)
+                        )
                 
                 def _signal_handoff_detected() -> None:
                     """Signal consumer to discard any queued text (for discrete handoffs)."""
@@ -1612,7 +1615,7 @@ class CascadeOrchestratorAdapter:
 
                 def _streaming_completion():
                     """Run in thread - consumes OpenAI stream."""
-                    nonlocal sentence_buffer, tool_call_detected, handoff_tool_detected, first_chunk_dispatched
+                    nonlocal sentence_buffer, raw_sentence_buffer, tool_call_detected, handoff_tool_detected
                     # Attach the parent span context in the thread
                     token = otel_context.attach(current_context)
                     try:
@@ -1654,6 +1657,7 @@ class CascadeOrchestratorAdapter:
                             },
                         ) as openai_span:
                             # Always use chat completions API for streaming
+                            ttft_tracker["request_start"] = time.perf_counter()
                             stream = client.chat.completions.create(**api_params)
 
                             for chunk in stream:
@@ -1679,6 +1683,23 @@ class CascadeOrchestratorAdapter:
                                 delta = getattr(choice, "delta", None)
                                 if not delta:
                                     continue
+
+                                # Stamp time-to-first-token on the first content/tool delta
+                                if "first_token" not in ttft_tracker and (
+                                    getattr(delta, "content", None)
+                                    or getattr(delta, "tool_calls", None)
+                                ):
+                                    ttft_tracker["first_token"] = time.perf_counter()
+                                    if "request_start" in ttft_tracker:
+                                        _ttft_ms = (
+                                            ttft_tracker["first_token"]
+                                            - ttft_tracker["request_start"]
+                                        ) * 1000
+                                        openai_span.set_attribute("llm.ttft_ms", round(_ttft_ms, 1))
+                                        openai_span.add_event(
+                                            "llm.first_token",
+                                            attributes={"llm.ttft_ms": round(_ttft_ms, 1)},
+                                        )
 
                                 # Tool calls - aggregate streamed chunks by index
                                 # Check tool calls FIRST to detect before dispatching text
@@ -1727,31 +1748,29 @@ class CascadeOrchestratorAdapter:
                                     text = delta.content
                                     collected_text.append(text)
                                     sentence_buffer += self._sanitize_tts_text(text)
+                                    raw_sentence_buffer += text
 
                                     # Dispatch only on sentence boundaries.
-                                    # First chunk also accepts a clause boundary
-                                    # (comma/semicolon/colon) once the buffer is
-                                    # long enough — gets audio out ~1 clause earlier.
                                     while True:
                                         term_idx = self._find_tts_boundary(
                                             sentence_buffer, primary_terms, 0
                                         )
-                                        if term_idx < 0 and not first_chunk_dispatched and len(sentence_buffer) >= FIRST_CHUNK_MIN_CHARS:
-                                            term_idx = self._find_tts_boundary(
-                                                sentence_buffer, secondary_terms, FIRST_CHUNK_MIN_CHARS
-                                            )
                                         if term_idx < 0:
                                             break
                                         dispatch, sentence_buffer = self._split_tts_buffer(
                                             sentence_buffer, term_idx + 1
                                         )
-                                        first_chunk_dispatched = True
-                                        _put_chunk(dispatch)
+                                        # Split raw buffer at the same character ratio
+                                        ratio = len(dispatch) / max(len(dispatch) + len(sentence_buffer), 1)
+                                        raw_split = max(1, round(len(raw_sentence_buffer) * ratio))
+                                        raw_dispatch = raw_sentence_buffer[:raw_split]
+                                        raw_sentence_buffer = raw_sentence_buffer[raw_split:]
+                                        _put_chunk(dispatch, raw_dispatch)
 
                             logger.debug("OpenAI stream completed | chunks=%d", chunk_count)
                             # Flush remaining buffer (only if no tool calls)
                             if sentence_buffer.strip():
-                                _put_chunk(sentence_buffer)
+                                _put_chunk(sentence_buffer, raw_sentence_buffer)
                     except Exception as e:
                         logger.error("OpenAI stream error: %s", e)
                         stream_error.append(e)
@@ -1798,14 +1817,20 @@ class CascadeOrchestratorAdapter:
                         logger.debug("Handoff detected - suppressing all TTS output for seamless transfer")
                         continue
                     
+                    # Unpack (sanitized, raw) tuple from queue
+                    if isinstance(chunk, tuple):
+                        tts_text, display_text = chunk
+                    else:
+                        tts_text, display_text = chunk, chunk
+
                     # Skip TTS if handoff is pending (for discrete/seamless handoffs)
                     if suppress_tts_output:
-                        logger.debug("Suppressing TTS chunk due to pending handoff: %s...", chunk[:30] if len(chunk) > 30 else chunk)
+                        logger.debug("Suppressing TTS chunk due to pending handoff: %s...", tts_text[:30] if len(tts_text) > 30 else tts_text)
                         continue
                         
                     if on_tts_chunk:
                         try:
-                            await on_tts_chunk(chunk)
+                            await on_tts_chunk(tts_text, display_text=display_text)
                         except Exception as e:
                             logger.debug("TTS callback error: %s", e)
 
@@ -1876,6 +1901,14 @@ class CascadeOrchestratorAdapter:
                 span.set_attribute("gen_ai.usage.input_tokens", input_tokens)
                 span.set_attribute("gen_ai.usage.output_tokens", output_tokens)
                 span.set_attribute("gen_ai.response.length", len(response_text))
+
+                # Surface LLM time-to-first-token (request -> first streamed token).
+                # Keep the first iteration's value for the turn-level KPI summary.
+                if "request_start" in ttft_tracker and "first_token" in ttft_tracker:
+                    ttft_ms = (ttft_tracker["first_token"] - ttft_tracker["request_start"]) * 1000
+                    span.set_attribute("llm.ttft_ms", round(ttft_ms, 1))
+                    if self._last_turn_ttft_ms is None:
+                        self._last_turn_ttft_ms = ttft_ms
 
                 if tool_calls:
                     span.set_attribute("tool_call_detected", True)
@@ -2002,6 +2035,34 @@ class CascadeOrchestratorAdapter:
                                             # Update any slots returned by the tool
                                             if isinstance(result, dict) and "slots" in result:
                                                 cm.update_slots(result["slots"])
+                                            # Persist authenticated identity to corememory so handoff targets
+                                            # can inject _client_id and render session_profile in their prompts
+                                            if isinstance(result, dict) and result.get("authenticated") and result.get("client_id"):
+                                                cm.set_corememory("client_id", result["client_id"])
+                                                if result.get("caller_name"):
+                                                    cm.set_corememory("caller_name", result["caller_name"])
+                                                logger.info(
+                                                    "🔐 Persisted authenticated identity | client_id=%s",
+                                                    result["client_id"][:8] + "..."
+                                                    if len(result["client_id"]) > 8
+                                                    else result["client_id"],
+                                                )
+                                            # Persist loaded profile to corememory for cross-agent availability
+                                            if isinstance(result, dict) and result.get("success") and result.get("profile") and isinstance(result["profile"], dict):
+                                                profile = result["profile"]
+                                                cm.set_corememory("session_profile", profile)
+                                                if profile.get("client_id"):
+                                                    cm.set_corememory("client_id", profile["client_id"])
+                                                if profile.get("full_name"):
+                                                    cm.set_corememory("caller_name", profile["full_name"])
+                                                if profile.get("customer_intelligence"):
+                                                    cm.set_corememory("customer_intelligence", profile["customer_intelligence"])
+                                                if profile.get("institution_name"):
+                                                    cm.set_corememory("institution_name", profile["institution_name"])
+                                                logger.info(
+                                                    "📋 Persisted user profile to corememory | client=%s",
+                                                    profile.get("client_id", "?")[:8],
+                                                )
                                         except Exception as persist_err:
                                             logger.debug(
                                                 "Failed to persist tool output: %s", persist_err
@@ -2097,14 +2158,17 @@ class CascadeOrchestratorAdapter:
         Emit TTS chunks based on sentence boundaries.
 
         Splits by sentence boundaries and flushes any remaining text at end.
+        Passes the original (unsanitized) text as *display_text* so
+        the UI can render markdown while TTS receives plain text.
         """
         try:
             sanitized = self._sanitize_tts_text(text).strip()
             if not sanitized:
                 return
 
-            segments: list[str] = []
+            segments: list[tuple[str, str]] = []  # (sanitized, raw_display)
             buffer = sanitized
+            raw_buffer = text
             primary_terms = ".!?"
             while True:
                 term_idx = self._find_tts_boundary(buffer, primary_terms, 0)
@@ -2112,13 +2176,17 @@ class CascadeOrchestratorAdapter:
                     break
                 segment, buffer = self._split_tts_buffer(buffer, term_idx + 1)
                 if segment.strip():
-                    segments.append(segment)
+                    ratio = len(segment) / max(len(segment) + len(buffer), 1)
+                    raw_split = max(1, round(len(raw_buffer) * ratio))
+                    raw_segment = raw_buffer[:raw_split]
+                    raw_buffer = raw_buffer[raw_split:]
+                    segments.append((segment, raw_segment))
 
             if buffer.strip():
-                segments.append(buffer)
+                segments.append((buffer, raw_buffer))
 
-            for segment in segments:
-                result = on_tts_chunk(segment)
+            for segment, raw_segment in segments:
+                result = on_tts_chunk(segment, display_text=raw_segment)
                 if inspect.isawaitable(result):
                     await result
         except Exception as exc:  # pragma: no cover - defensive

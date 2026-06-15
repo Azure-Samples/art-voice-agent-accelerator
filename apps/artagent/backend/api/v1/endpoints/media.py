@@ -81,6 +81,17 @@ async def _resolve_session_id(
                 except Exception:
                     pass
 
+        conn_manager = getattr(app_state, "conn_manager", None)
+        if conn_manager and hasattr(conn_manager, "get_call_context"):
+            try:
+                context = await conn_manager.get_call_context(call_connection_id)
+                if context:
+                    session_id = context.get("browser_session_id") or context.get("session_id")
+                    if session_id:
+                        return session_id
+            except Exception:
+                pass
+
     return f"media_{call_connection_id}" if call_connection_id else f"media_{uuid.uuid4().hex[:8]}"
 
 
@@ -145,8 +156,12 @@ async def acs_media_stream(websocket: WebSocket) -> None:
     # Extract call_connection_id from query params or headers early
     query_params = dict(websocket.query_params)
     headers_dict = dict(websocket.headers)
-    call_connection_id = query_params.get("call_connection_id") or headers_dict.get(
-        "x-ms-call-connection-id"
+    call_connection_id = (
+        query_params.get("call_connection_id")
+        or query_params.get("callConnectionId")
+        or query_params.get("callConnectionID")
+        or headers_dict.get("x-ms-call-connection-id")
+        or headers_dict.get("x-ms-callconnectionid")
     )
 
     # Resolve session ID early for context

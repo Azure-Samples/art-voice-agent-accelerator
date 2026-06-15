@@ -767,6 +767,9 @@ class VoiceLiveSDKHandler:
         self._connection = None
         self._connection_cm = None
         self._orchestrator: LiveOrchestrator | None = None
+        # Generative model actually bound to the VoiceLive connection (resolved from the
+        # start agent's voicelive_model at connect time; falls back to the global setting).
+        self._active_model_name: str | None = None
         self._event_task: asyncio.Task | None = None
         self._running = False
         self._shutdown = asyncio.Event()
@@ -922,8 +925,13 @@ class VoiceLiveSDKHandler:
                 # These are independent and can run concurrently to cut startup time.
                 # ─────────────────────────────────────────────────────────────
 
-                async def _connect_voicelive():
-                    """Establish VoiceLive WebSocket connection."""
+                async def _connect_voicelive(connection_model: str):
+                    """Establish VoiceLive WebSocket connection.
+
+                    NOTE: The VoiceLive SDK fixes the generative model at connect() time;
+                    it cannot be changed later via session.update(). The model must therefore
+                    be resolved from the start agent BEFORE connecting (see resolution below).
+                    """
                     t0 = time.perf_counter()
                     with tracer.start_as_current_span(
                         "voicelive.connect",
@@ -934,11 +942,11 @@ class VoiceLiveSDKHandler:
                         self._connection_cm = connect(
                             endpoint=self._settings.azure_voicelive_endpoint,
                             credential=self._credential,
-                            model=self._settings.azure_voicelive_model,
+                            model=connection_model,
                             connection_options=connection_options,
                         )
                         self._connection = await self._connection_cm.__aenter__()
-                        conn_span.set_attribute("voicelive.model", self._settings.azure_voicelive_model)
+                        conn_span.set_attribute("voicelive.model", connection_model)
                     elapsed = (time.perf_counter() - t0) * 1000
                     logger.info(
                         "[VoiceLive Startup] connect_ms=%.1f | session=%s",
@@ -1052,12 +1060,51 @@ class VoiceLiveSDKHandler:
                     )
                     return agents, orchestrator_config, session_agent, effective_start_agent, user_profile, agent_source, app_state
 
-                # Run WebSocket connect and agent resolution in parallel
-                _connect_task = asyncio.create_task(_connect_voicelive())
-                _resolve_task = asyncio.create_task(_resolve_agents_and_scenario())
-                await asyncio.gather(_connect_task, _resolve_task)
+                # Resolve agents/scenario FIRST so we know which generative model the
+                # start agent requires. The VoiceLive SDK binds the model at connect()
+                # time and it cannot be changed afterwards, so per-agent voicelive_model
+                # overrides must be applied here — before the WebSocket is established.
+                (
+                    agents,
+                    orchestrator_config,
+                    session_agent,
+                    effective_start_agent,
+                    user_profile,
+                    agent_source,
+                    app_state,
+                ) = await _resolve_agents_and_scenario()
 
-                agents, orchestrator_config, session_agent, effective_start_agent, user_profile, agent_source, app_state = _resolve_task.result()
+                # Derive the connection model from the start agent's voicelive_model,
+                # falling back to the global setting when the agent has no override.
+                connection_model = self._settings.azure_voicelive_model
+                start_agent_obj = agents.get(effective_start_agent) if agents else None
+                if start_agent_obj is not None:
+                    try:
+                        vl_model = start_agent_obj.get_model_for_mode("voicelive")
+                        if vl_model and getattr(vl_model, "deployment_id", None):
+                            connection_model = vl_model.deployment_id
+                    except Exception as model_err:  # pragma: no cover - defensive
+                        logger.warning(
+                            "[VoiceLive Startup] Failed to resolve per-agent model for %s, "
+                            "falling back to settings model %s | err=%s",
+                            effective_start_agent,
+                            self._settings.azure_voicelive_model,
+                            model_err,
+                        )
+                self._active_model_name = connection_model
+                if connection_model != self._settings.azure_voicelive_model:
+                    logger.info(
+                        "[VoiceLive Startup] Using per-agent model override | agent=%s model=%s "
+                        "(settings default=%s) session=%s",
+                        effective_start_agent,
+                        connection_model,
+                        self._settings.azure_voicelive_model,
+                        self.session_id,
+                    )
+
+                # Establish the WebSocket connection with the resolved model.
+                await _connect_voicelive(connection_model)
+
 
                 # Set span attributes from resolved values
                 span.set_attribute("voicelive.agent_source", agent_source)
@@ -1097,7 +1144,7 @@ class VoiceLiveSDKHandler:
                     messenger=self._messenger,
                     call_connection_id=self.call_connection_id,
                     transport=self._transport,
-                    model_name=self._settings.azure_voicelive_model,
+                    model_name=connection_model,
                     memo_manager=memo_manager,
                 )
                 span.set_attribute("voicelive.start_agent", effective_start_agent)
@@ -1497,7 +1544,7 @@ class VoiceLiveSDKHandler:
                     agent_name=self._messenger._active_agent_name or "unknown",
                 )
 
-                logger.info(
+                logger.debug(
                     "[VoiceLive] TTS TTFB | session=%s turn=%d ttfb_ms=%.2f ref=%s",
                     self.session_id,
                     self._turn_number,
@@ -1773,6 +1820,22 @@ class VoiceLiveSDKHandler:
         message = getattr(error_obj, "message", "Unknown VoiceLive error")
         details = getattr(error_obj, "details", None)
 
+        # Benign cancel-race errors: a barge-in / response.cancel arrives just
+        # after the response already finished, so VoiceLive reports there is no
+        # active response to cancel. This is NOT a real failure — do not stop
+        # audio or surface an error to the UI, or the next turn gets cut off.
+        BENIGN_ERROR_CODES = {
+            "response_cancel_not_active",
+            "response_cancel_no_active_response",
+        }
+        if code in BENIGN_ERROR_CODES:
+            logger.info(
+                "[VoiceLiveSDK] Ignoring benign cancel-race error | session=%s code=%s",
+                self.session_id,
+                code,
+            )
+            return
+
         logger.error(
             "[VoiceLiveSDK] Server error received | session=%s call=%s code=%s message=%s",
             self.session_id,
@@ -1906,41 +1969,20 @@ class VoiceLiveSDKHandler:
         type_value = getattr(event, "type", "unknown")
         type_str = type_value.value if isinstance(type_value, ServerEventType) else str(type_value)
 
-        # Skip creating spans for high-frequency noisy events
-        # These would create thousands of spans per conversation and make traces unusable
+        # Skip creating telemetry for high-frequency noisy events.
         if type_str in self._NOISY_EVENT_TYPES:
             return
 
+        # Lifecycle events are already recorded as span events on the event-loop
+        # span via loop_span.add_event("voicelive.event_received", ...). We do NOT
+        # create a standalone 0-duration span per event here: that previously
+        # flooded the dependencies table with ~80 empty "voicelive.event.<type>"
+        # spans per call and made the end-to-end transaction view unusable.
         logger.debug(
             "[VoiceLiveSDK] Event received | session=%s type=%s",
             self.session_id,
             type_str,
         )
-
-        attributes = {
-            "voicelive.event.type": type_str,
-            "voicelive.session_id": self.session_id,
-            "call.connection.id": self.call_connection_id,
-        }
-        if hasattr(event, "transcript") and event.transcript:
-            transcript = event.transcript
-            attributes["voicelive.transcript.length"] = len(transcript)
-        if hasattr(event, "delta") and event.delta:
-            delta = event.delta
-            attributes["voicelive.delta.size"] = (
-                len(delta) if isinstance(delta, (bytes, str)) else 0
-            )
-
-        # Create span with descriptive name: voicelive.event.<event_type>
-        # e.g., voicelive.event.session.created, voicelive.event.response.done
-        span_name = f"voicelive.event.{type_str}" if type_str != "unknown" else "voicelive.event"
-
-        with tracer.start_as_current_span(
-            span_name,
-            kind=SpanKind.INTERNAL,
-            attributes=attributes,
-        ):
-            pass
 
     async def _commit_input_buffer(self) -> None:
         if not self._connection:
@@ -2168,7 +2210,10 @@ class VoiceLiveSDKHandler:
         """Record LLM first token timing (TTFT) for the current turn."""
         if self._turn_start_time and self._llm_first_token_time is None:
             self._llm_first_token_time = time.perf_counter()
-            ttft_ms = (self._llm_first_token_time - self._turn_start_time) * 1000
+            # Measure from VAD end (user finished speaking) so TTFT is directly
+            # comparable to STT/TTS latencies (all referenced to vad_end).
+            start_ref = self._vad_end_time or self._turn_start_time
+            ttft_ms = (self._llm_first_token_time - start_ref) * 1000
 
             # Record OTel metric for App Insights Performance view
             record_llm_ttft(
@@ -2181,11 +2226,12 @@ class VoiceLiveSDKHandler:
             if self._active_turn_span:
                 self._active_turn_span.record_llm_first_token()
 
-            logger.info(
-                "[VoiceLive] LLM TTFT | session=%s turn=%d ttft_ms=%.2f",
+            logger.debug(
+                "[VoiceLive] LLM TTFT | session=%s turn=%d ttft_ms=%.2f ref=%s",
                 self.session_id,
                 self._turn_number,
                 ttft_ms,
+                "vad_end" if self._vad_end_time else "turn_start",
             )
 
     async def _finalize_turn_metrics(self) -> None:
@@ -2207,11 +2253,10 @@ class VoiceLiveSDKHandler:
         if self._transcript_final_time and self._vad_end_time:
             stt_latency_ms = (self._transcript_final_time - self._vad_end_time) * 1000
 
-        if self._llm_first_token_time and self._transcript_final_time:
-            # Processing time: Transcript Final -> LLM First Token
-            llm_ttft_ms = (self._llm_first_token_time - self._transcript_final_time) * 1000
-        elif self._llm_first_token_time and latency_base:
-            # Fallback: VAD End -> LLM First Token
+        if self._llm_first_token_time and latency_base:
+            # E2E processing time: VAD End (user finished) -> LLM First Token,
+            # using the same vad_end reference as STT/TTS so the summary numbers
+            # are apples-to-apples and the histograms line up.
             llm_ttft_ms = (self._llm_first_token_time - latency_base) * 1000
 
         if self._tts_first_audio_time and latency_base:
@@ -2241,14 +2286,24 @@ class VoiceLiveSDKHandler:
             self._active_turn_span.add_metadata(
                 "latency.reference", "vad_end" if self._vad_end_time else "turn_start"
             )
+            if tts_ttfb_ms is not None:
+                # Headline number: VAD end -> first audio byte. Queryable as
+                # customDimensions["turn.metadata.response_e2e_ms"] without
+                # relying on the (wall-clock) span duration.
+                self._active_turn_span.add_metadata(
+                    "response_e2e_ms", round(tts_ttfb_ms, 1)
+                )
 
         logger.info(
-            "[VoiceLive] Turn %d metrics | E2E: %s | STT: %s | LLM: %s | Duration: %.2f",
+            "[VoiceLive] Turn %d complete | response_e2e=%s (stt=%s + llm_ttft=%s -> first_audio) "
+            "| turn_wall=%.0fms | session=%s agent=%s",
             self._turn_number,
             f"{tts_ttfb_ms:.0f}ms" if tts_ttfb_ms else "N/A",
             f"{stt_latency_ms:.0f}ms" if stt_latency_ms else "N/A",
             f"{llm_ttft_ms:.0f}ms" if llm_ttft_ms else "N/A",
             total_turn_duration_ms,
+            self.session_id,
+            self._messenger._active_agent_name or "unknown",
         )
 
         # Send turn metrics to frontend via WebSocket

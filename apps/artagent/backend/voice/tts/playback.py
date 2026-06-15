@@ -23,6 +23,7 @@ import asyncio
 import base64
 import contextlib
 import os
+import time
 import uuid
 from collections.abc import Callable
 from functools import partial
@@ -30,6 +31,8 @@ from typing import TYPE_CHECKING, Any
 
 from fastapi import WebSocket
 from fastapi.websockets import WebSocketState
+from opentelemetry import trace
+from opentelemetry.trace import SpanKind
 from utils.ml_logging import get_logger
 from utils.telemetry_decorators import add_speech_tts_metrics, trace_speech
 
@@ -55,6 +58,7 @@ _STREAMING_ENABLED = os.getenv("CASCADE_TTS_STREAMING", "true").strip().lower() 
 )
 
 logger = get_logger("voice.tts.playback")
+tracer = trace.get_tracer(__name__)
 
 
 def _ws_is_connected(ws: WebSocket) -> bool:
@@ -287,23 +291,57 @@ class TTSPlayback:
         """
         transport = self._context.transport
 
-        if transport.value == "browser":
-            return await self.play_to_browser(
-                text,
-                voice_name=voice_name,
-                voice_style=voice_style,
-                voice_rate=voice_rate,
-                on_first_audio=on_first_audio,
+        # Dedicated TTS span so synthesis/playback shows as its own line item on
+        # the turn timeline (otherwise this awaited work is an unexplained gap
+        # inside the LLM/orchestrator span). Tagged with first-audio + total.
+        with tracer.start_as_current_span(
+            "tts.speak",
+            kind=SpanKind.INTERNAL,
+            attributes={
+                "tts.transport": transport.value,
+                "tts.text_length": len(text or ""),
+                "tts.is_greeting": is_greeting,
+                "tts.voice_name": voice_name or "",
+            },
+        ) as tts_span:
+            tts_start = time.perf_counter()
+            first_audio_marked = False
+
+            def _on_first_audio_wrapper() -> None:
+                nonlocal first_audio_marked
+                if not first_audio_marked:
+                    first_audio_marked = True
+                    ttfa_ms = (time.perf_counter() - tts_start) * 1000
+                    tts_span.set_attribute("tts.ttfa_ms", round(ttfa_ms, 1))
+                    tts_span.add_event(
+                        "tts.first_audio", attributes={"tts.ttfa_ms": round(ttfa_ms, 1)}
+                    )
+                if on_first_audio:
+                    on_first_audio()
+
+            if transport.value == "browser":
+                result = await self.play_to_browser(
+                    text,
+                    voice_name=voice_name,
+                    voice_style=voice_style,
+                    voice_rate=voice_rate,
+                    on_first_audio=_on_first_audio_wrapper,
+                )
+            else:
+                # ACS and VoiceLive both use ACS format
+                result = await self.play_to_acs(
+                    text,
+                    voice_name=voice_name,
+                    voice_style=voice_style,
+                    voice_rate=voice_rate,
+                    on_first_audio=_on_first_audio_wrapper,
+                )
+
+            tts_span.set_attribute(
+                "tts.total_ms", round((time.perf_counter() - tts_start) * 1000, 1)
             )
-        else:
-            # ACS and VoiceLive both use ACS format
-            return await self.play_to_acs(
-                text,
-                voice_name=voice_name,
-                voice_style=voice_style,
-                voice_rate=voice_rate,
-                on_first_audio=on_first_audio,
-            )
+            tts_span.set_attribute("tts.completed", bool(result))
+            return result
 
     async def play_to_browser(
         self,

@@ -439,116 +439,141 @@ const CASCADE_MODEL_OPTIONS = [
 ];
 
 // Models for VoiceLive mode (realtime API)
+// `arch` marks how audio is handled INSIDE VoiceLive — the #1 confusion point:
+//   • 'native'   → speech-to-speech (audio → model → audio). Transcription is advisory.
+//   • 'cascaded' → Azure STT → text LLM → Azure TTS. Transcription IS the model input.
 const VOICELIVE_MODEL_OPTIONS = [
   {
     id: 'gpt-realtime',
     name: 'gpt-realtime',
-    description: 'GPT real-time with Azure TTS voices',
+    description: 'Native speech-to-speech (audio in/out). Transcript is advisory.',
     tier: 'recommended',
     speed: 'fastest',
+    arch: 'native',
     capabilities: ['Realtime Audio', 'Function Calling'],
     contextWindow: '128K tokens',
   },
   {
     id: 'gpt-realtime-mini',
     name: 'gpt-realtime-mini',
-    description: 'Mini real-time with Azure TTS voices',
+    description: 'Native speech-to-speech (audio in/out). Transcript is advisory.',
     tier: 'standard',
     speed: 'fastest',
+    arch: 'native',
     capabilities: ['Realtime Audio'],
     contextWindow: '128K tokens',
   },
   {
     id: 'gpt-4o',
     name: 'gpt-4o',
-    description: 'GPT-4o with Azure Speech I/O',
+    description: 'Cascaded: Azure STT → LLM → TTS. Transcript drives the model.',
     tier: 'standard',
     speed: 'fast',
-    capabilities: ['Realtime Audio'],
+    arch: 'cascaded',
+    capabilities: ['Cascaded STT→LLM→TTS'],
     contextWindow: '128K tokens',
   },
   {
     id: 'gpt-4o-mini',
     name: 'gpt-4o-mini',
-    description: 'GPT-4o Mini with Azure Speech I/O',
+    description: 'Cascaded: Azure STT → LLM → TTS. Transcript drives the model.',
     tier: 'standard',
     speed: 'fastest',
-    capabilities: ['Realtime Audio'],
+    arch: 'cascaded',
+    capabilities: ['Cascaded STT→LLM→TTS'],
     contextWindow: '128K tokens',
   },
   {
     id: 'gpt-4.1',
     name: 'gpt-4.1',
-    description: 'GPT-4.1 with Azure Speech I/O',
+    description: 'Cascaded: Azure STT → LLM → TTS. Transcript drives the model.',
     tier: 'standard',
     speed: 'fast',
-    capabilities: ['Realtime Audio'],
+    arch: 'cascaded',
+    capabilities: ['Cascaded STT→LLM→TTS'],
     contextWindow: '128K tokens',
   },
   {
     id: 'gpt-4.1-mini',
     name: 'gpt-4.1-mini',
-    description: 'GPT-4.1 Mini with Azure Speech I/O',
+    description: 'Cascaded: Azure STT → LLM → TTS. Transcript drives the model.',
     tier: 'standard',
     speed: 'fastest',
-    capabilities: ['Realtime Audio'],
+    arch: 'cascaded',
+    capabilities: ['Cascaded STT→LLM→TTS'],
     contextWindow: '128K tokens',
   },
   {
     id: 'gpt-5',
     name: 'gpt-5',
-    description: 'GPT-5 with Azure Speech I/O',
+    description: 'Cascaded: Azure STT → LLM → TTS. Transcript drives the model.',
     tier: 'recommended',
     speed: 'medium',
-    capabilities: ['Realtime Audio'],
+    arch: 'cascaded',
+    capabilities: ['Cascaded STT→LLM→TTS'],
     contextWindow: '128K tokens',
   },
   {
     id: 'gpt-5-mini',
     name: 'gpt-5-mini',
-    description: 'GPT-5 Mini with Azure Speech I/O',
+    description: 'Cascaded: Azure STT → LLM → TTS. Transcript drives the model.',
     tier: 'standard',
     speed: 'fast',
-    capabilities: ['Realtime Audio'],
+    arch: 'cascaded',
+    capabilities: ['Cascaded STT→LLM→TTS'],
     contextWindow: '128K tokens',
   },
   {
     id: 'gpt-5-nano',
     name: 'gpt-5-nano',
-    description: 'GPT-5 Nano with Azure Speech I/O',
+    description: 'Cascaded: Azure STT → LLM → TTS. Transcript drives the model.',
     tier: 'standard',
     speed: 'fastest',
-    capabilities: ['Realtime Audio'],
+    arch: 'cascaded',
+    capabilities: ['Cascaded STT→LLM→TTS'],
     contextWindow: '128K tokens',
   },
   {
     id: 'gpt-5-chat',
     name: 'gpt-5-chat',
-    description: 'GPT-5 chat variant with Azure Speech I/O',
+    description: 'Cascaded: Azure STT → LLM → TTS. Transcript drives the model.',
     tier: 'standard',
     speed: 'fast',
-    capabilities: ['Realtime Audio'],
+    arch: 'cascaded',
+    capabilities: ['Cascaded STT→LLM→TTS'],
     contextWindow: '128K tokens',
   },
   {
     id: 'phi4-mm-realtime',
     name: 'phi4-mm-realtime',
-    description: 'Phi4 multimodal realtime',
+    description: 'Native realtime audio in, Azure TTS out. Transcript is advisory.',
     tier: 'standard',
     speed: 'fast',
+    arch: 'native',
     capabilities: ['Realtime Audio'],
     contextWindow: '64K tokens',
   },
   {
     id: 'phi4-mini',
     name: 'phi4-mini',
-    description: 'Phi4 mini realtime',
+    description: 'Cascaded: Azure STT → LLM → TTS. Transcript drives the model.',
     tier: 'standard',
     speed: 'fastest',
-    capabilities: ['Realtime Audio'],
+    arch: 'cascaded',
+    capabilities: ['Cascaded STT→LLM→TTS'],
     contextWindow: '64K tokens',
   },
 ];
+
+// Classify a VoiceLive model by its audio architecture (handles custom names too).
+const classifyVoiceLiveArch = (deploymentId) => {
+  const preset = VOICELIVE_MODEL_OPTIONS.find((m) => m.id === (deploymentId || '').trim());
+  if (preset?.arch) return preset.arch;
+  const name = (deploymentId || '').toLowerCase();
+  if (!name) return 'native';
+  return name.includes('realtime') ? 'native' : 'cascaded';
+};
+
 
 // Legacy: combined options for backward compatibility
 const MODEL_OPTIONS = CASCADE_MODEL_OPTIONS;
@@ -898,6 +923,23 @@ function ModelSelector({
                         color={getTierColor(model.tier)}
                         sx={{ height: 20, fontSize: '11px' }}
                       />
+                      {model.arch && (
+                        <Tooltip
+                          title={
+                            model.arch === 'native'
+                              ? 'Native speech-to-speech: audio goes straight into the model. Input transcription is an advisory side-channel and may not match what the model heard.'
+                              : 'Cascaded pipeline: Azure STT → text LLM → Azure TTS. The transcription you configure IS the exact text the model reasons over.'
+                          }
+                        >
+                          <Chip
+                            label={model.arch === 'native' ? '🔊 Speech-to-Speech' : '🔤 STT→LLM→TTS'}
+                            size="small"
+                            color={model.arch === 'native' ? 'secondary' : 'info'}
+                            variant="outlined"
+                            sx={{ height: 20, fontSize: '10px' }}
+                          />
+                        </Tooltip>
+                      )}
                     </Stack>
                     <Typography variant="caption" color="text.secondary">
                       {model.description}
@@ -1043,6 +1085,8 @@ export default function AgentBuilder({
 }) {
   // Tab state
   const [activeTab, setActiveTab] = useState(0);
+  // Inner sub-tab for the Model & Audio panel: 'cascade' | 'voicelive'
+  const [audioSubTab, setAudioSubTab] = useState('cascade');
   const [effectiveSessionId, setEffectiveSessionId] = useState(sessionId);
   const [editingSessionId, setEditingSessionId] = useState(false);
   const [pendingSessionId, setPendingSessionId] = useState(sessionId || '');
@@ -1931,9 +1975,7 @@ export default function AgentBuilder({
         <Tab icon={<SmartToyIcon />} label="Identity" iconPosition="start" />
         <Tab icon={<CodeIcon />} label="Prompt" iconPosition="start" />
         <Tab icon={<BuildIcon />} label="Tools" iconPosition="start" />
-        <Tab icon={<RecordVoiceOverIcon />} label="Voice" iconPosition="start" />
-        <Tab icon={<HearingIcon />} label="Speech" iconPosition="start" />
-        <Tab icon={<TuneIcon />} label="Model" iconPosition="start" />
+        <Tab icon={<TuneIcon />} label="Model & Audio" iconPosition="start" />
       </Tabs>
 
       <DialogContent sx={{ padding: 0 }}>
@@ -2685,12 +2727,101 @@ export default function AgentBuilder({
             {/* ═══════════════════════════════════════════════════════════════════ */}
             {/* TAB 3: VOICE */}
             {/* ═══════════════════════════════════════════════════════════════════ */}
+            {/* TAB 3: MODEL & AUDIO — consolidated Voice + Speech (STT/VAD) + Model */}
             <TabPanel value={activeTab} index={3}>
               <Stack spacing={3}>
+                <Alert severity="info" icon={<WarningAmberIcon />} sx={{ borderRadius: '12px' }}>
+                  <AlertTitle sx={{ fontWeight: 600 }}>Azure OpenAI Deployment Required</AlertTitle>
+                  <Typography variant="body2">
+                    Model deployment names must match deployments in your Foundry/Azure OpenAI resource.
+                    Different models are used depending on the orchestration mode.
+                  </Typography>
+                </Alert>
+
+                {/* Prominent orchestration-mode selector (top of section) */}
+                <Box>
+                  <Typography variant="overline" sx={{ fontWeight: 700, color: 'text.secondary', letterSpacing: 1 }}>
+                    Orchestration Mode
+                  </Typography>
+                  <ToggleButtonGroup
+                    value={audioSubTab}
+                    exclusive
+                    onChange={(_e, v) => v && setAudioSubTab(v)}
+                    fullWidth
+                    sx={{
+                      mt: 0.5,
+                      gap: 1.5,
+                      '& .MuiToggleButtonGroup-grouped': {
+                        border: '2px solid',
+                        borderColor: 'divider',
+                        borderRadius: '12px !important',
+                        textTransform: 'none',
+                        px: 2,
+                        py: 1.5,
+                        alignItems: 'flex-start',
+                      },
+                    }}
+                  >
+                    <ToggleButton
+                      value="cascade"
+                      sx={{
+                        '&.Mui-selected': {
+                          borderColor: 'primary.main',
+                          backgroundColor: 'primary.50',
+                          boxShadow: '0 0 0 1px var(--mui-palette-primary-main, #1976d2) inset',
+                          '&:hover': { backgroundColor: 'primary.100' },
+                        },
+                      }}
+                    >
+                      <Stack direction="row" spacing={1.5} alignItems="center" sx={{ width: '100%' }}>
+                        <MemoryIcon color={audioSubTab === 'cascade' ? 'primary' : 'disabled'} />
+                        <Box sx={{ textAlign: 'left', flex: 1 }}>
+                          <Stack direction="row" alignItems="center" spacing={1}>
+                            <Typography variant="subtitle2" fontWeight={700} color={audioSubTab === 'cascade' ? 'primary.main' : 'text.primary'}>
+                              Custom Speech Cascade
+                            </Typography>
+                            {audioSubTab === 'cascade' && <CheckIcon fontSize="small" color="primary" />}
+                          </Stack>
+                          <Typography variant="caption" color="text.secondary">
+                            STT → LLM → TTS · full per-component control
+                          </Typography>
+                        </Box>
+                      </Stack>
+                    </ToggleButton>
+                    <ToggleButton
+                      value="voicelive"
+                      sx={{
+                        '&.Mui-selected': {
+                          borderColor: 'secondary.main',
+                          backgroundColor: 'secondary.50',
+                          boxShadow: '0 0 0 1px var(--mui-palette-secondary-main, #9c27b0) inset',
+                          '&:hover': { backgroundColor: 'secondary.100' },
+                        },
+                      }}
+                    >
+                      <Stack direction="row" spacing={1.5} alignItems="center" sx={{ width: '100%' }}>
+                        <HearingIcon color={audioSubTab === 'voicelive' ? 'secondary' : 'disabled'} />
+                        <Box sx={{ textAlign: 'left', flex: 1 }}>
+                          <Stack direction="row" alignItems="center" spacing={1}>
+                            <Typography variant="subtitle2" fontWeight={700} color={audioSubTab === 'voicelive' ? 'secondary.main' : 'text.primary'}>
+                              VoiceLive
+                            </Typography>
+                            {audioSubTab === 'voicelive' && <CheckIcon fontSize="small" color="secondary" />}
+                          </Stack>
+                          <Typography variant="caption" color="text.secondary">
+                            Realtime managed audio · lowest latency
+                          </Typography>
+                        </Box>
+                      </Stack>
+                    </ToggleButton>
+                  </ToggleButtonGroup>
+                </Box>
+
+                {/* Shared Voice (TTS) — applies to BOTH Cascade and VoiceLive */}
                 <Card variant="outlined" sx={styles.sectionCard}>
                   <CardContent>
                     <Typography variant="subtitle2" color="primary" sx={{ mb: 2, fontWeight: 600 }}>
-                      🎙️ Voice Selection
+                      🎙️ Voice (TTS) — shared by Cascade & VoiceLive
                     </Typography>
                     <Autocomplete
                       value={availableVoices.find(v => v.name === config.voice.name) || null}
@@ -2795,14 +2926,10 @@ export default function AgentBuilder({
                     </Stack>
                   </CardContent>
                 </Card>
-              </Stack>
-            </TabPanel>
 
-            {/* ═══════════════════════════════════════════════════════════════════ */}
-            {/* TAB 4: SPEECH RECOGNITION (STT / VAD) */}
-            {/* ═══════════════════════════════════════════════════════════════════ */}
-            <TabPanel value={activeTab} index={4}>
-              <Stack spacing={3}>
+                {audioSubTab === 'cascade' && (
+                <Stack spacing={3}>
+                {/* Cascade · Speech Recognition (STT / VAD) — Cascade mode only */}
                 <Card variant="outlined" sx={styles.sectionCard}>
                   <CardContent>
                     <Typography variant="subtitle2" color="primary" sx={{ mb: 2, fontWeight: 600 }}>
@@ -2964,21 +3091,6 @@ export default function AgentBuilder({
                     </Stack>
                   </CardContent>
                 </Card>
-              </Stack>
-            </TabPanel>
-
-            {/* ═══════════════════════════════════════════════════════════════════ */}
-            {/* TAB 5: MODEL */}
-            {/* ═══════════════════════════════════════════════════════════════════ */}
-            <TabPanel value={activeTab} index={5}>
-              <Stack spacing={3}>
-                <Alert severity="info" icon={<WarningAmberIcon />} sx={{ borderRadius: '12px' }}>
-                  <AlertTitle sx={{ fontWeight: 600 }}>Azure OpenAI Deployment Required</AlertTitle>
-                  <Typography variant="body2">
-                    Model deployment names must match deployments in your Foundry/Azure OpenAI resource.
-                    Different models are used depending on the orchestration mode.
-                  </Typography>
-                </Alert>
 
                 {/* Cascade Mode Model */}
                 <Card variant="outlined" sx={styles.sectionCard}>
@@ -3012,8 +3124,11 @@ export default function AgentBuilder({
                     )}
                   </CardContent>
                 </Card>
+                </Stack>
+                )}
 
                 {/* VoiceLive Mode Model */}
+                {audioSubTab === 'voicelive' && (
                 <Card variant="outlined" sx={styles.sectionCard}>
                   <CardContent>
                     <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
@@ -3022,9 +3137,33 @@ export default function AgentBuilder({
                         ⚡ Realtime Audio API
                       </Typography>
                     </Stack>
-                    <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                      Uses Realtime API for ultra-low latency. Audio streams directly to/from the model.
-                    </Typography>
+                    {(() => {
+                      const arch = classifyVoiceLiveArch(config.voicelive_model?.deployment_id || 'gpt-realtime');
+                      if (arch === 'cascaded') {
+                        return (
+                          <Alert severity="info" icon={<RecordVoiceOverIcon />} sx={{ mb: 2, borderRadius: '12px' }}>
+                            <AlertTitle sx={{ fontWeight: 700 }}>Cascaded pipeline · STT → LLM → TTS</AlertTitle>
+                            <Typography variant="body2">
+                              The managed VoiceLive channel transcribes audio with Azure Speech, sends the{' '}
+                              <strong>text</strong> to this model, then speaks the reply with Azure TTS. The transcription
+                              model is the <strong>authoritative input</strong> the LLM reasons over — giving you granular STT
+                              control and a transcript that faithfully reflects what the model understood.
+                            </Typography>
+                          </Alert>
+                        );
+                      }
+                      return (
+                        <Alert severity="warning" icon={<InfoOutlinedIcon />} sx={{ mb: 2, borderRadius: '12px' }}>
+                          <AlertTitle sx={{ fontWeight: 700 }}>Native speech-to-speech (audio → model → audio)</AlertTitle>
+                          <Typography variant="body2">
+                            Audio streams directly into the model and back out for the lowest latency. Any input
+                            transcription is an <strong>advisory side-channel</strong> for logging/UI only — it does{' '}
+                            <strong>not</strong> drive the model and may not exactly match what the model heard. Choose a{' '}
+                            <strong>gpt-4o / gpt-4.1 / gpt-5</strong> family model below for transcript-driven (cascaded) control.
+                          </Typography>
+                        </Alert>
+                      );
+                    })()}
                     <ModelSelector
                       value={config.voicelive_model?.deployment_id || 'gpt-realtime'}
                       onChange={(v) => handleNestedConfigChange('voicelive_model', 'deployment_id', v)}
@@ -3038,6 +3177,7 @@ export default function AgentBuilder({
                     </Typography>
                   </CardContent>
                 </Card>
+                )}
 
                 <Divider />
 

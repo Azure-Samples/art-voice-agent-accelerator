@@ -360,20 +360,6 @@ class GenesysVoiceLiveHandler:
             )
             return
 
-        # Connection probe: Genesys validates the integration with a synthetic
-        # session (null-UUID conversationId) on activate/save. Complete the
-        # open/opened handshake so the probe passes, but do NOT allocate VoiceLive
-        # or orchestrator resources for it (per AudioHook patterns-and-practices).
-        if self._protocol.is_connection_probe(msg):
-            logger.info(
-                "[Genesys] Connection probe detected — short-circuiting open "
-                "(no VoiceLive allocation) | session=%s",
-                self.session_id,
-            )
-            await self._enqueue_message(self._protocol.create_opened(media))
-            self._session_opened = True
-            return
-
         # Send opened response immediately
         await self._enqueue_message(self._protocol.create_opened(media))
         self._session_opened = True
@@ -448,12 +434,44 @@ class GenesysVoiceLiveHandler:
             "timeout": self._settings.ws_timeout,
         }
 
+        # Resolve agents BEFORE connecting: the VoiceLive SDK binds the generative model
+        # at connect() time and it cannot be changed via session.update() afterwards, so
+        # the start agent's voicelive_model override must be applied up front.
+        agents, orchestrator_config, effective_start_agent, handoff_map = (
+            await self._resolve_agents()
+        )
+
+        # Derive the connection model from the start agent's voicelive_model,
+        # falling back to the global setting when the agent has no override.
+        connection_model = self._settings.azure_voicelive_model
+        start_agent_obj = agents.get(effective_start_agent) if agents else None
+        if start_agent_obj is not None:
+            try:
+                vl_model = start_agent_obj.get_model_for_mode("voicelive")
+                if vl_model and getattr(vl_model, "deployment_id", None):
+                    connection_model = vl_model.deployment_id
+            except Exception as model_err:  # pragma: no cover - defensive
+                logger.warning(
+                    "[Genesys] Failed to resolve per-agent model for %s, falling back to %s | err=%s",
+                    effective_start_agent,
+                    self._settings.azure_voicelive_model,
+                    model_err,
+                )
+        if connection_model != self._settings.azure_voicelive_model:
+            logger.info(
+                "[Genesys] Using per-agent model override | agent=%s model=%s (default=%s) session=%s",
+                effective_start_agent,
+                connection_model,
+                self._settings.azure_voicelive_model,
+                self.session_id,
+            )
+
         # Connect to VoiceLive
         t0 = time.perf_counter()
         self._connection_cm = connect(
             endpoint=self._settings.azure_voicelive_endpoint,
             credential=self._credential,
-            model=self._settings.azure_voicelive_model,
+            model=connection_model,
             connection_options=connection_options,
         )
         self._connection = await self._connection_cm.__aenter__()
@@ -461,11 +479,6 @@ class GenesysVoiceLiveHandler:
         logger.info(
             "[Genesys] VoiceLive connected | connect_ms=%.1f session=%s",
             connect_ms, self.session_id,
-        )
-
-        # Resolve agents (reuse same logic as VoiceLiveSDKHandler)
-        agents, orchestrator_config, effective_start_agent, handoff_map = (
-            await self._resolve_agents()
         )
 
         # Build MemoManager
@@ -491,7 +504,7 @@ class GenesysVoiceLiveHandler:
             messenger=self._messenger,
             call_connection_id=self._protocol.conversation_id or self.session_id,
             transport="genesys",
-            model_name=self._settings.azure_voicelive_model,
+            model_name=connection_model,
             memo_manager=memo_manager,
         )
 

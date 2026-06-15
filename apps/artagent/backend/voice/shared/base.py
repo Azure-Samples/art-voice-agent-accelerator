@@ -42,6 +42,8 @@ class OrchestratorResult:
     output_tokens: int | None = None
     interrupted: bool = False
     error: str | None = None
+    # LLM time-to-first-token for this turn (ms), if captured during streaming.
+    ttft_ms: float | None = None
 
 
 __all__ = [

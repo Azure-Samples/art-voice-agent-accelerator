@@ -327,6 +327,8 @@ class CallEventHandlers:
                 f"📞 Call disconnected: {context.call_connection_id}, reason: {disconnect_reason}"
             )
 
+            CallEventHandlers._signal_acs_disconnect(context)
+
             # Notify session listeners about the disconnect event
             session_id = await CallEventHandlers._resolve_session_id(context)
             if session_id and context.app_state:
@@ -378,6 +380,7 @@ class CallEventHandlers:
                     )
 
             # Clean up call state
+            await CallEventHandlers._close_media_connections(context)
             await CallEventHandlers._cleanup_call_state(context)
 
     @staticmethod
@@ -602,6 +605,62 @@ class CallEventHandlers:
                 )
 
         return None
+
+    @staticmethod
+    def _signal_acs_disconnect(context: CallEventContext) -> None:
+        """Notify any in-process waiter that ACS has emitted CallDisconnected."""
+        app_state = getattr(context, "app_state", None)
+        if not app_state or not context.call_connection_id:
+            return
+
+        try:
+            store = getattr(app_state, "acs_disconnect_events", None)
+            event = store.get(context.call_connection_id) if isinstance(store, dict) else None
+            if event:
+                event.set()
+        except Exception as exc:
+            logger.debug(
+                "Failed to signal ACS disconnect for %s: %s",
+                context.call_connection_id,
+                exc,
+            )
+
+    @staticmethod
+    async def _close_media_connections(context: CallEventContext) -> None:
+        """Close ACS media WebSocket connections tied to a disconnected call."""
+        app_state = getattr(context, "app_state", None)
+        conn_manager = getattr(app_state, "conn_manager", None)
+        if not conn_manager or not context.call_connection_id:
+            return
+
+        connection_ids: list[str] = []
+        try:
+            if hasattr(conn_manager, "get_connection_ids_by_call_id"):
+                connection_ids = await conn_manager.get_connection_ids_by_call_id(
+                    context.call_connection_id,
+                    client_type="media",
+                )
+            elif hasattr(conn_manager, "get_connection_by_call_id"):
+                connection_id = await conn_manager.get_connection_by_call_id(
+                    context.call_connection_id
+                )
+                connection_ids = [connection_id] if connection_id else []
+
+            for connection_id in connection_ids:
+                await conn_manager.unregister(connection_id)
+
+            if connection_ids:
+                logger.info(
+                    "Closed %d media connection(s) for disconnected call %s",
+                    len(connection_ids),
+                    context.call_connection_id,
+                )
+        except Exception as exc:
+            logger.warning(
+                "Failed to close media connections for disconnected call %s: %s",
+                context.call_connection_id,
+                exc,
+            )
 
     @staticmethod
     def _describe_transfer_target(event_data: dict[str, Any]) -> str | None:

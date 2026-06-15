@@ -39,6 +39,8 @@ router = APIRouter()
 
 _BOOL_TRUE = {"true", "1", "yes", "on"}
 _BOOL_FALSE = {"false", "0", "no", "off"}
+_CALL_CONNECTION_ID_KEYS = ("callConnectionId", "call_connection_id", "callConnectionID")
+_CALL_CONNECTION_ID_NESTED_KEYS = ("data", "callConnectionProperties", "callConnection")
 
 
 def _coerce_optional_bool(value: Any) -> bool | None:
@@ -58,6 +60,31 @@ def _coerce_optional_bool(value: Any) -> bool | None:
             return True
         if value == 0:
             return False
+    return None
+
+
+def _extract_call_connection_id(payload: Any) -> str | None:
+    """Extract an ACS call connection ID from common callback payload shapes."""
+
+    if isinstance(payload, dict):
+        for key in _CALL_CONNECTION_ID_KEYS:
+            value = payload.get(key)
+            if value:
+                return str(value)
+
+        for key in _CALL_CONNECTION_ID_NESTED_KEYS:
+            value = _extract_call_connection_id(payload.get(key))
+            if value:
+                return value
+
+        return None
+
+    if isinstance(payload, list):
+        for item in payload:
+            value = _extract_call_connection_id(item)
+            if value:
+                return value
+
     return None
 
 
@@ -750,17 +777,7 @@ async def handle_acs_callbacks(
         logger.debug("📦 Callback payload: %s", events_data)
 
         # Extract call connection ID for tracing
-        call_connection_id = None
-        if isinstance(events_data, dict):
-            event_data = events_data.get("data", {})
-            if isinstance(event_data, dict):
-                call_connection_id = event_data.get("callConnectionId")
-        elif isinstance(events_data, list) and events_data:
-            first_event = events_data[0] if events_data else {}
-            if isinstance(first_event, dict):
-                event_data = first_event.get("data", {})
-                if isinstance(event_data, dict):
-                    call_connection_id = event_data.get("callConnectionId")
+        call_connection_id = _extract_call_connection_id(events_data)
 
         # Fallback to header
         if not call_connection_id:

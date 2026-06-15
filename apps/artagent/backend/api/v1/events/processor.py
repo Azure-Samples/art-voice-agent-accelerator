@@ -22,6 +22,9 @@ from .types import ACSEventTypes, CallEventContext, CallEventHandler, RecordingP
 logger = get_logger("v1.events.processor")
 tracer = trace.get_tracer(__name__)
 
+_CALL_CONNECTION_ID_KEYS = ("callConnectionId", "call_connection_id", "callConnectionID")
+_CALL_CONNECTION_ID_NESTED_KEYS = ("data", "callConnectionProperties", "callConnection")
+
 
 class CallEventProcessor:
     """
@@ -181,13 +184,37 @@ class CallEventProcessor:
         try:
             data = event.data
             if isinstance(data, dict):
-                return data.get("callConnectionId")
+                return self._extract_call_connection_id_from_mapping(data)
             elif hasattr(data, "callConnectionId"):
                 return data.callConnectionId
             elif hasattr(data, "call_connection_id"):
                 return data.call_connection_id
         except Exception as e:
             logger.error(f"Error extracting call connection ID: {e}")
+        return None
+
+    @classmethod
+    def _extract_call_connection_id_from_mapping(cls, data: Any) -> str | None:
+        """Extract callConnectionId from ACS event data with nested fallback shapes."""
+
+        if isinstance(data, dict):
+            for key in _CALL_CONNECTION_ID_KEYS:
+                value = data.get(key)
+                if value:
+                    return str(value)
+
+            for key in _CALL_CONNECTION_ID_NESTED_KEYS:
+                value = cls._extract_call_connection_id_from_mapping(data.get(key))
+                if value:
+                    return value
+            return None
+
+        if isinstance(data, list):
+            for item in data:
+                value = cls._extract_call_connection_id_from_mapping(item)
+                if value:
+                    return value
+
         return None
 
     def _create_event_context(

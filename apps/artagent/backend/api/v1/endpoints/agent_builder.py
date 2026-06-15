@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import time
+from functools import lru_cache
 from typing import Any
 
 import yaml
@@ -43,6 +44,7 @@ from apps.artagent.backend.registries.toolstore.registry import (
 from apps.artagent.backend.src.orchestration.session_agents import (
     get_session_agent,
     list_session_agents,
+    list_session_agents_by_session,
     remove_session_agent,
     set_session_agent,
 )
@@ -210,6 +212,43 @@ class DynamicAgentConfig(BaseModel):
     template_vars: dict[str, Any] | None = None
 
 
+class LiveTurnDetectionPatch(BaseModel):
+    """Partial VoiceLive turn-detection update for live tweaks."""
+
+    type: str | None = Field(default=None, description="VAD type (azure_semantic_vad, server_vad)")
+    threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    silence_duration_ms: int | None = Field(default=None, ge=100, le=3000)
+    prefix_padding_ms: int | None = Field(default=None, ge=0, le=1000)
+
+
+class LiveSpeechPatch(BaseModel):
+    """Partial Cascade STT (VAD) update for live tweaks."""
+
+    vad_silence_timeout_ms: int | None = Field(default=None, ge=100, le=5000)
+    use_semantic_segmentation: bool | None = Field(default=None)
+
+
+class LiveVoicePatch(BaseModel):
+    """Partial TTS voice update for live tweaks."""
+
+    name: str | None = Field(default=None, description="Azure neural voice name")
+    rate: str | None = Field(default=None, description="Speaking rate, e.g. '-4%'")
+
+
+class LiveSettingsRequest(BaseModel):
+    """
+    Shorthand session-setting tweaks applied to an in-progress call.
+
+    ``mode`` selects the active orchestrator. VoiceLive applies turn_detection /
+    voice instantly; Cascade returns needs_reconnect for VAD changes.
+    """
+
+    mode: str = Field(default="voicelive", description="voicelive | cascade")
+    turn_detection: LiveTurnDetectionPatch | None = None
+    speech: LiveSpeechPatch | None = None
+    voice: LiveVoicePatch | None = None
+
+
 class SessionAgentResponse(BaseModel):
     """Response for session agent operations."""
 
@@ -276,7 +315,147 @@ AVAILABLE_VOICES = [
     VoiceInfo(name="en-US-Andrew:DragonHDLatestNeural", display_name="Andrew HD", category="hd"),
     VoiceInfo(name="en-US-Brian:DragonHDLatestNeural", display_name="Brian HD", category="hd"),
     VoiceInfo(name="en-US-Emma:DragonHDLatestNeural", display_name="Emma HD", category="hd"),
+    # MAI-Voice-2 (preview) - multilingual, high-fidelity expressive synthesis.
+    # https://learn.microsoft.com/azure/ai-services/speech-service/mai-voices
+    # English (US)
+    VoiceInfo(name="en-US-Ethan:MAI-Voice-2", display_name="Ethan (MAI-Voice-2)", category="mai", language="en-US"),
+    VoiceInfo(name="en-US-Grant:MAI-Voice-2", display_name="Grant (MAI-Voice-2)", category="mai", language="en-US"),
+    VoiceInfo(name="en-US-Harper:MAI-Voice-2", display_name="Harper (MAI-Voice-2)", category="mai", language="en-US"),
+    VoiceInfo(name="en-US-Iris:MAI-Voice-2", display_name="Iris (MAI-Voice-2)", category="mai", language="en-US"),
+    VoiceInfo(name="en-US-Jasper:MAI-Voice-2", display_name="Jasper (MAI-Voice-2)", category="mai", language="en-US"),
+    VoiceInfo(name="en-US-Olivia:MAI-Voice-2", display_name="Olivia (MAI-Voice-2)", category="mai", language="en-US"),
+    # English (Australia)
+    VoiceInfo(name="en-AU-Lisa:MAI-Voice-2", display_name="Lisa · en-AU (MAI-Voice-2)", category="mai", language="en-AU"),
+    # German (Germany)
+    VoiceInfo(name="de-DE-Klaus:MAI-Voice-2", display_name="Klaus · de-DE (MAI-Voice-2)", category="mai", language="de-DE"),
+    VoiceInfo(name="de-DE-Mia:MAI-Voice-2", display_name="Mia · de-DE (MAI-Voice-2)", category="mai", language="de-DE"),
+    # Spanish (Spain / Mexico)
+    VoiceInfo(name="es-ES-Marta:MAI-Voice-2", display_name="Marta · es-ES (MAI-Voice-2)", category="mai", language="es-ES"),
+    VoiceInfo(name="es-MX-Alejo:MAI-Voice-2", display_name="Alejo · es-MX (MAI-Voice-2)", category="mai", language="es-MX"),
+    VoiceInfo(name="es-MX-Valeria:MAI-Voice-2", display_name="Valeria · es-MX (MAI-Voice-2)", category="mai", language="es-MX"),
+    # French (France)
+    VoiceInfo(name="fr-FR-Marc:MAI-Voice-2", display_name="Marc · fr-FR (MAI-Voice-2)", category="mai", language="fr-FR"),
+    VoiceInfo(name="fr-FR-Soleil:MAI-Voice-2", display_name="Soleil · fr-FR (MAI-Voice-2)", category="mai", language="fr-FR"),
+    # Hindi (India)
+    VoiceInfo(name="hi-IN-Arjun:MAI-Voice-2", display_name="Arjun · hi-IN (MAI-Voice-2)", category="mai", language="hi-IN"),
+    VoiceInfo(name="hi-IN-Dhruv:MAI-Voice-2", display_name="Dhruv · hi-IN (MAI-Voice-2)", category="mai", language="hi-IN"),
+    VoiceInfo(name="hi-IN-Kavya:MAI-Voice-2", display_name="Kavya · hi-IN (MAI-Voice-2)", category="mai", language="hi-IN"),
+    VoiceInfo(name="hi-IN-Priya:MAI-Voice-2", display_name="Priya · hi-IN (MAI-Voice-2)", category="mai", language="hi-IN"),
+    # Hungarian (Hungary)
+    VoiceInfo(name="hu-HU-Bence:MAI-Voice-2", display_name="Bence · hu-HU (MAI-Voice-2)", category="mai", language="hu-HU"),
+    VoiceInfo(name="hu-HU-Levente:MAI-Voice-2", display_name="Levente · hu-HU (MAI-Voice-2)", category="mai", language="hu-HU"),
+    VoiceInfo(name="hu-HU-Lilla:MAI-Voice-2", display_name="Lilla · hu-HU (MAI-Voice-2)", category="mai", language="hu-HU"),
+    VoiceInfo(name="hu-HU-Réka:MAI-Voice-2", display_name="Réka · hu-HU (MAI-Voice-2)", category="mai", language="hu-HU"),
+    # Italian (Italy)
+    VoiceInfo(name="it-IT-Luca:MAI-Voice-2", display_name="Luca · it-IT (MAI-Voice-2)", category="mai", language="it-IT"),
+    VoiceInfo(name="it-IT-Rosa:MAI-Voice-2", display_name="Rosa · it-IT (MAI-Voice-2)", category="mai", language="it-IT"),
+    # Korean (Korea)
+    VoiceInfo(name="ko-KR-Hana:MAI-Voice-2", display_name="Hana · ko-KR (MAI-Voice-2)", category="mai", language="ko-KR"),
+    VoiceInfo(name="ko-KR-Junho:MAI-Voice-2", display_name="Junho · ko-KR (MAI-Voice-2)", category="mai", language="ko-KR"),
+    # Dutch (Netherlands)
+    VoiceInfo(name="nl-NL-Fleur:MAI-Voice-2", display_name="Fleur · nl-NL (MAI-Voice-2)", category="mai", language="nl-NL"),
+    VoiceInfo(name="nl-NL-Sander:MAI-Voice-2", display_name="Sander · nl-NL (MAI-Voice-2)", category="mai", language="nl-NL"),
+    # Portuguese (Brazil / Portugal)
+    VoiceInfo(name="pt-BR-Caio:MAI-Voice-2", display_name="Caio · pt-BR (MAI-Voice-2)", category="mai", language="pt-BR"),
+    VoiceInfo(name="pt-BR-Luana:MAI-Voice-2", display_name="Luana · pt-BR (MAI-Voice-2)", category="mai", language="pt-BR"),
+    VoiceInfo(name="pt-BR-Pedro:MAI-Voice-2", display_name="Pedro · pt-BR (MAI-Voice-2)", category="mai", language="pt-BR"),
+    VoiceInfo(name="pt-BR-Rafael:MAI-Voice-2", display_name="Rafael · pt-BR (MAI-Voice-2)", category="mai", language="pt-BR"),
+    VoiceInfo(name="pt-PT-Rui:MAI-Voice-2", display_name="Rui · pt-PT (MAI-Voice-2)", category="mai", language="pt-PT"),
+    # Romanian (Romania)
+    VoiceInfo(name="ro-RO-Andrei:MAI-Voice-2", display_name="Andrei · ro-RO (MAI-Voice-2)", category="mai", language="ro-RO"),
+    VoiceInfo(name="ro-RO-Elena:MAI-Voice-2", display_name="Elena · ro-RO (MAI-Voice-2)", category="mai", language="ro-RO"),
+    VoiceInfo(name="ro-RO-Ioana:MAI-Voice-2", display_name="Ioana · ro-RO (MAI-Voice-2)", category="mai", language="ro-RO"),
+    VoiceInfo(name="ro-RO-Radu:MAI-Voice-2", display_name="Radu · ro-RO (MAI-Voice-2)", category="mai", language="ro-RO"),
+    # Russian (Russia)
+    VoiceInfo(name="ru-RU-Lev:MAI-Voice-2", display_name="Lev · ru-RU (MAI-Voice-2)", category="mai", language="ru-RU"),
+    VoiceInfo(name="ru-RU-Masha:MAI-Voice-2", display_name="Masha · ru-RU (MAI-Voice-2)", category="mai", language="ru-RU"),
+    # Thai (Thailand)
+    VoiceInfo(name="th-TH-Krit:MAI-Voice-2", display_name="Krit · th-TH (MAI-Voice-2)", category="mai", language="th-TH"),
+    VoiceInfo(name="th-TH-Nattapong:MAI-Voice-2", display_name="Nattapong · th-TH (MAI-Voice-2)", category="mai", language="th-TH"),
+    # Turkish (Turkey)
+    VoiceInfo(name="tr-TR-Aydin:MAI-Voice-2", display_name="Aydın · tr-TR (MAI-Voice-2)", category="mai", language="tr-TR"),
+    VoiceInfo(name="tr-TR-Elif:MAI-Voice-2", display_name="Elif · tr-TR (MAI-Voice-2)", category="mai", language="tr-TR"),
+    # Chinese (Mandarin, Simplified)
+    VoiceInfo(name="zh-CN-Bo:MAI-Voice-2", display_name="Bo · zh-CN (MAI-Voice-2)", category="mai", language="zh-CN"),
+    VoiceInfo(name="zh-CN-Lan:MAI-Voice-2", display_name="Lan · zh-CN (MAI-Voice-2)", category="mai", language="zh-CN"),
+    VoiceInfo(name="zh-CN-Mei:MAI-Voice-2", display_name="Mei · zh-CN (MAI-Voice-2)", category="mai", language="zh-CN"),
 ]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REGION VOICE AVAILABILITY
+# ─────────────────────────────────────────────────────────────────────────────
+# The Speech SDK's get_voices_async() is the authoritative source for which voices
+# a given Speech resource supports in its region. We use it to validate the curated
+# catalog so the UI never offers a voice that fails at synthesis time (e.g. a
+# preview MAI voice not deployed in this region). Result is cached to avoid hitting
+# Azure on every /voices call.
+_AVAILABLE_VOICES_CACHE: dict[str, Any] = {"names": None, "expires": 0.0}
+_AVAILABLE_VOICES_TTL_S = 600.0  # 10 minutes
+
+
+def _build_voice_query_speech_config():
+    """Build a SpeechConfig for enumerating voices, mirroring the speech stack's
+    key/region/AAD resolution. Returns the config or None if speech isn't configured."""
+    try:
+        import azure.cognitiveservices.speech as speechsdk
+    except ImportError:
+        return None
+
+    key = os.getenv("AZURE_SPEECH_KEY")
+    region = os.getenv("AZURE_SPEECH_REGION")
+    endpoint = os.getenv("AZURE_SPEECH_ENDPOINT")
+
+    try:
+        if key and region:
+            return speechsdk.SpeechConfig(subscription=key, region=region)
+        # Entra ID (managed identity / dev credential) path
+        if endpoint:
+            cfg = speechsdk.SpeechConfig(endpoint=endpoint)
+        elif region:
+            cfg = speechsdk.SpeechConfig(region=region)
+        else:
+            return None
+        from src.speech.auth_manager import get_speech_token_manager
+
+        get_speech_token_manager().apply_to_config(cfg, force_refresh=True)
+        return cfg
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("Failed to build speech config for voice listing: %s", e)
+        return None
+
+
+def _fetch_available_voice_names() -> set[str] | None:
+    """Return the set of voice short_names the Speech resource supports in its
+    region (cached for ~10 min), or None if it can't be determined."""
+    now = time.time()
+    if _AVAILABLE_VOICES_CACHE["names"] is not None and now < _AVAILABLE_VOICES_CACHE["expires"]:
+        return _AVAILABLE_VOICES_CACHE["names"]
+    try:
+        import azure.cognitiveservices.speech as speechsdk
+
+        cfg = _build_voice_query_speech_config()
+        if cfg is None:
+            return None
+        synth = speechsdk.SpeechSynthesizer(speech_config=cfg, audio_config=None)
+        result = synth.get_voices_async().get()
+        if (
+            result.reason == speechsdk.ResultReason.VoicesListRetrieved
+            and result.voices
+        ):
+            names = {v.short_name for v in result.voices}
+            _AVAILABLE_VOICES_CACHE["names"] = names
+            _AVAILABLE_VOICES_CACHE["expires"] = now + _AVAILABLE_VOICES_TTL_S
+            logger.info("Region supports %d TTS voices (cached)", len(names))
+            return names
+        logger.warning(
+            "Voice list not retrieved (reason=%s); treating region support as unknown",
+            getattr(result, "reason", None),
+        )
+        return None
+    except Exception as e:
+        logger.warning("Could not enumerate available voices from Azure: %s", e)
+        return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -370,59 +549,49 @@ async def list_available_tools(
 async def list_available_voices(
     category: str | None = None,
     use_cache: bool = True,
+    include_unverified: bool = False,
 ) -> dict[str, Any]:
     """
-    List all available TTS voices from Azure Speech Service.
+    List TTS voices, validated against what the Speech resource supports in its region.
+
+    The curated catalog (AVAILABLE_VOICES) is cross-checked against the live region
+    voice list (Speech SDK ``get_voices_async``) so we never offer a voice that the
+    region will reject at synthesis time — e.g. a preview MAI-Voice-2 voice that
+    isn't deployed in this region.
 
     Args:
-        category: Filter by category (turbo, standard, hd)
-        use_cache: Whether to use static cache (default: True for faster response)
+        category: Filter by category (turbo, standard, hd, mai).
+        use_cache: Retained for backward compatibility (no longer changes behavior;
+            region availability is cached internally for ~10 min).
+        include_unverified: If True, skip region validation and return the full
+            curated catalog (including preview voices that may not be available).
     """
     start = time.time()
 
-    # For now, use static list for reliability (Azure Speech SDK requires speech key)
-    # TODO: Implement live fetching when speech SDK is available
-    if not use_cache:
-        try:
-            # Attempt to fetch from Azure Speech Service
-            from src.tts.client import get_speech_config
+    # The authoritative source for "what voices does THIS Speech resource support
+    # in its region" is the SDK's get_voices_async(). We use it to validate the
+    # curated catalog so we never surface a voice the region rejects at synth time
+    # (e.g. a preview MAI voice not deployed in this region).
+    #   • available_names is a set of supported short_names, or None if we can't
+    #     reach the resource (no creds / network / SDK).
+    #   • include_unverified=True bypasses validation and returns the full catalog.
+    available_names = None if include_unverified else _fetch_available_voice_names()
+    verified = available_names is not None
 
-            speech_config = get_speech_config()
-            if speech_config:
-                # Use Azure Speech SDK to list voices
-                import azure.cognitiveservices.speech as speechsdk
-
-                synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=None)
-                result = synthesizer.get_voices_async().get()
-
-                if result.voices:
-                    voices = []
-                    for voice in result.voices:
-                        # Categorize voice
-                        category_name = "standard"
-                        if "Turbo" in voice.short_name:
-                            category_name = "turbo"
-                        elif "HD" in voice.short_name or "Dragon" in voice.short_name:
-                            category_name = "hd"
-
-                        # Only include English voices
-                        if voice.locale.startswith("en-"):
-                            voices.append(VoiceInfo(
-                                name=voice.short_name,
-                                display_name=voice.local_name,
-                                category=category_name,
-                                language=voice.locale,
-                            ))
-
-                    logger.info(f"Fetched {len(voices)} voices from Azure Speech Service")
-                else:
-                    # Fallback to static list
-                    voices = AVAILABLE_VOICES
-        except Exception as e:
-            logger.warning(f"Failed to fetch voices from Azure: {e}. Using static list.")
-            voices = AVAILABLE_VOICES
-    else:
-        voices = AVAILABLE_VOICES
+    voices: list[VoiceInfo] = []
+    for v in AVAILABLE_VOICES:
+        is_preview = v.category == "mai"
+        if available_names is not None:
+            # We know exactly what the region supports — filter strictly.
+            if v.name in available_names:
+                voices.append(v)
+        else:
+            # Can't verify region support. Keep broadly-available voices, but drop
+            # preview/MAI voices (the "may or may not be available" ones) unless the
+            # caller explicitly opts in.
+            if is_preview and not include_unverified:
+                continue
+            voices.append(v)
 
     if category:
         voices = [v for v in voices if v.category == category]
@@ -450,7 +619,10 @@ async def list_available_voices(
         } for v in voices],
         "by_category": by_category,
         "default_voice": DEFAULT_TTS_VOICE,
-        "source": "cached" if use_cache else "live",
+        # "verified" = these voices were confirmed against the live region voice
+        # list; "unverified" = couldn't reach Azure, so the curated list is used.
+        "verified_against_region": verified,
+        "source": "region-validated" if verified else "static-catalog",
         "response_time_ms": round((time.time() - start) * 1000, 2),
     }
 
@@ -635,25 +807,32 @@ Assist customers with their inquiries in a friendly, professional manner.
     }
 
 
-@router.get(
-    "/templates",
-    response_model=dict[str, Any],
-    summary="List Available Agent Templates",
-    description="Get list of all existing agent configurations that can be used as templates.",
-    tags=["Agent Builder"],
-)
-async def list_agent_templates() -> dict[str, Any]:
-    """
-    List all available agent templates from the agents directory.
+def _agentstore_mtime() -> float:
+    """Newest mtime across agent.yaml files — cache-busting key for base templates.
 
-    Returns agent configurations that can be used as starting points
-    for creating new dynamic agents.
+    A new value invalidates the lru_cache below, so edits to any agent.yaml are
+    reflected on the next request (covers local --reload dev). In Container Apps
+    the files only change on a new image revision, which starts fresh containers.
     """
-    start = time.time()
+    try:
+        mtimes = [p.stat().st_mtime for p in AGENTS_DIR.glob("*/agent.yaml")]
+        return max(mtimes) if mtimes else 0.0
+    except Exception:
+        # On any FS error, return a unique-ish value so we don't serve stale data
+        return time.time()
+
+
+@lru_cache(maxsize=1)
+def _load_base_templates_cached(_mtime_key: float) -> list[AgentTemplateInfo]:
+    """Scan the agentstore once and cache the base template list.
+
+    Keyed on ``_mtime_key`` so it auto-invalidates when any agent.yaml changes.
+    The caller MUST copy the returned list before mutating it (the cache holds
+    the same list object across calls).
+    """
     templates: list[AgentTemplateInfo] = []
     defaults = load_defaults(AGENTS_DIR)
 
-    # Scan for agent directories
     for agent_dir in AGENTS_DIR.iterdir():
         if not agent_dir.is_dir():
             continue
@@ -668,32 +847,26 @@ async def list_agent_templates() -> dict[str, Any]:
             with open(agent_file) as f:
                 raw = yaml.safe_load(f) or {}
 
-            # Extract name and description
             name = raw.get("name") or agent_dir.name.replace("_", " ").title()
             description = raw.get("description", "")
             greeting = raw.get("greeting", "")
 
-            # Load prompt from file or inline
             prompt_full = ""
             if "prompts" in raw and raw["prompts"].get("path"):
                 prompt_full = load_prompt(agent_dir, raw["prompts"]["path"])
             elif raw.get("prompt"):
                 prompt_full = load_prompt(agent_dir, raw["prompt"])
 
-            # Get tools list
             tools = raw.get("tools", [])
 
-            # Get voice and model configs
             voice = raw.get("voice") or defaults.get("voice", {})
             model = raw.get("model") or defaults.get("model", {})
             cascade_model = raw.get("cascade_model") or defaults.get("cascade_model")
             voicelive_model = raw.get("voicelive_model") or defaults.get("voicelive_model")
 
-            # Check if entry point
             handoff_config = raw.get("handoff", {})
             is_entry_point = handoff_config.get("is_entry_point", False)
 
-            # Create preview (first 300 chars)
             prompt_preview = prompt_full[:300] + "..." if len(prompt_full) > 300 else prompt_full
 
             templates.append(
@@ -714,47 +887,91 @@ async def list_agent_templates() -> dict[str, Any]:
                     is_entry_point=is_entry_point,
                 )
             )
-
         except Exception as e:
             logger.warning("Failed to load agent template %s: %s", agent_dir.name, e)
             continue
 
     # Sort by name, with entry point first
     templates.sort(key=lambda t: (not t.is_entry_point, t.name))
+    return templates
 
-    # Include session agents (custom-created agents)
-    # list_session_agents() returns {"{session_id}:{agent_name}": agent}
-    session_agents = list_session_agents()
-    for composite_key, agent in session_agents.items():
-        try:
-            # Parse the composite key to extract session_id
-            parts = composite_key.split(":", 1)
-            session_id = parts[0] if len(parts) > 1 else composite_key
-            
-            prompt_full = agent.prompt_template or ""
-            prompt_preview = prompt_full[:300] + "..." if len(prompt_full) > 300 else prompt_full
-            
-            templates.append(
-                AgentTemplateInfo(
-                    id=f"session:{composite_key}",
-                    name=agent.name,
-                    description=agent.description or "",
-                    greeting=agent.greeting or "",
-                    prompt_preview=prompt_preview,
-                    prompt_full=prompt_full,
-                    tools=agent.tool_names or [],
-                    voice=agent.voice.to_dict() if agent.voice else None,
-                    model=agent.model.to_dict() if agent.model else None,
-                    cascade_model=agent.cascade_model.to_dict() if agent.cascade_model else None,
-                    voicelive_model=agent.voicelive_model.to_dict() if agent.voicelive_model else None,
-                    is_entry_point=False,
-                    is_session_agent=True,
-                    session_id=session_id,
-                )
-            )
-        except Exception as e:
-            logger.warning("Failed to include session agent %s: %s", agent.name, e)
-            continue
+
+@router.get(
+    "/templates",
+    response_model=dict[str, Any],
+    summary="List Available Agent Templates",
+    description="Get list of all existing agent configurations that can be used as templates.",
+    tags=["Agent Builder"],
+)
+async def list_agent_templates(session_id: str | None = None) -> dict[str, Any]:
+    """
+    List all available agent templates from the agents directory.
+
+    Returns agent configurations that can be used as starting points
+    for creating new dynamic agents.
+
+    When ``session_id`` is provided, session agents for that session REPLACE the
+    base YAML agent of the same name (so edits are reflected in the card list);
+    without it, session agents from all sessions are appended as separate entries.
+    """
+    start = time.time()
+    # Base templates come from immutable, image-local YAML files. Cache the disk
+    # scan (yaml + prompt reads) keyed on the agentstore mtime so repeated opens
+    # don't re-read every agent.yaml. Per-replica in-process cache — safe in
+    # Container Apps because the files are identical per image revision and a new
+    # revision starts fresh containers (empty cache). Copy the result before the
+    # caller appends session agents so the cached list isn't mutated.
+    templates: list[AgentTemplateInfo] = list(_load_base_templates_cached(_agentstore_mtime()))
+
+    # Include session agents (custom-created or edited agents).
+    # When session_id is provided, scope to that session and REPLACE the base YAML
+    # agent of the same name so the card list reflects saved overrides. Otherwise,
+    # fall back to the legacy global behavior (append all sessions as separate cards).
+    def _build_session_template(composite_key: str, sid: str, agent: Any) -> AgentTemplateInfo:
+        prompt_full = agent.prompt_template or ""
+        prompt_preview = prompt_full[:300] + "..." if len(prompt_full) > 300 else prompt_full
+        return AgentTemplateInfo(
+            id=f"session:{composite_key}",
+            name=agent.name,
+            description=agent.description or "",
+            greeting=agent.greeting or "",
+            prompt_preview=prompt_preview,
+            prompt_full=prompt_full,
+            tools=agent.tool_names or [],
+            voice=agent.voice.to_dict() if agent.voice else None,
+            model=agent.model.to_dict() if agent.model else None,
+            cascade_model=agent.cascade_model.to_dict() if agent.cascade_model else None,
+            voicelive_model=agent.voicelive_model.to_dict() if agent.voicelive_model else None,
+            is_entry_point=False,
+            is_session_agent=True,
+            session_id=sid,
+        )
+
+    if session_id:
+        session_agents_dict = list_session_agents_by_session(session_id)
+        session_agent_names = {agent.name for agent in session_agents_dict.values()}
+        # Drop base YAML cards that are overridden by a session agent of the same name
+        if session_agent_names:
+            templates = [t for t in templates if t.name not in session_agent_names]
+        for agent_name, agent in session_agents_dict.items():
+            try:
+                composite_key = f"{session_id}:{agent.name}"
+                templates.append(_build_session_template(composite_key, session_id, agent))
+            except Exception as e:
+                logger.warning("Failed to include session agent %s: %s", agent_name, e)
+                continue
+    else:
+        # Legacy global view: append every session agent as a separate entry.
+        # list_session_agents() returns {"{session_id}:{agent_name}": agent}
+        session_agents = list_session_agents()
+        for composite_key, agent in session_agents.items():
+            try:
+                parts = composite_key.split(":", 1)
+                sid = parts[0] if len(parts) > 1 else composite_key
+                templates.append(_build_session_template(composite_key, sid, agent))
+            except Exception as e:
+                logger.warning("Failed to include session agent %s: %s", agent.name, e)
+                continue
 
     return {
         "status": "success",
@@ -1348,6 +1565,137 @@ async def update_session_agent(
         created_at=created_at,
         modified_at=time.time(),
     )
+
+
+@router.post(
+    "/session/{session_id}/live-settings",
+    summary="Apply Live Session Settings",
+    description=(
+        "Apply VAD / turn-detection and voice tweaks to an in-progress call. "
+        "VoiceLive applies them instantly via session.update (no reconnect). "
+        "Custom Speech Cascade cannot hot-swap STT VAD mid-stream, so it returns "
+        "needs_reconnect=true for the client to restart the STT leg."
+    ),
+    tags=["Agent Builder"],
+)
+async def apply_live_session_settings(
+    session_id: str,
+    payload: LiveSettingsRequest,
+    request: Request,
+) -> dict[str, Any]:
+    """
+    Push quick session-setting changes ("shorthand") to a live call.
+
+    - **VoiceLive**: turn_detection (threshold / silence_duration_ms /
+      prefix_padding_ms) and voice (name / rate) are pushed live via a partial
+      ``session.update``; the change also persists to the in-memory session agent
+      so it survives subsequent turns. ``applied`` and ``live`` are both true.
+    - **Cascade**: the Azure Speech recognizer binds VAD at construction and the
+      SDK cannot change it mid-stream, so VAD changes return
+      ``needs_reconnect=true`` (the client restarts the STT leg). Voice changes
+      also return needs_reconnect so the next connection picks them up. Settings
+      are persisted to the session agent (if one exists) so a reconnect applies
+      them and the builder reflects them.
+    """
+    mode = (payload.mode or "voicelive").lower()
+
+    # Best-effort persist onto the saved session agent so the builder and any
+    # reconnect reflect the new values. Only mutate a session-scoped agent
+    # (never a shared base agent) to avoid cross-session leakage.
+    persisted = False
+    existing = get_session_agent(session_id)
+    if existing is not None:
+        try:
+            if payload.turn_detection is not None:
+                sess = dict(existing.session or {})
+                td = dict(sess.get("turn_detection") or {})
+                for key in ("type", "threshold", "silence_duration_ms", "prefix_padding_ms"):
+                    val = getattr(payload.turn_detection, key, None)
+                    if val is not None:
+                        td[key] = val
+                sess["turn_detection"] = td
+                existing.session = sess
+            if payload.speech is not None and existing.speech is not None:
+                if payload.speech.vad_silence_timeout_ms is not None:
+                    existing.speech.vad_silence_timeout_ms = payload.speech.vad_silence_timeout_ms
+                if payload.speech.use_semantic_segmentation is not None:
+                    existing.speech.use_semantic_segmentation = (
+                        payload.speech.use_semantic_segmentation
+                    )
+            if payload.voice is not None and existing.voice is not None:
+                if payload.voice.name:
+                    existing.voice.name = payload.voice.name
+                if payload.voice.rate:
+                    existing.voice.rate = payload.voice.rate
+            set_session_agent(session_id, existing)
+            persisted = True
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Failed to persist live settings for %s: %s", session_id, exc)
+
+    if mode in ("voice_live", "voicelive"):
+        # Import lazily to avoid a hard dependency when VoiceLive isn't installed.
+        try:
+            from apps.artagent.backend.voice.voicelive.orchestrator import (
+                get_voicelive_orchestrator,
+            )
+        except Exception:  # pragma: no cover - defensive
+            get_voicelive_orchestrator = None  # type: ignore[assignment]
+
+        orch = get_voicelive_orchestrator(session_id) if get_voicelive_orchestrator else None
+        if orch is None or getattr(orch, "conn", None) is None:
+            return {
+                "status": "no_active_session",
+                "mode": mode,
+                "applied": persisted,
+                "live": False,
+                "needs_reconnect": False,
+                "message": "No active VoiceLive connection; settings saved for next connect.",
+            }
+
+        td_dict = (
+            {
+                "type": payload.turn_detection.type,
+                "threshold": payload.turn_detection.threshold,
+                "silence_duration_ms": payload.turn_detection.silence_duration_ms,
+                "prefix_padding_ms": payload.turn_detection.prefix_padding_ms,
+            }
+            if payload.turn_detection is not None
+            else None
+        )
+        voice_dict = (
+            {"name": payload.voice.name, "rate": payload.voice.rate}
+            if payload.voice is not None
+            else None
+        )
+        try:
+            pushed = await orch.apply_live_session_settings(
+                turn_detection=td_dict, voice=voice_dict
+            )
+        except Exception as exc:
+            logger.error("Live VoiceLive session update failed | session=%s: %s", session_id, exc)
+            raise HTTPException(status_code=502, detail=f"Live update failed: {exc}") from exc
+
+        return {
+            "status": "applied" if pushed else "noop",
+            "mode": "voicelive",
+            "applied": True,
+            "live": pushed,
+            "needs_reconnect": False,
+        }
+
+    # Cascade: VAD is bound at recognizer construction; the Azure Speech SDK
+    # cannot change it mid-stream. Signal the client to restart the STT leg.
+    return {
+        "status": "needs_reconnect",
+        "mode": "cascade",
+        "applied": persisted,
+        "live": False,
+        "needs_reconnect": True,
+        "message": (
+            "Custom Speech Cascade cannot change STT VAD mid-stream. "
+            "Restart the stream to apply the new settings."
+        ),
+    }
 
 
 @router.delete(

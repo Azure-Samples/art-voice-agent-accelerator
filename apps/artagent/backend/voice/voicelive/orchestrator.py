@@ -92,6 +92,14 @@ CALL_CENTER_TRIGGER_PHRASES = {
     "transfer me to the call center",
 }
 
+# Benign VoiceLive server-error codes emitted when a barge-in / response.cancel
+# races a response that already finished. These are expected and must NOT be
+# logged as errors or surfaced to the UI. Mirrors the handler's suppression set.
+_BENIGN_ERROR_CODES = {
+    "response_cancel_not_active",
+    "response_cancel_no_active_response",
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # SESSION ORCHESTRATOR REGISTRY
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -847,6 +855,71 @@ class LiveOrchestrator:
         except Exception:
             logger.debug("Failed to update session context", exc_info=True)
 
+    async def apply_live_session_settings(
+        self,
+        *,
+        turn_detection: dict[str, Any] | None = None,
+        voice: dict[str, Any] | None = None,
+    ) -> bool:
+        """
+        Push VAD / voice tweaks to the live VoiceLive connection without a reconnect.
+
+        VoiceLive supports partial ``session.update`` for ``turn_detection`` and
+        ``voice`` (the generative model is the only thing bound at connect()).
+        The active per-session agent's stored config is also mutated so the change
+        survives subsequent full session updates (e.g. on the next agent switch).
+
+        Returns True if an update was pushed, False if nothing live to update.
+        """
+        if not self.conn or not self.active:
+            return False
+        agent = self.agents.get(self.active)
+        if not agent:
+            return False
+        ua = getattr(agent, "_agent", agent)
+
+        # Mutate the per-session agent so the tweak persists across turns.
+        if turn_detection:
+            sess = dict(ua.session or {})
+            td = dict(sess.get("turn_detection") or {})
+            for key in ("type", "threshold", "silence_duration_ms", "prefix_padding_ms"):
+                if turn_detection.get(key) is not None:
+                    td[key] = turn_detection[key]
+            sess["turn_detection"] = td
+            ua.session = sess
+        if voice and ua.voice is not None:
+            if voice.get("name"):
+                ua.voice.name = voice["name"]
+            if voice.get("rate"):
+                ua.voice.rate = voice["rate"]
+
+        try:
+            from azure.ai.voicelive.models import RequestSession
+        except ImportError:
+            logger.warning("VoiceLive SDK unavailable; cannot push live settings")
+            return False
+
+        kwargs: dict[str, Any] = {}
+        if turn_detection:
+            vad = ua.build_voicelive_vad()
+            if vad is not None:
+                kwargs["turn_detection"] = vad
+        if voice:
+            voice_payload = ua.build_voicelive_voice()
+            if voice_payload is not None:
+                kwargs["voice"] = voice_payload
+
+        if not kwargs:
+            return False
+
+        await self.conn.session.update(session=RequestSession(**kwargs))
+        logger.info(
+            "[LiveOrchestrator] Pushed live session settings | agent=%s keys=%s",
+            self.active,
+            list(kwargs.keys()),
+        )
+        return True
+
     def _build_conversation_recap(self) -> str:
         """
         Build an explicit conversation recap to inject into instructions.
@@ -1109,7 +1182,19 @@ class LiveOrchestrator:
             await self._handle_response_done(event)
 
         elif et == ServerEventType.ERROR:
-            logger.error("VoiceLive error: %s", getattr(event.error, "message", "unknown"))
+            err = getattr(event, "error", None)
+            code = getattr(err, "code", None)
+            message = getattr(err, "message", "unknown")
+            # Benign cancel-race: a barge-in / response.cancel lands just after the
+            # response already finished, so there is no active response to cancel.
+            # The handler already suppresses these; mirror that here so we don't
+            # emit a noisy duplicate ERROR for an expected condition.
+            if code in _BENIGN_ERROR_CODES:
+                logger.info(
+                    "VoiceLive benign cancel-race ignored | code=%s", code
+                )
+            else:
+                logger.error("VoiceLive error: %s", message)
 
     # ═══════════════════════════════════════════════════════════════════════════
     # EVENT HANDLERS
@@ -1178,10 +1263,16 @@ class LiveOrchestrator:
         
         if self.audio:
             await self.audio.stop_playback()
-        try:
-            await self.conn.response.cancel()
-        except Exception:
-            logger.debug("response.cancel() failed during barge-in", exc_info=True)
+        # Only cancel when a response is actually in flight. Cancelling with no
+        # active response makes VoiceLive emit a `response_cancel_not_active`
+        # server error, which the handler treats as a hard error (StopAudio +
+        # UI error) and breaks the next turn. This race widens when VAD fires
+        # speech_started right after a turn completes (low silence_duration).
+        if self._active_response_id:
+            try:
+                await self.conn.response.cancel()
+            except Exception:
+                logger.debug("response.cancel() failed during barge-in", exc_info=True)
         if self.messenger and self._active_response_id:
             try:
                 await self.messenger.send_assistant_cancelled(
@@ -1230,7 +1321,7 @@ class LiveOrchestrator:
         """Handle user transcription delta."""
         user_transcript = getattr(event, "transcript", "")
         if user_transcript:
-            logger.info("[USER delta] Says: %s", user_transcript)
+            logger.debug("[USER delta] Says: %s", user_transcript)
             # Only update _last_user_message for deltas, don't add to deque yet
             # The final message will be added in _handle_transcription_completed
             self._last_user_message = user_transcript.strip()
@@ -1239,28 +1330,18 @@ class LiveOrchestrator:
         """Handle assistant transcript delta (streaming)."""
         transcript_delta = getattr(event, "delta", "") or getattr(event, "transcript", "")
 
-        # Track LLM TTFT via metrics
+        # Track LLM TTFT for agent-level token/timing accounting. The canonical
+        # TTFT telemetry (the voicelive.llm.ttft histogram + the turn-span event)
+        # is emitted by the handler, so we deliberately do NOT create a duplicate
+        # 0-duration span here — those previously cluttered the dependencies table.
         ttft_ms = self._metrics.record_first_token() if transcript_delta else None
         if ttft_ms is not None:
-            session_id = getattr(self.messenger, "session_id", None) if self.messenger else None
-            with tracer.start_as_current_span(
-                "voicelive.llm.ttft",
-                kind=trace.SpanKind.INTERNAL,
-                attributes={
-                    SpanAttr.TURN_NUMBER.value: self._metrics.turn_count,
-                    SpanAttr.TURN_LLM_TTFB_MS.value: ttft_ms,
-                    SpanAttr.SESSION_ID.value: session_id or "",
-                    SpanAttr.CALL_CONNECTION_ID.value: self.call_connection_id or "",
-                    "voicelive.active_agent": self.active,
-                },
-            ) as ttft_span:
-                ttft_span.add_event("llm.first_token", {"ttft_ms": ttft_ms})
-                logger.info(
-                    "[Orchestrator] LLM TTFT | turn=%d ttft_ms=%.2f agent=%s",
-                    self._metrics.turn_count,
-                    ttft_ms,
-                    self.active,
-                )
+            logger.debug(
+                "[Orchestrator] LLM TTFT | turn=%d ttft_ms=%.2f agent=%s",
+                self._metrics.turn_count,
+                ttft_ms,
+                self.active,
+            )
 
         if transcript_delta and self.messenger:
             response_id = self._response_id_from_event(event)
@@ -1479,6 +1560,31 @@ class LiveOrchestrator:
 
                 has_handoff = bool(system_vars.get("handoff_context"))
                 switch_span.set_attribute("voicelive.is_handoff", has_handoff)
+
+                # VoiceLive binds the generative model at connect() time; it CANNOT be
+                # changed via session.update(). If this agent declares a different
+                # voicelive_model than the model bound to the live connection, the override
+                # is silently ignored for the rest of the call. Surface that clearly.
+                try:
+                    target_model = agent._agent.get_model_for_mode("voicelive")
+                    target_deployment = getattr(target_model, "deployment_id", None)
+                    if (
+                        target_deployment
+                        and self._model_name
+                        and target_deployment != self._model_name
+                    ):
+                        logger.warning(
+                            "[Agent Switch] Agent '%s' requests voicelive_model='%s' but the "
+                            "VoiceLive connection is bound to '%s'. VoiceLive cannot change models "
+                            "mid-call, so the connection model is used. To honor a per-agent model, "
+                            "make this agent the scenario's start agent.",
+                            agent_name,
+                            target_deployment,
+                            self._model_name,
+                        )
+                        switch_span.set_attribute("voicelive.model_override_ignored", target_deployment)
+                except Exception:  # pragma: no cover - defensive
+                    logger.debug("Failed to evaluate per-agent model on switch", exc_info=True)
 
                 # For handoffs, clear the last assistant message to prevent the new agent
                 # from thinking IT said the old agent's handoff statement (e.g., "I'll connect you
@@ -1767,6 +1873,43 @@ class LiveOrchestrator:
                         tool_outputs[name] = output_summary
                         self._memo_manager.set_context("tool_outputs", tool_outputs)
                         self._system_vars["tool_outputs"] = tool_outputs
+
+                    # Persist authenticated identity to corememory so handoff targets
+                    # can inject _client_id and render session_profile in their prompts
+                    if result.get("authenticated") and result.get("client_id"):
+                        cid = result["client_id"]
+                        self._memo_manager.set_corememory("client_id", cid)
+                        self._system_vars["client_id"] = cid
+                        if result.get("caller_name"):
+                            self._memo_manager.set_corememory("caller_name", result["caller_name"])
+                            self._system_vars["caller_name"] = result["caller_name"]
+                        logger.info(
+                            "🔐 Persisted authenticated identity to corememory | client_id=%s",
+                            cid[:8] + "..." if len(cid) > 8 else cid,
+                        )
+
+                    # Persist loaded profile to corememory for cross-agent availability
+                    if result.get("success") and result.get("profile") and isinstance(result["profile"], dict):
+                        profile = result["profile"]
+                        self._memo_manager.set_corememory("session_profile", profile)
+                        self._system_vars["session_profile"] = profile
+                        if profile.get("client_id"):
+                            self._memo_manager.set_corememory("client_id", profile["client_id"])
+                            self._system_vars["client_id"] = profile["client_id"]
+                        if profile.get("full_name"):
+                            self._memo_manager.set_corememory("caller_name", profile["full_name"])
+                            self._system_vars["caller_name"] = profile["full_name"]
+                        if profile.get("customer_intelligence"):
+                            self._memo_manager.set_corememory("customer_intelligence", profile["customer_intelligence"])
+                            self._system_vars["customer_intelligence"] = profile["customer_intelligence"]
+                        if profile.get("institution_name"):
+                            self._memo_manager.set_corememory("institution_name", profile["institution_name"])
+                            self._system_vars["institution_name"] = profile["institution_name"]
+                        logger.info(
+                            "📋 Persisted user profile to corememory | client=%s name=%s",
+                            profile.get("client_id", "?")[:8],
+                            profile.get("full_name", "?"),
+                        )
                 except Exception:
                     logger.debug("Failed to persist tool results to MemoManager", exc_info=True)
 

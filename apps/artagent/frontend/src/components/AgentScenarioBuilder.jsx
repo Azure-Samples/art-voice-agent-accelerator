@@ -9,7 +9,7 @@
  * Users can toggle between modes using a toolbar switch.
  */
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   Avatar,
   Box,
@@ -114,19 +114,18 @@ export default function AgentScenarioBuilder({
   onActivateScenario = null,
   // Initial mode
   initialMode = 'agents',
+  // When set, the embedded Agent Builder deep-links into editing this live
+  // agent (loads its config + opens in edit mode). Used by "Edit live agent".
+  initialEditAgentName = null,
 }) {
   // Mode state: 'agents' or 'scenarios'
   const [mode, setMode] = useState(initialMode);
   
-  // Refresh key - increments each time dialog opens to force child components to remount
+  // Refresh key - increments to force child components to remount. We deliberately
+  // do NOT bump on every open: remounting the ~3,900-line Agent Builder is expensive,
+  // so we only force it when the edited session actually changes (see effect below).
   const [refreshKey, setRefreshKey] = useState(0);
-  
-  // Increment refresh key when dialog opens
-  useEffect(() => {
-    if (open) {
-      setRefreshKey((prev) => prev + 1);
-    }
-  }, [open]);
+  const lastRemountSessionRef = useRef(null);
   
   // Track agent being edited from scenario builder
   const [editingAgentFromScenario, setEditingAgentFromScenario] = useState(null);
@@ -188,6 +187,16 @@ export default function AgentScenarioBuilder({
   // Determine if we're in agent edit mode (either from prop or from scenario navigation)
   const isAgentEditMode = agentEditMode || editingAgentFromScenario !== null;
   const effectiveAgentSessionId = editingAgentSessionId || sessionId;
+
+  // Only remount the embedded builder when the dialog opens onto a DIFFERENT
+  // session than last time. Reopening for the same session reuses the mounted
+  // component (preserves form state, avoids a costly full remount).
+  useEffect(() => {
+    if (open && effectiveAgentSessionId !== lastRemountSessionRef.current) {
+      lastRemountSessionRef.current = effectiveAgentSessionId;
+      setRefreshKey((prev) => prev + 1);
+    }
+  }, [open, effectiveAgentSessionId]);
 
   const getModeDescription = () => {
     if (mode === 'agents') {
@@ -304,7 +313,8 @@ export default function AgentScenarioBuilder({
             onAgentCreated={handleAgentCreatedInternal}
             onAgentUpdated={handleAgentUpdatedInternal}
             existingConfig={editingAgentFromScenario || existingAgentConfig}
-            editMode={isAgentEditMode}
+            editMode={isAgentEditMode || Boolean(initialEditAgentName)}
+            initialEditAgentName={initialEditAgentName}
           />
         ) : (
           <ScenarioBuilderGraph
