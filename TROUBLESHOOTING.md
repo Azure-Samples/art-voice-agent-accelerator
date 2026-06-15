@@ -6,6 +6,64 @@ Quick solutions for the most common issues when deploying and running the ART Vo
 
 ---
 
+## 🤖 Agent-First Troubleshooting (start here)
+
+The fastest way to diagnose a problem is to let an AI agent gather the evidence for you. Two
+skills drive this:
+
+| Skill | What it does |
+| --- | --- |
+| [`troubleshoot`](.github/skills/troubleshoot/SKILL.md) | Read-only diagnosis of a pipeline layer (deploy → telephony → STT → LLM → TTS → state). Probes you for missing details, then reports findings + a recommended fix. |
+| [`observability-insights`](.github/skills/observability-insights/SKILL.md) | Read-only — pulls the wider runtime picture from your local `azd` artifacts and Azure Monitor (App Insights / Log Analytics) and renders call timelines, latency waterfalls, and mermaid diagrams. |
+
+### Guardrails (what the agent will and won't do)
+
+- ✅ **Diagnoses** with read-only commands (`show`, `list`, `logs`, `query`, `curl`).
+- ✅ **Asks you** for the missing detail (env, `call_id`, error text) instead of guessing.
+- ✅ **Recommends** a fix and shows the exact command — **you** apply it.
+- ❌ Will **not** edit code/config/infra, run `azd up/provision/deploy/down`, `azd env set`,
+  `terraform apply`, `az ... create/update/delete`, restart/redeploy, or commit — without your
+  explicit approval. No "nuke and redeploy" shortcuts.
+
+### Useful prompts (copy/paste)
+
+Give the agent one concrete failing example (a `call_id`, a timestamp, the exact error) for best results.
+
+```text
+# General entry point — let it probe you
+Use the troubleshoot skill. Calls connect but there's a long pause before the agent replies.
+Local dev, env "contoso". Ask me whatever you need.
+
+# Deploy / provisioning
+Use the troubleshoot skill to diagnose why `azd up` fails at the preprovision hook. Read-only only.
+
+# Telephony (ACS)
+Use the troubleshoot skill: inbound calls never reach the backend webhook. Help me confirm the
+ACS config and webhook reachability without changing anything.
+
+# STT / LLM / TTS latency
+Use observability-insights for env "contoso": pull the latency percentiles per span for the last
+hour and show me which stage breaks the budget, then a call timeline for call_id <id>.
+
+# Container health
+Use the troubleshoot skill to check why the rtaudio-server container app is in a restart loop.
+Read the readiness checks and recent logs, then tell me the likely cause.
+
+# Azure MCP fast path (if an Azure SRE-agent MCP is connected)
+Use the troubleshoot skill with the Azure MCP: run check_deployment_health for staging and
+analyze_deployment_logs for rtaudio-server at severity=error over the last hour. Read-only —
+don't let any scan create GitHub issues.
+
+# Wider context / visualization
+Use observability-insights: from my local azd artifacts, map the deployed resources and render a
+mermaid sequence diagram of a typical call plus a component health table.
+```
+
+> The static fixes below remain the quick reference. The agent draws on them — but verify and
+> apply any change yourself.
+
+---
+
 ## Deployment & Provisioning
 
 ### `azd` authentication fails with tenant/subscription mismatch
@@ -254,16 +312,17 @@ pip install -e ".[docs]"
 **Build the docs:**
 
 ```bash
-mkdocs build -f docs/mkdocs.yml
+mkdocs build -f docs/legacy/mkdocs.yml
 
 # Or serve locally with live reload
-mkdocs serve -f docs/mkdocs.yml
+mkdocs serve -f docs/legacy/mkdocs.yml
 ```
 
 ---
 
 ## Need More Help?
 
+- **Agent-First Diagnosis:** [`troubleshoot`](.github/skills/troubleshoot/SKILL.md) and [`observability-insights`](.github/skills/observability-insights/SKILL.md) skills
 - **Full Troubleshooting Guide:** [docs/operations/troubleshooting.md](docs/operations/troubleshooting.md)
 - **Prerequisites:** [docs/getting-started/prerequisites.md](docs/getting-started/prerequisites.md)
 - **Deployment Guide:** [docs/deployment/](docs/deployment/)
