@@ -138,12 +138,26 @@ class CosmosDBMongoCoreManager:
                 # Setup Azure Identity credential for OIDC
                 credential = get_credential()
                 auth_callback = AzureIdentityTokenCallback(credential)
+
+                # pymongo enforces an OIDC host allowlist (authOIDCAllowedHosts) and
+                # reads it ONLY from authMechanismProperties["ALLOWED_HOSTS"] — it does
+                # NOT read any environment variable. Cosmos DB Mongo vCore hosts
+                # (e.g. <cluster>.global.mongocluster.cosmos.azure.com) are absent from
+                # pymongo's default allowlist, so OIDC is refused before the first
+                # connection unless we pass them here explicitly. The "*." pattern is
+                # matched via host.endswith(pattern[1:]), so the wildcard below also
+                # covers the ".global.mongocluster..." form.
+                allowed_hosts = [
+                    h.strip()
+                    for h in os.getenv(
+                        "MONGODB_OIDC_ALLOWED_HOSTS", "*.mongocluster.cosmos.azure.com"
+                    ).split(",")
+                    if h.strip()
+                ]
                 auth_properties = {
                     "OIDC_CALLBACK": auth_callback,
+                    "ALLOWED_HOSTS": allowed_hosts,
                 }
-                
-                # Allow Cosmos DB MongoDB cluster hosts for OIDC
-                os.environ.setdefault("MONGODB_OIDC_ALLOWED_HOSTS", "*.mongocluster.cosmos.azure.com")
 
 
                 # Build connection string for OIDC with required parameters

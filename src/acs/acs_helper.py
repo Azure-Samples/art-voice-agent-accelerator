@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta
+from typing import Literal
 
 from azure.communication.callautomation import (
     AudioFormat,
@@ -27,6 +28,25 @@ from src.enums.stream_modes import StreamMode
 
 logger = get_logger("src.acs")
 tracer = trace.get_tracer(__name__)
+
+ACSAuthMode = Literal["auto", "connection_string", "entra"]
+_CONNECTION_STRING_AUTH_ALIASES = {"connection_string", "connection-string", "key", "access_key"}
+_ENTRA_AUTH_ALIASES = {"entra", "entra_id", "aad", "managed_identity", "default_credential"}
+
+
+def _normalize_acs_auth_mode(auth_mode: str | None) -> ACSAuthMode:
+    """Normalize ACS auth mode configuration."""
+    normalized = (auth_mode or "auto").strip().lower()
+    if not normalized or normalized == "auto":
+        return "auto"
+    if normalized in _CONNECTION_STRING_AUTH_ALIASES:
+        return "connection_string"
+    if normalized in _ENTRA_AUTH_ALIASES:
+        return "entra"
+    raise ValueError(
+        "ACS_AUTH_MODE must be one of: auto, connection_string, entra "
+        f"(got {auth_mode!r})"
+    )
 
 
 def _endpoint_host_from_client(client: CallAutomationClient) -> str:
@@ -69,7 +89,7 @@ async def wait_for_call_connected(
         except Exception as e:
             logger.warning(f"Error getting call properties: {e}")
             if datetime.utcnow() >= deadline:
-                raise TimeoutError(f"Call not connected after {timeout}s due to errors.")
+                raise TimeoutError(f"Call not connected after {timeout}s due to errors.") from e
 
         time_end = datetime.utcnow() - time
         logger.info(f"🕐 Waited {time_end.total_seconds()}s for call to connect...")
@@ -89,6 +109,7 @@ class AcsCaller:
         websocket_url: str = None,
         acs_connection_string: str = None,
         acs_endpoint: str = None,
+        acs_auth_mode: str | None = None,
         cognitive_services_endpoint: str = None,
         speech_recognition_model_endpoint_id: str = None,
         recording_configuration: dict = None,
@@ -108,6 +129,7 @@ class AcsCaller:
         self.callback_url = callback_url
         self.cognitive_services_endpoint = cognitive_services_endpoint
         self.speech_recognition_model_endpoint_id = speech_recognition_model_endpoint_id
+        self.auth_mode = _normalize_acs_auth_mode(acs_auth_mode)
 
         # Recording Settings
         if not recording_callback_url:
@@ -151,16 +173,26 @@ class AcsCaller:
 
         # Initialize ACS client with proper authentication
         try:
-            if acs_connection_string:
+            if self.auth_mode == "auto":
+                effective_auth_mode = "connection_string" if acs_connection_string else "entra"
+            else:
+                effective_auth_mode = self.auth_mode
+
+            self.effective_auth_mode = effective_auth_mode
+
+            if effective_auth_mode == "connection_string":
+                if not acs_connection_string:
+                    raise ValueError(
+                        "ACS_CONNECTION_STRING is required when ACS_AUTH_MODE=connection_string"
+                    )
                 logger.info("Using ACS connection string for authentication")
                 self.client = CallAutomationClient.from_connection_string(acs_connection_string)
             else:
                 if not acs_endpoint:
-                    raise ValueError("acs_endpoint is required when not using connection string")
+                    raise ValueError("ACS_ENDPOINT is required when ACS_AUTH_MODE=entra")
 
-                logger.info("Using managed identity for ACS authentication")
+                logger.info("Using Microsoft Entra ID for ACS authentication")
 
-                # Use system-assigned managed identity
                 credentials = get_credential()
 
                 self.client = CallAutomationClient(endpoint=acs_endpoint, credential=credentials)
@@ -168,9 +200,9 @@ class AcsCaller:
         except Exception as e:
             logger.error(f"Failed to initialize ACS client: {e}")
             if "managed identity" in str(e).lower() or "CredentialUnavailableError" in str(e):
-                logger.error("Managed identity is not available in this environment.")
+                logger.error("Microsoft Entra credential is not available in this environment.")
                 logger.error("Either:")
-                logger.error("1. Use ACS_CONNECTION_STRING instead of managed identity")
+                logger.error("1. Use ACS_AUTH_MODE=connection_string with ACS_CONNECTION_STRING")
                 logger.error("2. Ensure managed identity is enabled for this App Service")
                 logger.error("3. Set AZURE_CLIENT_ID if using user-assigned managed identity")
             raise

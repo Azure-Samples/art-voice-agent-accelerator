@@ -877,6 +877,23 @@ class ThreadSafeConnectionManager:
             conn_ids = self._by_call.get(call_id, set())
             return next(iter(conn_ids), None) if conn_ids else None
 
+    async def get_connection_ids_by_call_id(
+        self,
+        call_id: str,
+        *,
+        client_type: ClientType | None = None,
+    ) -> list[str]:
+        """Get connection IDs associated with a call, optionally filtered by client type."""
+        async with self._lock:
+            conn_ids = list(self._by_call.get(call_id, set()))
+            if client_type is None:
+                return [conn_id for conn_id in conn_ids if conn_id in self._conns]
+            return [
+                conn_id
+                for conn_id in conn_ids
+                if conn_id in self._conns and self._conns[conn_id].meta.client_type == client_type
+            ]
+
     async def get_session_data_safe(
         self, session_id: str, requesting_connection_id: str
     ) -> dict[str, Any] | None:
