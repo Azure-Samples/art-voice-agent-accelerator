@@ -114,14 +114,29 @@ def main():
             
             # Build OIDC connection string
             oidc_connection_string = f"mongodb+srv://{cluster_name}.mongocluster.cosmos.azure.com/"
-            
+
+            # pymongo's OIDC host allowlist is read ONLY from
+            # authMechanismProperties["ALLOWED_HOSTS"] (never an env var); Cosmos
+            # Mongo vCore hosts are not in pymongo's default list, so add them or
+            # OIDC is refused before connecting.
+            allowed_hosts = [
+                h.strip()
+                for h in os.getenv(
+                    "MONGODB_OIDC_ALLOWED_HOSTS", "*.mongocluster.cosmos.azure.com"
+                ).split(",")
+                if h.strip()
+            ]
+
             client = MongoClient(
                 oidc_connection_string,
                 connectTimeoutMS=120000,
                 tls=True,
                 retryWrites=False,
                 authMechanism="MONGODB-OIDC",
-                authMechanismProperties={"OIDC_CALLBACK": oidc_callback},
+                authMechanismProperties={
+                    "OIDC_CALLBACK": oidc_callback,
+                    "ALLOWED_HOSTS": allowed_hosts,
+                },
             )
             client.admin.command("ping")
             print(f"✓ Connected to Cosmos DB cluster: {cluster_name}")

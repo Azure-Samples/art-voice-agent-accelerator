@@ -48,7 +48,7 @@ resource "azurerm_role_assignment" "keyvault_cardapi_mcp_secrets" {
 # ============================================================================
 
 # Create a MongoDB user for cardapi_mcp with access to the shared Cosmos DB.
-# NOTE: Cosmos DB MongoDB vCore currently only supports assigning the 'dbOwner'
+# NOTE: Cosmos DB MongoDB vCore currently only supports assigning the 'root'
 # role on the 'admin' database for Microsoft Entra ID principals. This grants
 # broader privileges than required for the CardAPI MCP server, which is intended
 # to perform read-only operations only.
@@ -61,12 +61,14 @@ resource "azurerm_role_assignment" "keyvault_cardapi_mcp_secrets" {
 #   (e.g., diagnostic logs or activity logs) to detect and investigate any write
 #   operations performed by this identity.
 # - Where Cosmos DB introduces more granular roles or read-only connection
-#   mechanisms, this configuration SHOULD be updated to remove the 'dbOwner'
+#   mechanisms, this configuration SHOULD be updated to remove the 'root'
 #   assignment or switch to a read-only connection string.
 resource "azapi_resource" "cardapi_mcp_db_user" {
-  type      = "Microsoft.DocumentDB/mongoClusters/users@2025-04-01-preview"
-  name      = azurerm_user_assigned_identity.cardapi_mcp.principal_id
-  parent_id = azapi_resource.mongoCluster.id
+  type                      = "Microsoft.DocumentDB/mongoClusters/users@2025-08-01-preview"
+  name                      = azurerm_user_assigned_identity.cardapi_mcp.principal_id
+  parent_id                 = azapi_resource.mongoCluster.id
+  schema_validation_enabled = false
+  ignore_missing_property   = true
   body = {
     properties = {
       identityProvider = {
@@ -78,19 +80,18 @@ resource "azapi_resource" "cardapi_mcp_db_user" {
       roles = [
         {
           db   = "admin"
-          role = "dbOwner"
+          role = "root"
         }
       ]
     }
   }
+  # Cosmos DB Mongo vCore only supports CREATE and DELETE for Entra ID users;
+  # PUT/update is rejected ("Update operations are not supported for an existing
+  # Microsoft Entra ID user"). Ignore the whole body so re-applies never issue an
+  # update. Role/identity values are static, so nothing is lost. To change them,
+  # taint/recreate the resource.
   lifecycle {
-    ignore_changes = [
-      body["properties"]["identityProvider"]["properties"]["principalType"],
-      output["properties"]["provisioningState"],
-      output["properties"]["roles"],
-      output["id"],
-      output["type"]
-    ]
+    ignore_changes = [body]
   }
 
   depends_on = [azapi_resource.mongoCluster]
@@ -121,7 +122,7 @@ resource "azurerm_container_app" "cardapi_mcp" {
   }
 
   ingress {
-    external_enabled = true  # MCP server exposed for external tool calls
+    external_enabled = true # MCP server exposed for external tool calls
     target_port      = 8080
     traffic_weight {
       percentage      = 100

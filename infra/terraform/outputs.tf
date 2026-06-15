@@ -106,6 +106,7 @@ output "AZURE_COSMOS_CONNECTION_STRING" {
     "/mongodb\\+srv:\\/\\/[^@]+@([^?]+)\\?(.*)$/",
     "mongodb+srv://$1?tls=true&authMechanism=MONGODB-OIDC&retrywrites=false&maxIdleTimeMS=120000"
   )
+  sensitive = true
 }
 
 # Redis
