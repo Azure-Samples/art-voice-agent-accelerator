@@ -643,6 +643,7 @@ class ConversationTurnSpan:
         turn_number: int | None = None,
         transport_type: str | None = None,
         user_intent_preview: str | None = None,
+        start_time_ns: int | None = None,
     ):
         """
         Initialize turn tracking.
@@ -653,6 +654,9 @@ class ConversationTurnSpan:
             turn_number: Sequential turn number (1-indexed).
             transport_type: "acs" or "browser".
             user_intent_preview: Brief preview of user intent (first ~50 chars).
+            start_time_ns: Optional explicit span start time (epoch ns). Use to
+                backdate the turn to when the user started speaking so the span
+                frames the full STT → LLM → TTS pipeline.
         """
         self.turn_id = f"turn_{uuid.uuid4().hex[:8]}"
         self.call_connection_id = call_connection_id
@@ -660,6 +664,7 @@ class ConversationTurnSpan:
         self.turn_number = turn_number
         self.transport_type = transport_type
         self.user_intent_preview = user_intent_preview
+        self.start_time_ns = start_time_ns
 
         self.metrics = TurnMetrics()
         self.span: trace.Span | None = None
@@ -689,6 +694,7 @@ class ConversationTurnSpan:
             f"voice.turn.{turn_label}.total",
             kind=SpanKind.INTERNAL,
             attributes=attrs,
+            start_time=self.start_time_ns,
         )
         self.metrics.turn_start_time = time.perf_counter()
         self._entered = True
@@ -828,6 +834,53 @@ class ConversationTurnSpan:
                 },
             )
 
+    def add_stt_recognition_span(
+        self,
+        *,
+        start_ts: float,
+        end_ts: float | None = None,
+        text: str | None = None,
+        language: str | None = None,
+    ) -> None:
+        """Draw a real STT recognition span as a child of the turn span.
+
+        Renders STT as its own line item on the timeline covering the actual
+        recognition window (user started speaking → final transcript), rather
+        than leaving it as an unexplained gap before the LLM work.
+
+        Args:
+            start_ts: Wall-clock time (time.time) the user started speaking.
+            end_ts: Wall-clock time recognition finalized (defaults to now).
+            text: Recognized transcript (length recorded as an attribute).
+            language: Detected language.
+        """
+        if not self.span or not start_ts:
+            return
+
+        end_ts = end_ts if end_ts is not None else time.time()
+        start_ns = int(start_ts * 1e9)
+        end_ns = int(end_ts * 1e9)
+        if end_ns <= start_ns:
+            return
+
+        attrs: dict[str, Any] = {"stt.latency_ms": round((end_ts - start_ts) * 1000, 1)}
+        if language:
+            attrs["stt.language"] = language
+        if text:
+            attrs["stt.text_length"] = len(text)
+
+        # Parent the STT span under the turn span via context.
+        ctx = trace.set_span_in_context(self.span)
+        stt_span = tracer.start_span(
+            "stt.recognition",
+            context=ctx,
+            kind=SpanKind.INTERNAL,
+            attributes=attrs,
+            start_time=start_ns,
+        )
+        stt_span.set_status(Status(StatusCode.OK))
+        stt_span.end(end_time=end_ns)
+
     def record_llm_first_token(self) -> None:
         """Record when the first LLM token is received."""
         now = time.perf_counter()
@@ -941,3 +994,61 @@ class ConversationTurnSpan:
         """Add custom metadata to the turn span."""
         if self.span:
             self.span.set_attribute(f"turn.metadata.{key}", str(value))
+
+    def record_turn_kpis(
+        self,
+        *,
+        llm_ttft_ms: float | None = None,
+        tts_ttfb_ms: float | None = None,
+        turn_wall_ms: float | None = None,
+        agent_name: str | None = None,
+    ) -> None:
+        """Stamp consolidated turn KPIs onto the headline ``voice.turn.N.total`` span.
+
+        This is the cascade equivalent of the VoiceLive turn-complete annotation:
+        it records the core latency drivers as descriptive span attributes (so they
+        appear directly on the turn in the App Insights timeline) plus a single
+        ``turn.kpi_summary`` event that makes the end-to-end picture easy to scan.
+
+        Args:
+            llm_ttft_ms: LLM time-to-first-token (request -> first streamed token).
+            tts_ttfb_ms: TTS time-to-first-byte / response E2E (turn start -> first audio).
+            turn_wall_ms: Total orchestration wall time for the turn.
+            agent_name: Active agent that produced the response.
+        """
+        if not self.span:
+            return
+
+        # Feed the shared metrics bag so _set_final_metrics emits the standard
+        # turn.* attributes on span exit (TTFT is surfaced as turn.llm_ttfb_ms).
+        if llm_ttft_ms is not None:
+            self.metrics.llm_ttfb_ms = llm_ttft_ms
+        if tts_ttfb_ms is not None:
+            self.metrics.tts_ttfb_ms = tts_ttfb_ms
+            # Headline response E2E (turn start -> first audio byte), queryable as
+            # turn.metadata.response_e2e_ms without relying on wall-clock duration.
+            self.add_metadata("response_e2e_ms", round(tts_ttfb_ms, 1))
+
+        # Descriptive, queryable attributes directly on the turn span.
+        if llm_ttft_ms is not None:
+            self.span.set_attribute("turn.llm_ttft_ms", round(llm_ttft_ms, 1))
+        if tts_ttfb_ms is not None:
+            self.span.set_attribute("turn.tts_ttfb_ms", round(tts_ttfb_ms, 1))
+            self.span.set_attribute("turn.response_e2e_ms", round(tts_ttfb_ms, 1))
+        if turn_wall_ms is not None:
+            self.span.set_attribute("turn.wall_ms", round(turn_wall_ms, 1))
+        if agent_name:
+            self.span.set_attribute("turn.agent_name", agent_name)
+
+        # Single scannable summary event pinned to the turn span.
+        summary_attrs: dict[str, Any] = {}
+        if tts_ttfb_ms is not None:
+            summary_attrs["turn.response_e2e_ms"] = round(tts_ttfb_ms, 1)
+        if llm_ttft_ms is not None:
+            summary_attrs["turn.llm_ttft_ms"] = round(llm_ttft_ms, 1)
+        if turn_wall_ms is not None:
+            summary_attrs["turn.wall_ms"] = round(turn_wall_ms, 1)
+        if agent_name:
+            summary_attrs["turn.agent_name"] = agent_name
+        self.span.add_event("turn.kpi_summary", attributes=summary_attrs)
+
