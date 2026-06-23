@@ -639,7 +639,7 @@ async def tools_list(request: Request) -> Response:
     Used by the backend for dynamic tool discovery.
     """
     tools_data = []
-    for name, tool in mcp._tool_manager._tools.items():
+    for name, tool in (await _list_registered_tools()).items():
         # Extract tool info from FastMCP's internal representation
         tools_data.append({
             "name": name,
@@ -707,13 +707,31 @@ async def tools_get_decline_codes_metadata(request: Request) -> Response:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+async def _list_registered_tools() -> dict[str, Any]:
+    """Return the registered tools using the public FastMCP API.
+
+    FastMCP exposes the supported public async ``get_tools()`` accessor. Older
+    releases stored tools on the private ``_tool_manager._tools`` mapping, which
+    was removed in newer versions (causing AttributeError at runtime). Prefer the
+    public API and fall back to the private attribute only when necessary.
+    """
+    try:
+        return dict(await mcp.get_tools())
+    except AttributeError:
+        # Fallback for older FastMCP releases without a public get_tools().
+        tool_manager = getattr(mcp, "_tool_manager", None)
+        if tool_manager is not None:
+            return dict(getattr(tool_manager, "_tools", {}))
+        return {}
+
+
 @mcp.custom_route("/health", methods=["GET"])
 async def health_check(request: Request) -> Response:
     """Health check endpoint for Container Apps probes.
     
     Returns status, tools_count, and tool_names for MCP startup validation.
     """
-    tools = mcp._tool_manager._tools
+    tools = await _list_registered_tools()
     tool_names = list(tools.keys())
     
     return JSONResponse({
@@ -726,7 +744,7 @@ async def health_check(request: Request) -> Response:
 @mcp.custom_route("/ready", methods=["GET"])
 async def ready_check(request: Request) -> Response:
     """Readiness check endpoint for Container Apps probes."""
-    tools = mcp._tool_manager._tools
+    tools = await _list_registered_tools()
     return JSONResponse({
         "status": "ready",
         "tools_count": len(tools),

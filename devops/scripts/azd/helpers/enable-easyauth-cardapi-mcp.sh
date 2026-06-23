@@ -31,6 +31,14 @@ readonly LOG_IN_BOX="${AZD_LOG_IN_BOX:-false}"
 
 readonly SCRIPT_NAME="$(basename "$0")"
 
+# Well-known first-party public client IDs used by local developer tooling.
+# Pre-authorizing these on the MCP app registration lets DefaultAzureCredential
+# (Azure CLI / azd / PowerShell / Visual Studio) acquire tokens for the API
+# without triggering an interactive admin-consent prompt (AADSTS65001).
+readonly AZURE_CLI_CLIENT_ID="04b07795-8ddb-461a-bbee-02f9e1bf7b46"
+readonly AZURE_POWERSHELL_CLIENT_ID="1950a258-227b-4e31-a9cf-717495945fc2"
+readonly VISUAL_STUDIO_CLIENT_ID="04f0c124-f2bc-4f59-8241-bf6df9866bbd"
+
 # Cloud-specific Token Exchange Audience URIs
 get_token_audience() {
     local cloud="$1"
@@ -259,6 +267,103 @@ create_app_registration() {
     APP_ENDPOINT="$app_endpoint"
     ISSUER="https://login.microsoftonline.com/${tenant_id}/v2.0"
 
+    footer
+}
+
+# ============================================================================
+# Step 1b: Expose a delegated API scope & pre-authorize developer CLIs
+# ============================================================================
+# Without an exposed OAuth2 scope, a client (e.g. the backend in local dev using
+# DefaultAzureCredential -> Azure CLI) requesting "<app-id>/.default" has nothing
+# to consent to and Entra returns AADSTS65001. Exposing a "user_impersonation"
+# scope and pre-authorizing the well-known developer CLI client IDs makes those
+# tokens issuable without an interactive admin-consent prompt. The deployed
+# backend (managed identity, client-credentials) is unaffected by this.
+
+configure_api_exposure() {
+    header "🧩 Step 1b: Expose API scope & pre-authorize dev CLIs"
+
+    # Microsoft Graph operates on the application's object id, not the appId.
+    local obj_id
+    obj_id=$(az ad app show --id "$APP_ID" --query id -o tsv 2>/dev/null || echo "")
+    if [[ -z "$obj_id" ]]; then
+        warn "Could not resolve app object id; skipping API exposure"
+        footer
+        return 0
+    fi
+
+    # Ensure the Application ID URI api://<app-id> exists (idempotent).
+    local app_uri="api://${APP_ID}"
+    log "Application ID URI: $app_uri"
+    az ad app update --id "$APP_ID" --identifier-uris "$app_uri" --output none 2>/dev/null || true
+
+    # Reuse the existing user_impersonation scope id if present, else mint one.
+    local scope_id
+    scope_id=$(az ad app show --id "$APP_ID" \
+        --query "api.oauth2PermissionScopes[?value=='user_impersonation'].id | [0]" \
+        -o tsv 2>/dev/null || echo "")
+    if [[ -z "$scope_id" || "$scope_id" == "null" ]]; then
+        scope_id=$(uuidgen | tr '[:upper:]' '[:lower:]')
+        log "Minting new 'user_impersonation' scope: $scope_id"
+    else
+        info "Reusing existing 'user_impersonation' scope: $scope_id"
+    fi
+
+    # The scope definition is reused across both PATCH calls below.
+    local scope_block="{
+        \"id\": \"${scope_id}\",
+        \"value\": \"user_impersonation\",
+        \"type\": \"User\",
+        \"isEnabled\": true,
+        \"adminConsentDisplayName\": \"Access CardAPI MCP\",
+        \"adminConsentDescription\": \"Allow the application to access the CardAPI MCP server on behalf of the signed-in user.\",
+        \"userConsentDisplayName\": \"Access CardAPI MCP\",
+        \"userConsentDescription\": \"Allow the app to access the CardAPI MCP server on your behalf.\"
+    }"
+
+    # PATCH 1: create/ensure the scope FIRST. Graph validates
+    # preAuthorizedApplications.delegatedPermissionIds against the scopes that
+    # ALREADY exist on the app, so the scope must be committed before it can be
+    # referenced (otherwise: "Permission Id cannot be found in the AppPermissions
+    # sets"). PATCH replaces the whole 'api' object, so each call sends the scope.
+    log "Exposing 'user_impersonation' scope..."
+    az rest \
+        --method PATCH \
+        --uri "https://graph.microsoft.com/v1.0/applications/${obj_id}" \
+        --headers "Content-Type=application/json" \
+        --body "{ \"api\": { \"oauth2PermissionScopes\": [${scope_block}] } }" \
+        --output none
+
+    # PATCH 2: now pre-authorize the dev CLIs against the committed scope. Retry a
+    # couple of times to absorb brief directory replication lag.
+    log "Pre-authorizing Azure CLI / azd / PowerShell / Visual Studio..."
+    local attempt
+    for attempt in 1 2 3; do
+        if az rest \
+            --method PATCH \
+            --uri "https://graph.microsoft.com/v1.0/applications/${obj_id}" \
+            --headers "Content-Type=application/json" \
+            --body "{
+                \"api\": {
+                    \"oauth2PermissionScopes\": [${scope_block}],
+                    \"preAuthorizedApplications\": [
+                        {\"appId\": \"${AZURE_CLI_CLIENT_ID}\", \"delegatedPermissionIds\": [\"${scope_id}\"]},
+                        {\"appId\": \"${AZURE_POWERSHELL_CLIENT_ID}\", \"delegatedPermissionIds\": [\"${scope_id}\"]},
+                        {\"appId\": \"${VISUAL_STUDIO_CLIENT_ID}\", \"delegatedPermissionIds\": [\"${scope_id}\"]}
+                    ]
+                }
+            }" \
+            --output none 2>/dev/null; then
+            break
+        fi
+        if [[ "$attempt" -eq 3 ]]; then
+            fail "Failed to pre-authorize developer CLIs after $attempt attempts"
+        fi
+        log "Scope not yet propagated, retrying ($attempt/3)..."
+        sleep 3
+    done
+
+    success "Exposed 'user_impersonation' and pre-authorized developer CLIs"
     footer
 }
 
@@ -512,6 +617,7 @@ main() {
     footer
 
     create_app_registration
+    configure_api_exposure
     configure_federated_credential
     configure_container_app_secret
     enable_container_app_auth
