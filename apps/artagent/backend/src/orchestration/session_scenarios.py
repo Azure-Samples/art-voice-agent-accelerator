@@ -227,26 +227,6 @@ def _load_scenarios_from_redis(session_id: str) -> dict[str, ScenarioConfig]:
         return {}
 
 
-def _load_scenario_from_redis(session_id: str) -> ScenarioConfig | None:
-    """
-    Load scenario config from Redis via MemoManager.
-    
-    Returns the active ScenarioConfig if found, None otherwise.
-    Delegates to _load_scenarios_from_redis for actual loading.
-    """
-    scenarios = _load_scenarios_from_redis(session_id)
-    if not scenarios:
-        return None
-    
-    # Return the active scenario
-    active_name = _active_scenario.get(session_id)
-    if active_name and active_name in scenarios:
-        return scenarios[active_name]
-    
-    # Return first scenario as fallback
-    return next(iter(scenarios.values()), None)
-
-
 def _ensure_session_loaded(session_id: str, *, force: bool = False) -> None:
     """
     Ensure all scenarios for a session are merged from Redis into memory.
@@ -259,9 +239,9 @@ def _ensure_session_loaded(session_id: str, *, force: bool = False) -> None:
     Merge strategy: Redis data is the base, in-memory data overrides
     (in-memory is considered more recent).
     """
-    if not force and session_id in _session_scenarios:
-        last_load = _session_load_times.get(session_id, 0)
-        if (time.monotonic() - last_load) < _REDIS_LOAD_COOLDOWN_S:
+    if not force:
+        last_load = _session_load_times.get(session_id)
+        if last_load is not None and (time.monotonic() - last_load) < _REDIS_LOAD_COOLDOWN_S:
             return
 
     loaded = _load_scenarios_from_redis(session_id)
@@ -281,67 +261,43 @@ def _ensure_session_loaded(session_id: str, *, force: bool = False) -> None:
 def get_session_scenario(session_id: str, scenario_name: str | None = None) -> ScenarioConfig | None:
     """
     Get dynamic scenario for a session.
-    
-    First checks in-memory cache, then falls back to Redis if not found.
-    Uses case-insensitive lookup for scenario_name.
-    
+
+    Read-through with cooldown caching: the first lookup merges Redis state into
+    memory, then serves from memory for the cooldown window (negative results are
+    cached, so a session with no custom scenarios does not re-hit Redis on every
+    call). Uses case-insensitive lookup for scenario_name; returns the active
+    scenario when no name is given.
+
     Args:
         session_id: The session ID
         scenario_name: Optional scenario name. If not provided, returns the active scenario.
-    
+
     Returns:
         The ScenarioConfig if found, None otherwise.
     """
+    _ensure_session_loaded(session_id)
     session_scenarios = _session_scenarios.get(session_id, {})
-    
-    # Check in-memory cache first
-    if session_scenarios:
-        if scenario_name:
-            # Case-insensitive lookup
-            _, result = find_scenario_by_name(session_scenarios, scenario_name)
-            if result:
-                return result
-            # Not found in current cache; force a Redis merge and try once more.
-            # This handles stale/partial worker memory when scenarios were
-            # created or updated on a different worker.
-            _ensure_session_loaded(session_id)
-            refreshed = _session_scenarios.get(session_id, {})
-            _, result = find_scenario_by_name(refreshed, scenario_name)
-            if result:
-                return result
-        else:
-            # Return active scenario if set, otherwise first scenario
-            active_key = _active_scenario.get(session_id)
-            if active_key and active_key in session_scenarios:
-                return session_scenarios[active_key]
-            return next(iter(session_scenarios.values()), None)
-    
-    # Not in memory - try loading from Redis
-    redis_scenario = _load_scenario_from_redis(session_id)
-    if redis_scenario:
-        if scenario_name is None:
-            return redis_scenario
-        # Case-insensitive compare
-        if scenario_key(redis_scenario.name) == scenario_key(scenario_name):
-            return redis_scenario
-    
-    return None
+    if not session_scenarios:
+        return None
+
+    if scenario_name:
+        # Case-insensitive lookup
+        _, result = find_scenario_by_name(session_scenarios, scenario_name)
+        return result
+
+    # Return active scenario if set, otherwise first scenario
+    active_key = _active_scenario.get(session_id)
+    if active_key and active_key in session_scenarios:
+        return session_scenarios[active_key]
+    return next(iter(session_scenarios.values()), None)
 
 
 def get_session_scenarios(session_id: str) -> dict[str, ScenarioConfig]:
     """
-    Get all dynamic scenarios for a session.
-    
-    Falls back to Redis if memory cache is empty.
+    Get all dynamic scenarios for a session (read-through, cooldown-cached).
     """
-    scenarios = _session_scenarios.get(session_id, {})
-    
-    # Fall back to Redis if memory cache is empty
-    if not scenarios:
-        # Use the multi-scenario loader to get all scenarios
-        scenarios = _load_scenarios_from_redis(session_id)
-    
-    return dict(scenarios)
+    _ensure_session_loaded(session_id)
+    return dict(_session_scenarios.get(session_id, {}))
 
 
 def get_active_scenario_name(session_id: str) -> str | None:
@@ -358,12 +314,9 @@ def get_active_scenario_name(session_id: str) -> str | None:
     if active_name and session_scenarios and active_name in session_scenarios:
         return active_name
 
-    # Otherwise refresh from Redis and return the reconciled active key.
-    scenario = _load_scenario_from_redis(session_id)
-    if scenario:
-        return _active_scenario.get(session_id)
-
-    return active_name
+    # Otherwise refresh (cooldown-cached) from Redis and return the reconciled key.
+    _ensure_session_loaded(session_id)
+    return _active_scenario.get(session_id) or active_name
 
 
 def _serialize_scenario(scenario: ScenarioConfig) -> dict:
@@ -656,13 +609,13 @@ def set_session_scenario(session_id: str, scenario: ScenarioConfig) -> None:
     _persist_scenario_to_redis(session_id, scenario)
 
     logger.info(
-        "Session scenario set | session=%s scenario=%s start_agent=%s agents=%d handoffs=%d adapter_updated=%s",
+        "session.scenario.set session=%s scenario=%s start_agent=%s agents=%d handoffs=%d adapter=%s",
         session_id,
         scenario.name,
         scenario.start_agent,
         len(scenario.agents),
         len(scenario.handoffs),
-        adapter_updated,
+        "updated" if adapter_updated else "unchanged",
     )
 
 
@@ -710,13 +663,13 @@ async def set_session_scenario_async(session_id: str, scenario: ScenarioConfig) 
     await _persist_scenario_to_redis_async(session_id, scenario)
 
     logger.info(
-        "Session scenario set (async) | session=%s scenario=%s start_agent=%s agents=%d handoffs=%d adapter_updated=%s",
+        "session.scenario.set session=%s mode=async scenario=%s start_agent=%s agents=%d handoffs=%d adapter=%s",
         session_id,
         scenario.name,
         scenario.start_agent,
         len(scenario.agents),
         len(scenario.handoffs),
-        adapter_updated,
+        "updated" if adapter_updated else "unchanged",
     )
 
 

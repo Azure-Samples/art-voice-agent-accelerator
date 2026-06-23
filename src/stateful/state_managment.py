@@ -402,8 +402,10 @@ class MemoManager:
         if ttl_seconds:
             redis_mgr.redis_client.expire(key, ttl_seconds)
         logger.info(
-            f"Persisted session {self.session_id} – "
-            f"histories per agent: {[f'{a}: {len(h)}' for a, h in self.histories.items()]}, ctx_keys={list(self.context.keys())}"
+            "session.persist session=%s mode=sync history=[%s] ctx=%d",
+            self.session_id,
+            ", ".join(f"{a}:{len(h)}" for a, h in self.histories.items()),
+            len(self.context),
         )
 
     async def persist_to_redis_async(
@@ -454,8 +456,10 @@ class MemoManager:
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(None, redis_mgr.redis_client.expire, key, ttl_seconds)
             logger.info(
-                f"Persisted session {self.session_id} async – "
-                f"histories per agent: {[f'{a}: {len(h)}' for a, h in self.histories.items()]}, ctx_keys={list(self.context.keys())}"
+                "session.persist session=%s mode=async history=[%s] ctx=%d",
+                self.session_id,
+                ", ".join(f"{a}:{len(h)}" for a, h in self.histories.items()),
+                len(self.context),
             )
             return True
         except asyncio.CancelledError:

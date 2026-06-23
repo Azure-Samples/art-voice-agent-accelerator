@@ -177,6 +177,38 @@ def _persist_agents_to_redis(session_id: str) -> None:
         logger.warning("Failed to persist session agents to Redis: %s", e)
 
 
+async def persist_session_agents_to_redis(session_id: str) -> None:
+    """
+    Persist all in-memory session agents for a session to Redis, awaiting the write.
+
+    Use this from async contexts (e.g., FastAPI endpoints) to guarantee the
+    session agent is durable in Redis before returning a response. This prevents
+    data loss if the process restarts between the write and the next VoiceLive
+    WebSocket connection.
+    """
+    if not _redis_manager:
+        return
+
+    try:
+        from src.stateful.state_managment import MemoManager
+
+        memo = MemoManager.from_redis(session_id, _redis_manager)
+        all_agents_data = {
+            name: _serialize_agent(agent)
+            for name, agent in _session_agents.get(session_id, {}).items()
+        }
+        memo.set_corememory(AGENTS_KEY_ALL, all_agents_data)
+        await memo.persist_to_redis_async(_redis_manager)
+        _session_load_times[session_id] = time.monotonic()
+        logger.info(
+            "session.agents.sync session=%s agents=%d -> redis",
+            session_id,
+            len(all_agents_data),
+        )
+    except Exception as e:
+        logger.warning("Failed to persist session agents to Redis (sync): %s", e)
+
+
 def _log_persistence_result(task) -> None:
     """Callback to log persistence task result."""
     if task.cancelled():
@@ -225,18 +257,24 @@ def _ensure_session_loaded(session_id: str, *, force: bool = False) -> None:
     """
     Ensure session agents are merged from Redis into memory.
 
-    Skips the Redis round-trip when the session was loaded within the last
-    ``_REDIS_LOAD_COOLDOWN_S`` seconds unless *force* is True.
+    Read-through cache with NEGATIVE caching: after one load the result is cached
+    regardless of whether any agents were found, and the Redis round-trip is
+    skipped for ``_REDIS_LOAD_COOLDOWN_S`` seconds. This stops a session with no
+    custom agents (the common case) from re-hitting Redis on every lookup. A
+    worker re-syncs after the cooldown to pick up agents created on other workers.
     """
     if not _redis_manager:
         return
-    if not force and session_id in _session_agents and _session_agents[session_id]:
-        last_load = _session_load_times.get(session_id, 0)
-        if (time.monotonic() - last_load) < _REDIS_LOAD_COOLDOWN_S:
+
+    if not force:
+        last_load = _session_load_times.get(session_id)
+        if last_load is not None and (time.monotonic() - last_load) < _REDIS_LOAD_COOLDOWN_S:
             return
 
     _load_agents_from_redis(session_id)
     _session_load_times[session_id] = time.monotonic()
+    # Cache the (possibly empty) result so negative lookups are not re-read.
+    _session_agents.setdefault(session_id, {})
 
 
 def _clear_agents_from_redis(session_id: str) -> None:
@@ -277,17 +315,13 @@ def get_session_agent(session_id: str, agent_name: str | None = None) -> Unified
     Returns:
         The UnifiedAgent if found, None otherwise.
     """
-    # Merge any Redis-persisted agents into memory (survives reloads / multi-worker).
+    # Read-through (cooldown-cached, negative results cached) merge of any
+    # Redis-persisted agents into memory — survives reloads / multi-worker.
     _ensure_session_loaded(session_id)
 
     session_agents = _session_agents.get(session_id, {})
     if not session_agents:
-        # Force one Redis read in case the cooldown skipped the merge above
-        # and this worker simply has no in-memory copy yet.
-        _ensure_session_loaded(session_id, force=True)
-        session_agents = _session_agents.get(session_id, {})
-        if not session_agents:
-            return None
+        return None
 
     if agent_name:
         # Use case-insensitive lookup
@@ -340,12 +374,12 @@ def set_session_agent(session_id: str, agent: UnifiedAgent, set_active: bool = F
             logger.warning("Failed to update adapter: %s", e)
 
     logger.info(
-        "Session agent set | session=%s agent=%s set_active=%s voice=%s adapter_updated=%s",
+        "session.agent.set session=%s agent=%s active=%s voice=%s adapter=%s",
         session_id,
         agent.name,
         set_active,
-        agent.voice.name if agent.voice else None,
-        adapter_updated,
+        agent.voice.name if agent.voice else "—",
+        "updated" if adapter_updated else "unchanged",
     )
 
 
@@ -412,4 +446,5 @@ __all__ = [
     "remove_session_agent",
     "list_session_agents",
     "list_session_agents_by_session",
+    "persist_session_agents_to_redis",
 ]
