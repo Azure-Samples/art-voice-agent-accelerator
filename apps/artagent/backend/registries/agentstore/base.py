@@ -276,6 +276,65 @@ class ModelConfig:
         return result
 
 
+# Valid Voice Live BYOM (Bring Your Own Model) profile modes. These map to the
+# `profile` query parameter on the VoiceLive WebSocket connect() call.
+# See: https://learn.microsoft.com/azure/ai-services/speech-service/how-to-bring-your-own-model
+VOICELIVE_BYOM_MODES = (
+    "byom-azure-openai-realtime",
+    "byom-azure-openai-chat-completion",
+    "byom-foundry-anthropic-messages",
+)
+
+
+@dataclass
+class VoiceLiveBYOMConfig:
+    """Per-agent Voice Live BYOM (Bring Your Own Model) configuration.
+
+    BYOM lets a VoiceLive session use a model deployment you brought yourself
+    (a fine-tuned Azure OpenAI model, an Anthropic Claude / Grok / model-router
+    deployment, a PTU deployment, etc.) instead of a VoiceLive-managed model.
+
+    It is wired purely at connect() time via a WebSocket query param — the agent's
+    ``voicelive_model.deployment_id`` is still the model name (selected from the
+    deployments in the connected Foundry resource); this config only adds the
+    ``profile`` query param:
+
+        profile=<mode>
+
+    When ``mode`` is None/empty, BYOM is disabled and the connection uses the
+    default VoiceLive managed behavior (no profile param sent).
+    """
+
+    # BYOM profile mode (one of VOICELIVE_BYOM_MODES) or None to disable.
+    mode: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> VoiceLiveBYOMConfig | None:
+        """Create a VoiceLiveBYOMConfig from a dict, or None when unset/disabled."""
+        if not data:
+            return None
+        mode = data.get("mode") or data.get("byom") or None
+        if isinstance(mode, str):
+            mode = mode.strip() or None
+        if not mode:
+            return None
+        return cls(mode=mode)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a YAML/JSON-friendly dict (omits empty fields)."""
+        return {"mode": self.mode} if self.mode else {}
+
+    def to_query(self) -> dict[str, str] | None:
+        """Build the VoiceLive connect() query params, or None when disabled.
+
+        Returns ``{"profile": <mode>}`` so it can be passed straight to
+        ``connect(..., query=...)``.
+        """
+        if not self.mode:
+            return None
+        return {"profile": self.mode}
+
+
 @dataclass
 class SpeechConfig:
     """
@@ -372,6 +431,11 @@ class UnifiedAgent:
     # Mode-specific model overrides (if both are set, orchestrator picks)
     cascade_model: ModelConfig | None = None
     voicelive_model: ModelConfig | None = None
+
+    # Voice Live BYOM (Bring Your Own Model) — opt-in, VoiceLive mode only.
+    # When set, adds the `profile` (and optional `foundry-resource-override`)
+    # query params at connect() time. None = default managed VoiceLive behavior.
+    byom: VoiceLiveBYOMConfig | None = None
 
     # ─────────────────────────────────────────────────────────────────
     # Voice Settings (TTS)
@@ -687,6 +751,17 @@ class UnifiedAgent:
 
         # Fall back to default model
         return self.model
+
+    def get_byom_query(self) -> dict[str, str] | None:
+        """Return the VoiceLive BYOM connect() query params, or None when disabled.
+
+        Maps the agent's ``byom`` config to ``{"profile": <mode>[,
+        "foundry-resource-override": <res>]}`` for ``connect(..., query=...)``.
+        Only relevant in VoiceLive mode.
+        """
+        if self.byom is None:
+            return None
+        return self.byom.to_query()
 
     # ═══════════════════════════════════════════════════════════════════
     # CONVENIENCE PROPERTIES
@@ -1014,7 +1089,7 @@ class UnifiedAgent:
             kind=SpanKind.INTERNAL,
             attributes={
                 "component": "voicelive",
-                "ai.session.id": session_id or "",
+                "ai.user.id": session_id or "",
                 "gen_ai.agent.name": self.name,
                 "gen_ai.agent.description": self.description or "",
             },

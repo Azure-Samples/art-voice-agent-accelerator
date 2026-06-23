@@ -24,6 +24,7 @@ from apps.artagent.backend.registries.agentstore.base import (
     SpeechConfig,
     UnifiedAgent,
     VoiceConfig,
+    VoiceLiveBYOMConfig,
 )
 from apps.artagent.backend.src.orchestration.naming import find_agent_by_name
 from utils.ml_logging import get_logger
@@ -193,6 +194,7 @@ def load_agent(
         model=ModelConfig.from_dict(model_raw),
         voicelive_model=ModelConfig.from_dict(voicelive_model_raw) if voicelive_model_raw else None,
         cascade_model=ModelConfig.from_dict(cascade_model_raw) if cascade_model_raw else None,
+        byom=VoiceLiveBYOMConfig.from_dict(raw.get("byom")),
         voice=VoiceConfig.from_dict(voice_raw),
         speech=SpeechConfig.from_dict(speech_raw),
         session=session_raw,

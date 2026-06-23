@@ -50,21 +50,34 @@ import {
   toMs,
 } from '../utils/session.js';
 import logger from '../utils/logger.js';
+import { fetchFoundryModels, deriveModelOptions, MANAGED_VOICELIVE_MODELS } from '../utils/foundryModels.js';
 
 const STREAM_MODE_STORAGE_KEY = 'artagent.streamingMode';
 const STREAM_MODE_FALLBACK = 'voice_live';
 const REALTIME_STREAM_MODE_STORAGE_KEY = 'artagent.realtimeStreamingMode';
 const REALTIME_STREAM_MODE_FALLBACK = 'realtime';
 
-// Model presets for the Quick Tune popover (mirrors the full Agent Builder).
+// Cascade model presets for the Quick Tune popover (fallback when the live
+// deployment list is unavailable). VoiceLive uses MANAGED_VOICELIVE_MODELS
+// (managed) or the live deployments (BYOM) instead.
 const CASCADE_MODEL_PRESETS = [
   'gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4',
   'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'o3-mini', 'o3', 'o1',
 ];
-const VOICELIVE_MODEL_PRESETS = [
-  'gpt-realtime', 'gpt-realtime-mini', 'gpt-4o', 'gpt-4o-mini', 'gpt-4.1',
-  'gpt-4.1-mini', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat',
-  'phi4-mm-realtime', 'phi4-mini',
+// Voice Live BYOM (Bring Your Own Model) profile modes (VoiceLive only). Empty =
+// managed VoiceLive (no profile sent). Mirrors the full Agent Builder.
+const BYOM_MODE_OPTIONS = [
+  { value: '', label: 'Off — managed VoiceLive' },
+  { value: 'byom-azure-openai-realtime', label: 'Azure OpenAI Realtime' },
+  { value: 'byom-azure-openai-chat-completion', label: 'Azure OpenAI / Foundry Chat Completion' },
+  { value: 'byom-foundry-anthropic-messages', label: 'Foundry Anthropic Messages (preview)' },
+];
+// Input transcription models for VoiceLive (mirrors the full Agent Builder).
+const TRANSCRIPTION_MODEL_PRESETS = [
+  { value: 'azure-speech', label: 'Azure Speech' },
+  { value: 'mai-transcribe-1.5', label: 'MAI-Transcribe 1.5' },
+  { value: 'gpt-4o-transcribe', label: 'GPT-4o Transcribe' },
+  { value: 'whisper-1', label: 'Whisper-1' },
 ];
 // VoiceLive arch: 'realtime' models are native speech-to-speech; everything else
 // runs cascaded STT→LLM→TTS inside VoiceLive.
@@ -1064,6 +1077,79 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
     ]);
   }, [setMessages]);
 
+  // ── Agent update toast (bottom-left) ──────────────────────────────────────
+  // Transient popup summarizing what changed, on which agent, in which scenario,
+  // whenever an agent is created/updated via the builders or Quick Tune.
+  const [agentUpdateToast, setAgentUpdateToast] = useState(null);
+  const agentUpdateToastTimer = useRef(null);
+
+  const formatVoiceShort = useCallback((v) => {
+    if (!v) return '—';
+    return String(v)
+      .replace(/^[a-z]{2}-[A-Z]{2}-/, '')
+      .replace(/MultilingualNeural$/i, '')
+      .replace(/Neural$/i, '');
+  }, []);
+
+  const notifyAgentUpdate = useCallback((agentConfig, action = 'updated') => {
+    if (!agentConfig?.name) return;
+    const name = agentConfig.name;
+    const scenarioName =
+      activeScenarioData?.label
+      || sessionScenarioConfig?.active_scenario
+      || activeScenarioKey
+      || 'No scenario';
+
+    const newModel =
+      agentConfig.cascade_model?.deployment_id || agentConfig.model?.deployment_id || null;
+    const newVoice = agentConfig.voice?.name || null;
+    const hasTools = Array.isArray(agentConfig.tools);
+    const newTools = hasTools ? agentConfig.tools.length : null;
+
+    // Diff against the inventory snapshot captured at the start of this handler
+    // (state updates are async, so this still holds the pre-update values).
+    const prior = agentInventory?.agents?.find((a) => a.name === name) || null;
+    const changes = [];
+    if (prior) {
+      if (prior.model && newModel && prior.model !== newModel) {
+        changes.push(`Model ${prior.model} → ${newModel}`);
+      } else if (!prior.model && newModel) {
+        changes.push(`Model → ${newModel}`);
+      }
+      if ((prior.voice || null) !== (newVoice || null)) {
+        changes.push(`Voice ${formatVoiceShort(prior.voice)} → ${formatVoiceShort(newVoice)}`);
+      }
+      if (hasTools) {
+        const priorTools = prior.toolCount ?? (prior.tools?.length ?? 0);
+        if (priorTools !== newTools) {
+          changes.push(`Tools ${priorTools} → ${newTools}`);
+        }
+      }
+      if ((prior.description || '') !== (agentConfig.description || '')) {
+        changes.push('Description updated');
+      }
+    }
+    if (changes.length === 0) {
+      // No prior snapshot or no detectable diff — show the salient settings.
+      if (newModel) changes.push(`Model ${newModel}`);
+      if (newVoice) changes.push(`Voice ${formatVoiceShort(newVoice)}`);
+      if (hasTools) changes.push(`${newTools} tool${newTools === 1 ? '' : 's'}`);
+    }
+
+    setAgentUpdateToast({ name, scenarioName, changes, action, ts: Date.now() });
+    if (agentUpdateToastTimer.current) clearTimeout(agentUpdateToastTimer.current);
+    agentUpdateToastTimer.current = setTimeout(() => setAgentUpdateToast(null), 8000);
+  }, [activeScenarioData, sessionScenarioConfig, activeScenarioKey, agentInventory, formatVoiceShort]);
+
+  const dismissAgentUpdateToast = useCallback(() => {
+    if (agentUpdateToastTimer.current) clearTimeout(agentUpdateToastTimer.current);
+    setAgentUpdateToast(null);
+  }, []);
+
+  useEffect(() => () => {
+    if (agentUpdateToastTimer.current) clearTimeout(agentUpdateToastTimer.current);
+  }, []);
+
   const validateSessionId = useCallback(
     async (id) => {
       if (!id) return false;
@@ -1164,6 +1250,10 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
     // Models (per mode)
     cascade_model: '',
     voicelive_model: '',
+    // VoiceLive input transcription (STT) model
+    transcription_model: '',
+    // Voice Live BYOM (Bring Your Own Model) — VoiceLive only, opt-in
+    byom_mode: '',
   });
   const [liveSettingsBusy, setLiveSettingsBusy] = useState(false);
   const [liveSettingsLoading, setLiveSettingsLoading] = useState(false);
@@ -1173,6 +1263,10 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
   const [liveSettingsMode, setLiveSettingsMode] = useState('voicelive');
   // Snapshot of the current resolved agent config (base for the PUT merge).
   const liveBaseConfigRef = useRef(null);
+  // Live model deployments from the connected Foundry resource ({cascade, voicelive}),
+  // used to populate the Quick Tune model dropdown (esp. for BYOM). null = not
+  // loaded / query failed → fall back to the static presets.
+  const [liveModelOptions, setLiveModelOptions] = useState(null);
   const [builderInitialMode, setBuilderInitialMode] = useState('agents');
   // When true, the scenario builder opens in "create new" mode (blank form, POST endpoint).
   // When false, it opens in "edit existing" mode with the active custom scenario pre-filled.
@@ -1950,6 +2044,11 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
     }
   }, [recording]);
 
+  // Always-current ref so setTimeout callbacks in applyLiveSettings get the latest
+  // handleMicToggle (avoids stale-closure bug where the 2nd call sees recording=true).
+  const handleMicToggleRef = useRef(handleMicToggle);
+  useEffect(() => { handleMicToggleRef.current = handleMicToggle; }, [handleMicToggle]);
+
   const terminateACSCall = useCallback(async () => {
     if (!callActive && !currentCallId) {
       stopRecognitionRef.current?.();
@@ -2024,6 +2123,13 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
         fetch(`${API_BASE_URL}/api/v1/agent-builder/templates?session_id=${encodeURIComponent(sessionId)}`).catch(() => null),
       ]);
 
+      // Live model deployments from the connected Foundry resource (for the model
+      // dropdown — important for BYOM, where the deployment is your own). Never
+      // throws; null on failure → static presets remain the fallback.
+      fetchFoundryModels().then((live) => {
+        setLiveModelOptions(live ? deriveModelOptions(live.models) : null);
+      });
+
       if (voicesRes && voicesRes.ok) {
         const vd = await voicesRes.json();
         setLiveVoices(Array.isArray(vd.voices) ? vd.voices : []);
@@ -2061,6 +2167,8 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
         pitch: parsePercent(voice.pitch),
         cascade_model: base?.cascade_model?.deployment_id || base?.model?.deployment_id || s.cascade_model,
         voicelive_model: base?.voicelive_model?.deployment_id || s.voicelive_model,
+        transcription_model: session.input_audio_transcription_settings?.model || s.transcription_model,
+        byom_mode: base?.byom?.mode || '',
       }));
     } catch (e) {
       appendLog(`⚠️ Failed to load current settings: ${e.message}`);
@@ -2100,10 +2208,15 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
       ? (ls.voicelive_model && ls.voicelive_model !== baseVoiceliveModel)
       : (ls.cascade_model && ls.cascade_model !== baseCascadeModel);
 
+    // BYOM is bound at connect() time (a WebSocket query param), so any BYOM
+    // change requires the persist + reconnect path — it can't be pushed live.
+    const baseByomMode = base.byom?.mode || '';
+    const byomChanged = isVoiceLive && (ls.byom_mode || '') !== baseByomMode;
+
     setLiveSettingsBusy(true);
     try {
-      // Fast path: VoiceLive active, only VAD/voice tweaks (no model change) → instant push.
-      if (isVoiceLive && modeMatchesActive && !modelChanged) {
+      // Fast path: VoiceLive active, only VAD/voice tweaks (no model/BYOM change) → instant push.
+      if (isVoiceLive && modeMatchesActive && !modelChanged && !byomChanged) {
         const res = await fetch(
           `${API_BASE_URL}/api/v1/agent-builder/session/${encodeURIComponent(sessionId)}/live-settings`,
           {
@@ -2128,6 +2241,10 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
         } else {
           appendLog('💾 Saved; will apply on next connect.');
         }
+        notifyAgentUpdate(
+          { name: resolvedAgentName, voice: { name: ls.voice_name } },
+          'updated',
+        );
         setShowLiveSettings(false);
         return;
       }
@@ -2153,6 +2270,12 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
           ...(base.voicelive_model || {}),
           deployment_id: ls.voicelive_model || baseVoiceliveModel || 'gpt-realtime',
         },
+        // BYOM is opt-in: only send a profile when a mode is selected.
+        byom: ls.byom_mode
+          ? {
+              mode: ls.byom_mode,
+            }
+          : null,
         voice: {
           ...(base.voice || {}),
           name: ls.voice_name || base.voice?.name || 'en-US-AvaMultilingualNeural',
@@ -2175,7 +2298,12 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
           silence_duration_ms: Math.round(ls.silence_duration_ms),
           prefix_padding_ms: Math.round(ls.prefix_padding_ms),
           tool_choice: base.session?.tool_choice || 'auto',
-          input_audio_transcription_settings: base.session?.input_audio_transcription_settings || null,
+          input_audio_transcription_settings: (ls.transcription_model || base.session?.input_audio_transcription_settings)
+            ? {
+                ...(base.session?.input_audio_transcription_settings || {}),
+                model: ls.transcription_model || base.session?.input_audio_transcription_settings?.model,
+              }
+            : null,
         },
         template_vars: base.template_vars || null,
       };
@@ -2193,6 +2321,7 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
         throw new Error(err.detail || `HTTP ${res.status}`);
       }
       appendLog('💾 Settings saved to live agent.');
+      notifyAgentUpdate(payload, 'updated');
 
       if (callActive) {
         appendLog('🔄 Restarting call to apply changes…');
@@ -2201,7 +2330,7 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
       } else if (recording) {
         appendLog('🔄 Reconnecting stream to apply changes…');
         handleMicToggle();
-        setTimeout(() => handleMicToggle(), 600);
+        setTimeout(() => handleMicToggleRef.current(), 600);
       } else {
         appendLog('💾 Saved; will apply on next connect.');
       }
@@ -2223,6 +2352,7 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
     handlePhoneButtonClick,
     handleMicToggle,
     appendLog,
+    notifyAgentUpdate,
   ]);
 
   const publishMetricsSummary = useCallback(
@@ -4936,10 +5066,40 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
                     : (base.cascade_model?.deployment_id || base.model?.deployment_id || '');
                   const chosenModel = isVoiceLive ? liveSettings.voicelive_model : liveSettings.cascade_model;
                   const modelChanged = chosenModel && chosenModel !== baseModel;
+                  const baseByomModeHint = base.byom?.mode || '';
+                  const byomChangedHint = isVoiceLive && (liveSettings.byom_mode || '') !== baseByomModeHint;
                   const modeMatchesActive = (selectedStreamingMode === 'voice_live') === isVoiceLive;
-                  // Instant only when VoiceLive is the active stream and no model change.
-                  const willReconnect = !(isVoiceLive && modeMatchesActive) || modelChanged;
-                  const modelPresets = isVoiceLive ? VOICELIVE_MODEL_PRESETS : CASCADE_MODEL_PRESETS;
+                  // Instant only when VoiceLive is the active stream and no model/BYOM change.
+                  const willReconnect = !(isVoiceLive && modeMatchesActive) || modelChanged || byomChangedHint;
+                  // Model dropdown source:
+                  //   • Cascade → your live deployments (fallback static presets).
+                  //   • VoiceLive + BYOM ON → your live deployments (your own model).
+                  //   • VoiceLive + BYOM OFF → managed Voice Live models (pricing tiers).
+                  const byomOn = isVoiceLive && Boolean(liveSettings.byom_mode);
+                  const liveModeList = isVoiceLive ? liveModelOptions?.voicelive : liveModelOptions?.cascade;
+                  let modelPresets;
+                  let modelSourceLabel = '';
+                  let usingManaged = false;
+                  if (isVoiceLive && !byomOn) {
+                    modelPresets = MANAGED_VOICELIVE_MODELS.map((m) => m.id);
+                    modelSourceLabel = ' · managed Voice Live';
+                    usingManaged = true;
+                  } else if (liveModeList && liveModeList.length) {
+                    modelPresets = liveModeList.map((o) => o.id);
+                    modelSourceLabel = ' · connected Foundry resource';
+                  } else {
+                    modelPresets = isVoiceLive
+                      ? MANAGED_VOICELIVE_MODELS.map((m) => m.id)
+                      : CASCADE_MODEL_PRESETS;
+                    usingManaged = isVoiceLive;
+                  }
+                  // For the managed Voice Live list, suffix each option with its
+                  // pricing tier (pro/basic/lite) — matches the full Agent Builder.
+                  const managedTierById = Object.fromEntries(
+                    MANAGED_VOICELIVE_MODELS.map((m) => [m.id, m.tier]),
+                  );
+                  const modelLabelFor = (id) =>
+                    usingManaged && managedTierById[id] ? `${id} · ${managedTierById[id]}` : id;
                   const arch = isVoiceLive ? classifyVoiceLiveArch(chosenModel) : null;
                   const rowStyle = { marginBottom: '14px' };
                   const labelStyle = {
@@ -5046,7 +5206,9 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
                       </div>
 
                       {/* MODEL */}
-                      <div style={sectionLabel}>Model</div>
+                      <div style={sectionLabel}>
+                        Model{modelSourceLabel}
+                      </div>
                       <div style={rowStyle}>
                         <select
                           style={selectStyle}
@@ -5055,7 +5217,7 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
                         >
                           <option value="" disabled>Select model…</option>
                           {modelOptions.map((m) => (
-                            <option key={m} value={m}>{m}</option>
+                            <option key={m} value={m}>{modelLabelFor(m)}</option>
                           ))}
                         </select>
                         {isVoiceLive && chosenModel && (
@@ -5066,6 +5228,53 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
                           </div>
                         )}
                       </div>
+
+                      {/* BYOM (Bring Your Own Model) — VoiceLive only */}
+                      {isVoiceLive && (
+                        <>
+                          <div style={sectionLabel}>BYOM — bring your own model</div>
+                          <div style={rowStyle}>
+                            <select
+                              style={selectStyle}
+                              value={liveSettings.byom_mode || ''}
+                              onChange={(e) => set('byom_mode', e.target.value)}
+                            >
+                              {BYOM_MODE_OPTIONS.map((m) => (
+                                <option key={m.value} value={m.value}>{m.label}</option>
+                              ))}
+                            </select>
+                            <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '6px', lineHeight: 1.4 }}>
+                              {liveSettings.byom_mode
+                                ? '✓ BYOM on — pick the deployment from the Model dropdown above (now lists your current Foundry resource). Applies on reconnect.'
+                                : 'Off = managed Voice Live model. Select a profile to use your own Foundry deployment (chosen via the Model dropdown above).'}
+                            </div>
+                          </div>
+                        </>
+                      )}
+
+                      {/* INPUT TRANSCRIPTION (VoiceLive STT) */}
+                      {isVoiceLive && (
+                        <>
+                          <div style={sectionLabel}>Input transcription (STT)</div>
+                          <div style={rowStyle}>
+                            <select
+                              style={selectStyle}
+                              value={liveSettings.transcription_model || ''}
+                              onChange={(e) => set('transcription_model', e.target.value)}
+                            >
+                              <option value="">(default)</option>
+                              {TRANSCRIPTION_MODEL_PRESETS.map((m) => (
+                                <option key={m.value} value={m.value}>{m.label}</option>
+                              ))}
+                            </select>
+                            {liveSettings.transcription_model === 'mai-transcribe-1.5' && (
+                              <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '6px', lineHeight: 1.4 }}>
+                                ⚡ MAI-Transcribe — phrase list & custom speech not supported
+                              </div>
+                            )}
+                          </div>
+                        </>
+                      )}
 
                       {/* VOICE */}
                       <div style={sectionLabel}>Voice (TTS)</div>
@@ -5649,6 +5858,78 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
       sessionMetrics={sessionMetrics}
       scenarioConfig={sessionScenarioConfig}
     />
+    {agentUpdateToast && createPortal(
+      <Box
+        role="status"
+        aria-live="polite"
+        sx={{
+          position: 'fixed',
+          top: 20,
+          left: 20,
+          zIndex: 2000,
+          width: 360,
+          maxWidth: 'calc(100vw - 40px)',
+          p: 1.75,
+          borderRadius: '14px',
+          color: '#e6edf3',
+          background: 'linear-gradient(135deg, rgba(30,41,59,0.98) 0%, rgba(15,23,42,0.98) 100%)',
+          border: '1px solid rgba(99,102,241,0.35)',
+          boxShadow: '0 12px 32px rgba(0,0,0,0.45)',
+          animation: 'agentToastIn 220ms ease-out',
+          '@keyframes agentToastIn': {
+            from: { opacity: 0, transform: 'translateY(-12px)' },
+            to: { opacity: 1, transform: 'translateY(0)' },
+          },
+        }}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.75 }}>
+          <BuildRoundedIcon sx={{ fontSize: 18, color: '#a5b4fc' }} />
+          <Typography sx={{ fontSize: 13, fontWeight: 700, flex: 1, letterSpacing: 0.2 }}>
+            {agentUpdateToast.action === 'created' ? 'Agent created' : 'Agent updated'}
+          </Typography>
+          <IconButton
+            size="small"
+            onClick={dismissAgentUpdateToast}
+            sx={{ color: 'rgba(230,237,243,0.6)', p: 0.25, '&:hover': { color: '#e6edf3' } }}
+            aria-label="Dismiss"
+          >
+            <Typography component="span" sx={{ fontSize: 16, lineHeight: 1 }}>×</Typography>
+          </IconButton>
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap', mb: 0.75 }}>
+          <Typography component="span" sx={{ fontSize: 13, fontWeight: 600, color: '#fff' }}>
+            {agentUpdateToast.name}
+          </Typography>
+          <Typography
+            component="span"
+            sx={{
+              fontSize: 11,
+              fontWeight: 600,
+              px: 0.75,
+              py: 0.25,
+              borderRadius: '999px',
+              backgroundColor: 'rgba(99,102,241,0.18)',
+              border: '1px solid rgba(99,102,241,0.4)',
+              color: '#c7d2fe',
+            }}
+          >
+            {agentUpdateToast.scenarioName}
+          </Typography>
+        </Box>
+        <Box component="ul" sx={{ m: 0, pl: 2, display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+          {agentUpdateToast.changes.map((c, i) => (
+            <Typography
+              key={i}
+              component="li"
+              sx={{ fontSize: 12, color: 'rgba(230,237,243,0.85)' }}
+            >
+              {c}
+            </Typography>
+          ))}
+        </Box>
+      </Box>,
+      document.body
+    )}
     <AgentBuilder
       open={showAgentBuilder}
       onClose={() => setShowAgentBuilder(false)}
@@ -5661,6 +5942,7 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
           statusCaption: `Tools: ${agentConfig.tools?.length || 0} · Voice: ${agentConfig.voice?.name || 'default'}`,
           statusLabel: "Agent Created",
         });
+        notifyAgentUpdate(agentConfig, 'created');
         // Note: Do NOT auto-select the created agent to prevent unintended scenario changes
         // User can explicitly select the agent if they want to use it
         fetchSessionAgentConfig();
@@ -5711,6 +5993,7 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
           statusCaption: `Tools: ${agentConfig.tools?.length || 0} · Voice: ${agentConfig.voice?.name || 'default'}`,
           statusLabel: "Agent Updated",
         });
+        notifyAgentUpdate(agentConfig, 'updated');
         // Update the agent in inventory
         setAgentInventory((prev) => {
           if (!prev) return prev;
@@ -5759,6 +6042,7 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
           statusCaption: `Tools: ${agentConfig.tools?.length || 0} · Voice: ${agentConfig.voice?.name || 'default'}`,
           statusLabel: "Agent Created",
         });
+        notifyAgentUpdate(agentConfig, 'created');
         // Note: Do NOT auto-select the created agent to prevent unintended scenario changes
         // User can explicitly select the agent if they want to use it
         fetchSessionAgentConfig();
@@ -5806,6 +6090,7 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
           statusCaption: `Tools: ${agentConfig.tools?.length || 0} · Voice: ${agentConfig.voice?.name || 'default'}`,
           statusLabel: "Agent Updated",
         });
+        notifyAgentUpdate(agentConfig, 'updated');
         setAgentInventory((prev) => {
           if (!prev) return prev;
           return {

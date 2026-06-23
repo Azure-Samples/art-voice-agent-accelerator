@@ -49,6 +49,12 @@ variable "cosmosdb_public_network_access_enabled" {
   default     = true
 }
 
+variable "tags" {
+  description = "Additional tags merged onto every resource. Use this to attach org policy-exemption tags (e.g. SecurityControl/SecurityControls = Ignore) that keep public network access enabled. Set to {} to add nothing."
+  type        = map(string)
+  default = {}
+}
+
 variable "principal_id" {
   description = "Principal ID of the user or service principal to assign application roles"
   type        = string
@@ -88,7 +94,7 @@ variable "acs_data_location" {
 variable "enable_acs_email" {
   description = "Enable Azure Communication Services Email integration (optional, not required for voice)"
   type        = bool
-  default     = true  # Backwards compatible - existing deployments have email resources
+  default     = true # Backwards compatible - existing deployments have email resources
 }
 
 variable "disable_local_auth" {

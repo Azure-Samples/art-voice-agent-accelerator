@@ -84,6 +84,7 @@ import AddIcon from '@mui/icons-material/Add';
 import HearingIcon from '@mui/icons-material/Hearing';
 import { API_BASE_URL } from '../config/constants.js';
 import logger from '../utils/logger.js';
+import { fetchFoundryModels, deriveModelOptions, MANAGED_VOICELIVE_MODELS } from '../utils/foundryModels.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TEMPLATE VARIABLE REFERENCE
@@ -577,6 +578,18 @@ const classifyVoiceLiveArch = (deploymentId) => {
 
 // Legacy: combined options for backward compatibility
 const MODEL_OPTIONS = CASCADE_MODEL_OPTIONS;
+
+// Voice Live BYOM (Bring Your Own Model) profile modes. Opt-in, VoiceLive only.
+// Selecting a mode adds the `profile` query param at connect() so the session
+// uses a model deployment you brought yourself (chosen via the Model selector,
+// which lists your connected Foundry resource). '' = disabled (managed VoiceLive).
+// See: https://learn.microsoft.com/azure/ai-services/speech-service/how-to-bring-your-own-model
+const BYOM_MODES = [
+  { id: '', label: 'Off (managed VoiceLive)' },
+  { id: 'byom-azure-openai-realtime', label: 'Azure OpenAI realtime (gpt-realtime, gpt-realtime-mini)' },
+  { id: 'byom-azure-openai-chat-completion', label: 'Azure OpenAI / Foundry chat-completion (gpt-5.x, grok-4, …)' },
+  { id: 'byom-foundry-anthropic-messages', label: 'Foundry Anthropic messages — preview (claude-sonnet/haiku)' },
+];
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STYLES
@@ -1107,6 +1120,12 @@ export default function AgentBuilder({
   const [availableTools, setAvailableTools] = useState([]);
   const [availableVoices, setAvailableVoices] = useState([]);
   const [availableTemplates, setAvailableTemplates] = useState([]);
+  // Live model deployments from the connected Foundry resource, derived into
+  // per-mode option lists ({cascade, voicelive}). null = not loaded / query
+  // failed → fall back to the static CASCADE/VOICELIVE_MODEL_OPTIONS below.
+  const [liveModelOptions, setLiveModelOptions] = useState(null);
+  // Region-verification metadata for the TTS voice list (from /voices).
+  const [voicesRegionVerified, setVoicesRegionVerified] = useState(null);
   const [sessionAgents, setSessionAgents] = useState([]);
   const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [_defaults, setDefaults] = useState(null);
@@ -1140,6 +1159,10 @@ export default function AgentBuilder({
       min_p: null,
       typical_p: null,
       reasoning_effort: null,
+    },
+    // Voice Live BYOM (Bring Your Own Model) — opt-in, VoiceLive mode only.
+    byom: {
+      mode: '',
     },
     model: {
       deployment_id: 'gpt-4o',
@@ -1201,6 +1224,62 @@ export default function AgentBuilder({
     [config.cascade_model?.api_version],
   );
 
+  // Map a live deployment option to the rich card shape the ModelSelector cards
+  // expect. Live models are tagged tier "deployed" so they're visually distinct
+  // from the curated static presets.
+  const toModelCardOptions = useCallback(
+    (opts) =>
+      opts.map((o) => ({
+        id: o.id,
+        name: o.id,
+        description:
+          o.arch === 'native'
+            ? 'Live deployment · native speech-to-speech'
+            : o.category === 'realtime'
+              ? 'Live realtime deployment'
+              : 'Live deployment from connected Foundry resource',
+        tier: 'deployed',
+        speed: o.arch === 'native' ? 'fastest' : 'fast',
+        arch: o.arch,
+        capabilities: o.arch === 'native' ? ['Realtime Audio'] : ['Chat'],
+        contextWindow: 'deployed',
+      })),
+    [],
+  );
+
+  // Cascade/VoiceLive model card options: prefer LIVE deployments from the
+  // connected Foundry resource; fall back to the curated static presets when the
+  // live query is unavailable or empty.
+  const cascadeModelCardOptions = useMemo(() => {
+    const live = liveModelOptions?.cascade;
+    return live && live.length ? toModelCardOptions(live) : CASCADE_MODEL_OPTIONS;
+  }, [liveModelOptions, toModelCardOptions]);
+  // Managed Voice Live models (VoiceLive-hosted, by pricing tier) — shown when
+  // BYOM is OFF. These are not your resource deployments.
+  const managedVoiceliveCardOptions = useMemo(
+    () =>
+      MANAGED_VOICELIVE_MODELS.map((m) => ({
+        id: m.id,
+        name: m.id,
+        description: `Managed Voice Live · ${m.tier}`,
+        tier: m.tier,
+        speed: m.id.includes('mini') || m.id.includes('nano') ? 'fastest' : 'fast',
+        arch: m.id.includes('realtime') ? 'native' : 'cascaded',
+        capabilities: m.id.includes('realtime') ? ['Realtime Audio'] : ['Chat'],
+        contextWindow: 'managed',
+      })),
+    [],
+  );
+  // VoiceLive model dropdown — BYOM-aware: BYOM ON → your live deployments;
+  // BYOM OFF → the managed Voice Live model list (pricing tiers).
+  const voiceliveModelCardOptions = useMemo(() => {
+    if (config.byom?.mode) {
+      const live = liveModelOptions?.voicelive;
+      return live && live.length ? toModelCardOptions(live) : managedVoiceliveCardOptions;
+    }
+    return managedVoiceliveCardOptions;
+  }, [liveModelOptions, toModelCardOptions, managedVoiceliveCardOptions, config.byom?.mode]);
+
   // Ensure config.template_vars includes any detected variables so users can set defaults
   useEffect(() => {
     setConfig((prev) => {
@@ -1251,11 +1330,25 @@ export default function AgentBuilder({
       if (!res.ok) throw new Error('Failed to fetch voices');
       const data = await res.json();
       setAvailableVoices(data.voices || []);
+      // Whether the catalog was cross-checked against the live region (vs the
+      // static fallback when Azure couldn't be reached).
+      setVoicesRegionVerified({
+        verified: Boolean(data.verified_against_region),
+        source: data.source || 'static-catalog',
+      });
       logger.info('Loaded voices:', data.total);
     } catch (err) {
       logger.error('Error fetching voices:', err);
       setError('Failed to load available voices');
     }
+  }, []);
+
+  // Query the live model deployments from the connected Foundry/Azure OpenAI
+  // resource (includes regional realtime/voice models). Falls back silently to
+  // the static presets when the query is unavailable.
+  const fetchAvailableModels = useCallback(async () => {
+    const live = await fetchFoundryModels();
+    setLiveModelOptions(live ? deriveModelOptions(live.models) : null);
   }, []);
 
   const fetchDefaults = useCallback(async () => {
@@ -1363,6 +1456,9 @@ export default function AgentBuilder({
             model: data.config.model || prev.model,
             cascade_model: data.config.cascade_model || prev.cascade_model,
             voicelive_model: data.config.voicelive_model || prev.voicelive_model,
+            byom: {
+              mode: data.config.byom?.mode || '',
+            },
             voice: data.config.voice || prev.voice,
             speech: data.config.speech || prev.speech,
             template_vars: data.config.template_vars || prev.template_vars,
@@ -1390,14 +1486,14 @@ export default function AgentBuilder({
       Promise.all([
         fetchAvailableTools(),
         fetchAvailableVoices(),
+        fetchAvailableModels(),
         fetchAvailableTemplates(),
         fetchSessionAgents(),
         fetchDefaults(),
         fetchExistingConfig(),
       ]).finally(() => setLoading(false));
     }
-  }, [open, editMode, fetchAvailableTools, fetchAvailableVoices, fetchAvailableTemplates, fetchSessionAgents, fetchDefaults, fetchExistingConfig]);
-
+  }, [open, editMode, fetchAvailableTools, fetchAvailableVoices, fetchAvailableModels, fetchAvailableTemplates, fetchSessionAgents, fetchDefaults, fetchExistingConfig]);
   // Apply existing config if provided
   useEffect(() => {
     if (existingConfig) {
@@ -1598,6 +1694,12 @@ export default function AgentBuilder({
           reasoning_effort: config.voicelive_model?.reasoning_effort ?? null,
           endpoint_preference: voiceliveEndpointPreference,
         },
+        // BYOM is opt-in: only send a profile when a mode is selected.
+        byom: config.byom?.mode
+          ? {
+              mode: config.byom.mode,
+            }
+          : null,
         voice: {
           name: config.voice.name,
           type: config.voice.type,
@@ -1623,15 +1725,14 @@ export default function AgentBuilder({
         handleConfigChange('prompt', draftPrompt);
       }
 
-      // Use PUT for update, POST for create
+      // PUT /session is an idempotent upsert (create + update share one backend
+      // path), so always use it. isEditMode only affects the success copy and
+      // which callback fires.
       const isUpdate = isEditMode;
-      const url = isUpdate
-        ? `${API_BASE_URL}/api/v1/agent-builder/session/${encodeURIComponent(effectiveSessionId)}`
-        : `${API_BASE_URL}/api/v1/agent-builder/create?session_id=${encodeURIComponent(effectiveSessionId)}`;
-      const method = isUpdate ? 'PUT' : 'POST';
+      const url = `${API_BASE_URL}/api/v1/agent-builder/session/${encodeURIComponent(effectiveSessionId)}`;
 
       const res = await fetch(url, {
-        method,
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
@@ -2820,9 +2921,24 @@ export default function AgentBuilder({
                 {/* Shared Voice (TTS) — applies to BOTH Cascade and VoiceLive */}
                 <Card variant="outlined" sx={styles.sectionCard}>
                   <CardContent>
-                    <Typography variant="subtitle2" color="primary" sx={{ mb: 2, fontWeight: 600 }}>
-                      🎙️ Voice (TTS) — shared by Cascade & VoiceLive
-                    </Typography>
+                    <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
+                      <Typography variant="subtitle2" color="primary" sx={{ fontWeight: 600 }}>
+                        🎙️ Voice (TTS) — shared by Cascade & VoiceLive
+                      </Typography>
+                      {voicesRegionVerified && (
+                        <Chip
+                          size="small"
+                          variant="outlined"
+                          color={voicesRegionVerified.verified ? 'success' : 'default'}
+                          label={
+                            voicesRegionVerified.verified
+                              ? `Region-verified (${availableVoices.length})`
+                              : 'Catalog (region not verified)'
+                          }
+                          sx={{ height: 20, fontSize: '11px' }}
+                        />
+                      )}
+                    </Stack>
                     <Autocomplete
                       value={availableVoices.find(v => v.name === config.voice.name) || null}
                       onChange={(_e, newValue) => {
@@ -3107,7 +3223,7 @@ export default function AgentBuilder({
                     <ModelSelector
                       value={config.cascade_model?.deployment_id || 'gpt-4o'}
                       onChange={(v) => handleNestedConfigChange('cascade_model', 'deployment_id', v)}
-                      modelOptions={CASCADE_MODEL_OPTIONS}
+                      modelOptions={cascadeModelCardOptions}
                       title="Cascade Model Deployment"
                       showAlert={false}
                     />
@@ -3167,14 +3283,45 @@ export default function AgentBuilder({
                     <ModelSelector
                       value={config.voicelive_model?.deployment_id || 'gpt-realtime'}
                       onChange={(v) => handleNestedConfigChange('voicelive_model', 'deployment_id', v)}
-                      modelOptions={VOICELIVE_MODEL_OPTIONS}
+                      modelOptions={voiceliveModelCardOptions}
                       title="VoiceLive Model Deployment"
                       showAlert={false}
                     />
                     <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-                      VoiceLive models must be deployed to your connected Foundry resource. Foundry agents/BYOM chat
-                      completions are not yet wired in this demo.
+                      VoiceLive models must be deployed to your connected Foundry resource. To use a model you brought
+                      yourself (fine-tuned, Anthropic/Grok, PTU, model-router), enable BYOM below.
                     </Typography>
+
+                    {/* Bring Your Own Model (BYOM) — opt-in connect-time profile */}
+                    <Box sx={{ mt: 2, p: 1.5, borderRadius: 2, border: '1px dashed #c7d2fe', backgroundColor: '#f5f7ff' }}>
+                      <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
+                        <MemoryIcon sx={{ fontSize: 16, color: '#4f46e5' }} />
+                        <Typography variant="caption" sx={{ fontWeight: 700, color: '#4338ca' }}>
+                          Bring Your Own Model (BYOM)
+                        </Typography>
+                      </Stack>
+                      <TextField
+                        select
+                        label="BYOM Profile"
+                        value={config.byom?.mode || ''}
+                        onChange={(e) => handleNestedConfigChange('byom', 'mode', e.target.value)}
+                        fullWidth
+                        size="small"
+                        helperText={
+                          config.byom?.mode
+                            ? '✓ BYOM on — pick the deployment from the VoiceLive Model selector above (it now lists your current Foundry resource\u2019s deployments).'
+                            : 'Use your own deployment (fine-tuned, Anthropic/Grok, PTU, model-router). Turning this on switches the Model selector above to your Foundry deployments.'
+                        }
+                        InputLabelProps={{ shrink: true }}
+                        SelectProps={{ native: true }}
+                      >
+                        {BYOM_MODES.map((m) => (
+                          <option key={m.id || 'off'} value={m.id}>
+                            {m.label}
+                          </option>
+                        ))}
+                      </TextField>
+                    </Box>
                   </CardContent>
                 </Card>
                 )}

@@ -4,6 +4,7 @@
   "openai_location": null,
   "cosmosdb_location": null,
   "acs_data_location": "United States",
+  "tags": {},
   "disable_local_auth": true,
   "enable_redis_ha": false,
   "redis_sku": "MemoryOptimized_M10",

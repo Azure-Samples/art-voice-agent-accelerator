@@ -85,6 +85,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 
 import { API_BASE_URL } from '../config/constants.js';
 import logger from '../utils/logger.js';
+import { fetchFoundryModels, deriveModelOptions, MANAGED_VOICELIVE_OPTIONS } from '../utils/foundryModels.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STYLES
@@ -218,6 +219,18 @@ const REGION_GATED_VOICELIVE_PRESETS = [
   { id: 'gpt-realtime-1.5', label: 'gpt-realtime-1.5' },
 ];
 
+// Voice Live BYOM (Bring Your Own Model) profile modes. Opt-in, VoiceLive only.
+// Selecting a mode adds the `profile` query param at connect() so the session
+// uses a model deployment you brought yourself (chosen via the Model dropdown,
+// which lists your connected Foundry resource). '' = disabled (managed VoiceLive).
+// See: https://learn.microsoft.com/azure/ai-services/speech-service/how-to-bring-your-own-model
+const BYOM_MODES = [
+  { id: '', label: 'Off (managed VoiceLive)' },
+  { id: 'byom-azure-openai-realtime', label: 'Azure OpenAI realtime (gpt-realtime, gpt-realtime-mini)' },
+  { id: 'byom-azure-openai-chat-completion', label: 'Azure OpenAI / Foundry chat-completion (gpt-5.x, grok-4, …)' },
+  { id: 'byom-foundry-anthropic-messages', label: 'Foundry Anthropic messages — preview (claude-sonnet/haiku)' },
+];
+
 // Every id recognized as a built-in preset (availability aside). Used to decide
 // whether a SAVED deployment is a known preset vs a custom override — a saved
 // gpt-realtime-2 should still register as a preset even if the region probe
@@ -345,6 +358,7 @@ const TEMPLATE_VARIABLES = [
 
 const TRANSCRIPTION_MODELS = [
   { value: 'azure-speech', label: 'Azure Speech' },
+  { value: 'mai-transcribe-1.5', label: 'MAI-Transcribe 1.5' },
   { value: 'gpt-4o-transcribe', label: 'GPT-4o Transcribe' },
   { value: 'whisper-1', label: 'Whisper-1' },
 ];
@@ -1093,6 +1107,11 @@ export default function AgentBuilderContent({
   // region (from /models). null = not yet loaded. Used to region-gate the
   // next-gen realtime VoiceLive presets.
   const [deployedModelIds, setDeployedModelIds] = useState(null);
+  // Live model deployments derived into per-mode option lists ({cascade,
+  // voicelive}). null = not loaded / query failed → fall back to static presets.
+  const [liveModelOptions, setLiveModelOptions] = useState(null);
+  // Region-verification metadata for the TTS voice list (from /voices).
+  const [voicesRegionVerified, setVoicesRegionVerified] = useState(null);
   const [detailAgent, setDetailAgent] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [selectedTool, setSelectedTool] = useState(null);
@@ -1154,6 +1173,11 @@ export default function AgentBuilderContent({
       reasoning_effort: null,
       include_reasoning: false,
     },
+    // Voice Live BYOM (Bring Your Own Model) — opt-in, VoiceLive mode only.
+    // Empty mode = disabled (managed VoiceLive).
+    byom: {
+      mode: '',
+    },
     voice: {
       name: 'en-US-AvaMultilingualNeural',
       type: 'azure-standard',
@@ -1204,61 +1228,89 @@ export default function AgentBuilderContent({
     () => resolveEndpointPreference(config.voicelive_model),
     [config.voicelive_model],
   );
+  // Cascade model dropdown options: prefer the LIVE deployments from the
+  // connected Foundry resource; fall back to the static presets when the query
+  // failed or returned nothing.
+  const cascadeModelPresets = useMemo(() => {
+    const live = liveModelOptions?.cascade;
+    return live && live.length ? live : CASCADE_MODEL_PRESETS;
+  }, [liveModelOptions]);
+
+  // VoiceLive model dropdown options — BYOM-aware:
+  //   • BYOM OFF (managed VoiceLive): the curated managed VoiceLive models
+  //     (pricing tiers). Managed VoiceLive runs VoiceLive-hosted models, NOT
+  //     your resource deployments.
+  //   • BYOM ON: your LIVE deployments from the connected Foundry resource.
+  // A saved value not in the list is appended so a selection is never lost.
+  const voiceLiveModelPresets = useMemo(() => {
+    const savedId = (config.voicelive_model?.deployment_id || '').trim();
+    const byomOn = Boolean(config.byom?.mode);
+    if (byomOn) {
+      const live = liveModelOptions?.voicelive;
+      const base = live && live.length ? live : MANAGED_VOICELIVE_OPTIONS;
+      if (savedId && !base.some((o) => o.id === savedId)) {
+        return [...base, { id: savedId, label: savedId }];
+      }
+      return base;
+    }
+    // Managed VoiceLive → curated managed model list (by tier).
+    if (savedId && !MANAGED_VOICELIVE_OPTIONS.some((o) => o.id === savedId)) {
+      return [...MANAGED_VOICELIVE_OPTIONS, { id: savedId, label: savedId }];
+    }
+    return MANAGED_VOICELIVE_OPTIONS;
+  }, [liveModelOptions, config.byom?.mode, config.voicelive_model?.deployment_id]);
+
+  // Known (selectable) ids per mode = the rendered option list ∪ the static
+  // presets. Used to decide whether a SAVED deployment is a known option vs a
+  // free-text custom override.
+  const cascadeKnownIds = useMemo(
+    () =>
+      new Set([
+        ...cascadeModelPresets.map((o) => o.id),
+        ...CASCADE_MODEL_PRESETS.map((o) => o.id),
+      ]),
+    [cascadeModelPresets],
+  );
+  const voiceliveKnownIds = useMemo(
+    () =>
+      new Set([...voiceLiveModelPresets.map((o) => o.id), ...ALL_VOICELIVE_PRESET_IDS]),
+    [voiceLiveModelPresets],
+  );
+
   // Compute preset values for dropdown display
   const cascadeModelPreset = useMemo(() => {
     if (isCascadeCustomMode) return 'custom';
     const deploymentId = (config.cascade_model?.deployment_id || '').trim();
-    return CASCADE_MODEL_PRESETS.some((preset) => preset.id === deploymentId)
-      ? deploymentId
-      : 'custom';
-  }, [config.cascade_model?.deployment_id, isCascadeCustomMode]);
+    return cascadeKnownIds.has(deploymentId) ? deploymentId : 'custom';
+  }, [config.cascade_model?.deployment_id, isCascadeCustomMode, cascadeKnownIds]);
   const voiceliveModelPreset = useMemo(() => {
     if (isVoiceliveCustomMode) return 'custom';
     const deploymentId = (config.voicelive_model?.deployment_id || '').trim();
-    return ALL_VOICELIVE_PRESET_IDS.has(deploymentId)
-      ? deploymentId
-      : 'custom';
-  }, [config.voicelive_model?.deployment_id, isVoiceliveCustomMode]);
+    return voiceliveKnownIds.has(deploymentId) ? deploymentId : 'custom';
+  }, [config.voicelive_model?.deployment_id, isVoiceliveCustomMode, voiceliveKnownIds]);
   const isCascadeCustom = isCascadeCustomMode || cascadeModelPreset === 'custom';
   const isVoiceliveCustom = isVoiceliveCustomMode || voiceliveModelPreset === 'custom';
 
-  // Dropdown options for the VoiceLive model preset selector. The next-gen
-  // realtime models are appended only when the region has them deployed, grouped
-  // right after the built-in realtime presets. If a saved value is a region-gated
-  // preset that isn't in the deployed set (or /models hasn't resolved), it's still
-  // surfaced so the user doesn't silently lose their selection.
-  const voiceLiveModelPresets = useMemo(() => {
-    const savedId = (config.voicelive_model?.deployment_id || '').trim();
-    const gated = REGION_GATED_VOICELIVE_PRESETS.filter(
-      (p) =>
-        (deployedModelIds && deployedModelIds.has(p.id.toLowerCase())) ||
-        p.id === savedId,
-    );
-    if (gated.length === 0) return VOICELIVE_MODEL_PRESETS;
-    const out = [];
-    let inserted = false;
-    for (const preset of VOICELIVE_MODEL_PRESETS) {
-      out.push(preset);
-      if (!inserted && preset.id === 'gpt-realtime-mini') {
-        out.push(...gated);
-        inserted = true;
-      }
-    }
-    if (!inserted) out.push(...gated);
-    return out;
-  }, [deployedModelIds, config.voicelive_model?.deployment_id]);
-
-  // Initialize custom mode flags based on loaded config (only once)
+  // Initialize custom mode flags based on loaded config (only once, after the
+  // live model query resolves so a live-only deployment id isn't misread as
+  // custom). deployedModelIds flips from null→Set on success OR failure.
   useEffect(() => {
     if (customModeInitialized.current) return;
+    if (deployedModelIds === null) return;
     const cascadeId = (config.cascade_model?.deployment_id || '').trim();
     const voiceliveId = (config.voicelive_model?.deployment_id || '').trim();
-    const cascadeIsCustom = cascadeId && !CASCADE_MODEL_PRESETS.some(p => p.id === cascadeId);
-    const voiceliveIsCustom = voiceliveId && !ALL_VOICELIVE_PRESET_IDS.has(voiceliveId);
+    const cascadeIsCustom = cascadeId && !cascadeKnownIds.has(cascadeId);
+    const voiceliveIsCustom = voiceliveId && !voiceliveKnownIds.has(voiceliveId);
     if (cascadeIsCustom) setIsCascadeCustomMode(true);
     if (voiceliveIsCustom) setIsVoiceliveCustomMode(true);
     customModeInitialized.current = true;
-  }, [config.cascade_model?.deployment_id, config.voicelive_model?.deployment_id]);
+  }, [
+    deployedModelIds,
+    cascadeKnownIds,
+    voiceliveKnownIds,
+    config.cascade_model?.deployment_id,
+    config.voicelive_model?.deployment_id,
+  ]);
   const cascadeOverrideValue = (config.cascade_model?.deployment_id || '').trim();
   const voiceliveOverrideValue = (config.voicelive_model?.deployment_id || '').trim();
   const isCascadeOverrideMissing = isCascadeCustom && !cascadeOverrideValue;
@@ -1298,6 +1350,12 @@ export default function AgentBuilderContent({
       if (response.ok) {
         const data = await response.json();
         setAvailableVoices(data.voices || []);
+        // Surface whether the catalog was cross-checked against the live region
+        // (vs the static fallback when Azure couldn't be reached).
+        setVoicesRegionVerified({
+          verified: Boolean(data.verified_against_region),
+          source: data.source || 'static-catalog',
+        });
       }
     } catch (err) {
       logger.error('Failed to fetch voices:', err);
@@ -1305,20 +1363,20 @@ export default function AgentBuilderContent({
   }, []);
 
   const fetchAvailableModels = useCallback(async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/agent-builder/models`);
-      if (response.ok) {
-        const data = await response.json();
-        const ids = new Set(
-          (data.models || [])
-            .map((m) => (m.deployment_id || '').toLowerCase())
-            .filter(Boolean),
-        );
-        setDeployedModelIds(ids);
-      }
-    } catch (err) {
-      logger.error('Failed to fetch models:', err);
+    const live = await fetchFoundryModels();
+    if (!live) {
+      // Query failed or returned nothing — keep static presets as the fallback.
+      setDeployedModelIds(new Set());
+      setLiveModelOptions(null);
+      return;
     }
+    const ids = new Set(
+      live.models
+        .map((m) => (m.deployment_id || '').toLowerCase())
+        .filter(Boolean),
+    );
+    setDeployedModelIds(ids);
+    setLiveModelOptions(deriveModelOptions(live.models));
   }, []);
 
   const fetchAvailableTemplates = useCallback(async () => {
@@ -1363,6 +1421,9 @@ export default function AgentBuilderContent({
               tools: data.config.tools || [],
               cascade_model: data.config.cascade_model || prev.cascade_model,
               voicelive_model: data.config.voicelive_model || prev.voicelive_model,
+              byom: {
+                mode: data.config.byom?.mode || '',
+              },
               voice: data.config.voice || prev.voice,
               speech: data.config.speech || prev.speech,
               session: {
@@ -1785,6 +1846,9 @@ export default function AgentBuilderContent({
       tools: template.tools || [],
       cascade_model: template.cascade_model || prev.cascade_model,
       voicelive_model: template.voicelive_model || prev.voicelive_model,
+      byom: {
+        mode: template.byom?.mode || '',
+      },
       voice: template.voice || prev.voice,
     }));
     setSuccess(`Applied agent: ${template.name}`);
@@ -1925,6 +1989,12 @@ export default function AgentBuilderContent({
           ...config.voicelive_model,
           endpoint_preference: voiceliveEndpointPreference,
         },
+        // BYOM is opt-in: only send a profile when a mode is selected.
+        byom: config.byom?.mode
+          ? {
+              mode: config.byom.mode,
+            }
+          : null,
         voice: config.voice,
         speech: config.speech,
         session: config.session,
@@ -1941,13 +2011,12 @@ export default function AgentBuilderContent({
         handleConfigChange('prompt', draftPrompt);
       }
 
-      const url = isEditMode
-        ? `${API_BASE_URL}/api/v1/agent-builder/session/${encodeURIComponent(sessionId)}`
-        : `${API_BASE_URL}/api/v1/agent-builder/create?session_id=${encodeURIComponent(sessionId)}`;
-      const method = isEditMode ? 'PUT' : 'POST';
+      // PUT /session is an idempotent upsert (create + update share one backend
+      // path), so always use it. isEditMode only affects copy and callbacks.
+      const url = `${API_BASE_URL}/api/v1/agent-builder/session/${encodeURIComponent(sessionId)}`;
 
       const res = await fetch(url, {
-        method,
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
@@ -2925,9 +2994,24 @@ export default function AgentBuilderContent({
                 {/* Shared Voice (TTS) — applies to BOTH Cascade and VoiceLive */}
                 <Card variant="outlined" sx={styles.sectionCard}>
                   <CardContent>
-                    <Typography variant="subtitle2" color="primary" sx={{ mb: 2, fontWeight: 600 }}>
-                      🎙️ Voice (TTS) — shared by Cascade & VoiceLive
-                    </Typography>
+                    <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
+                      <Typography variant="subtitle2" color="primary" sx={{ fontWeight: 600 }}>
+                        🎙️ Voice (TTS) — shared by Cascade & VoiceLive
+                      </Typography>
+                      {voicesRegionVerified && (
+                        <Chip
+                          size="small"
+                          variant="outlined"
+                          color={voicesRegionVerified.verified ? 'success' : 'default'}
+                          label={
+                            voicesRegionVerified.verified
+                              ? `Region-verified (${availableVoices.length})`
+                              : 'Catalog (region not verified)'
+                          }
+                          sx={{ height: 20, fontSize: '11px' }}
+                        />
+                      )}
+                    </Stack>
                   <Stack spacing={2}>
                     {!isCustomVoice ? (
                       <Autocomplete
@@ -3040,7 +3124,7 @@ export default function AgentBuilderContent({
                           if (selected === 'custom') {
                             setIsCascadeCustomMode(true);
                             // Keep existing value if any, otherwise empty
-                            if (!config.cascade_model?.deployment_id || CASCADE_MODEL_PRESETS.some(p => p.id === config.cascade_model?.deployment_id)) {
+                            if (!config.cascade_model?.deployment_id || cascadeKnownIds.has(config.cascade_model?.deployment_id)) {
                               handleNestedConfigChange('cascade_model', 'deployment_id', '');
                             }
                           } else {
@@ -3050,10 +3134,14 @@ export default function AgentBuilderContent({
                         }}
                         fullWidth
                         size="small"
-                        helperText="Select a base model (override below if needed)"
+                        helperText={
+                          liveModelOptions?.cascade?.length
+                            ? 'Live deployments from your connected Foundry resource (override below if needed)'
+                            : 'Select a base model (override below if needed)'
+                        }
                         SelectProps={{ native: true }}
                       >
-                        {CASCADE_MODEL_PRESETS.map((preset) => (
+                        {cascadeModelPresets.map((preset) => (
                           <option key={preset.id} value={preset.id}>
                             {preset.label}
                           </option>
@@ -3390,7 +3478,7 @@ export default function AgentBuilderContent({
                           if (selected === 'custom') {
                             setIsVoiceliveCustomMode(true);
                             // Keep existing value if any, otherwise empty
-                            if (!config.voicelive_model?.deployment_id || ALL_VOICELIVE_PRESET_IDS.has(config.voicelive_model?.deployment_id)) {
+                            if (!config.voicelive_model?.deployment_id || voiceliveKnownIds.has(config.voicelive_model?.deployment_id)) {
                               handleNestedConfigChange('voicelive_model', 'deployment_id', '');
                             }
                           } else {
@@ -3400,7 +3488,11 @@ export default function AgentBuilderContent({
                         }}
                         fullWidth
                         size="small"
-                        helperText="Select a base model (override below if needed)"
+                        helperText={
+                          config.byom?.mode
+                            ? 'BYOM: your deployments on the connected Foundry resource'
+                            : 'Managed Voice Live models (by pricing tier). Turn on BYOM to use your own deployments.'
+                        }
                         SelectProps={{ native: true }}
                       >
                         {voiceLiveModelPresets.map((preset) => (
@@ -3435,6 +3527,37 @@ export default function AgentBuilderContent({
                           }}
                         />
                       )}
+
+                      {/* Bring Your Own Model (BYOM) — opt-in connect-time profile */}
+                      <Box sx={{ p: 1.5, borderRadius: 2, border: '1px dashed #c7d2fe', backgroundColor: '#f5f7ff' }}>
+                        <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
+                          <MemoryIcon sx={{ fontSize: 16, color: '#4f46e5' }} />
+                          <Typography variant="caption" sx={{ fontWeight: 700, color: '#4338ca' }}>
+                            Bring Your Own Model (BYOM)
+                          </Typography>
+                        </Stack>
+                        <TextField
+                          select
+                          label="BYOM Profile"
+                          value={config.byom?.mode || ''}
+                          onChange={(e) => handleNestedConfigChange('byom', 'mode', e.target.value)}
+                          fullWidth
+                          size="small"
+                          helperText={
+                            config.byom?.mode
+                              ? '✓ BYOM on — pick the deployment from the Model dropdown above (it now lists your current Foundry resource\u2019s deployments).'
+                              : 'Use your own deployment (fine-tuned, Anthropic/Grok, PTU, model-router). Turning this on switches the Model dropdown above to your Foundry deployments.'
+                          }
+                          InputLabelProps={{ shrink: true }}
+                          SelectProps={{ native: true }}
+                        >
+                          {BYOM_MODES.map((m) => (
+                            <option key={m.id || 'off'} value={m.id}>
+                              {m.label}
+                            </option>
+                          ))}
+                        </TextField>
+                      </Box>
 
                       {(() => {
                         const arch = classifyVoiceLiveArch(config.voicelive_model?.deployment_id);
@@ -3484,8 +3607,8 @@ export default function AgentBuilderContent({
                       </TextField>
 
                       <Typography variant="caption" color="text.secondary">
-                        VoiceLive models must be deployed to your connected Foundry resource. Foundry agents/BYOM chat
-                        completions are not yet wired in this demo.
+                        VoiceLive models must be deployed to your connected Foundry resource. To use a model you
+                        brought yourself (fine-tuned, Anthropic/Grok, PTU, model-router), enable BYOM above.
                       </Typography>
 
                       <Divider />

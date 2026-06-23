@@ -38,12 +38,12 @@ provider "azurerm" {
     }
     app_configuration {
       purge_soft_delete_on_destroy = true
-      recover_soft_deleted = true
+      recover_soft_deleted         = true
     }
     cognitive_account {
       purge_soft_delete_on_destroy = true
-      
-    }    
+
+    }
   }
   storage_use_azuread = true
 }
@@ -87,8 +87,10 @@ locals {
   email_sender_username     = "noreply"
   email_sender_display_name = "Real-Time Voice Notifications"
 
-  # Common tags (excludes volatile values to prevent unnecessary resource updates)
-  tags = {
+  # Common tags (excludes volatile values to prevent unnecessary resource updates).
+  # var.tags is merged in last so callers can add/override tags (e.g. policy
+  # exemption tags that keep public network access enabled) from a param file.
+  tags = merge({
     "azd-env-name"    = var.environment_name
     "hidden-title"    = "Azure Real-Time Audio ${var.environment_name}"
     "project"         = "ART Voice Agent Accelerator"
@@ -96,7 +98,7 @@ locals {
     "deployment"      = "terraform"
     "deployed_by"     = coalesce(var.deployed_by, local.principal_id)
     "SecurityControl" = var.environment_name != "prod" ? "Ignore" : null
-  }
+  }, var.tags)
 
   voice_live_available_regions = ["eastus2", "westus2", "swedencentral", "southeastasia"]
 
