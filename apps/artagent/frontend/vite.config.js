@@ -23,7 +23,7 @@ export default defineConfig(({ mode }) => {
         output: {
           manualChunks: {
             vendor: ['react', 'react-dom'],
-            azure: ['@azure/communication-calling', '@azure/communication-common', 'microsoft-cognitiveservices-speech-sdk']
+            azure: ['@azure/communication-calling', '@azure/communication-common']
           },
           assetFileNames: (assetInfo) => {
             const info = assetInfo.name.split('.')

@@ -18,7 +18,6 @@
     "@emotion/styled": "^11.14.1",
     "@mui/icons-material": "^7.3.4",
     "@mui/material": "^7.3.4",
-    "microsoft-cognitiveservices-speech-sdk": "^1.43.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "serve": "^14.2.4"

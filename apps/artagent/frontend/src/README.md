@@ -9,7 +9,6 @@ src/
 │   ├── PhoneWidget.jsx     # Simulates phone interactions
 │   └── LogsPanel.jsx       # Displays logs and events
 ├── hooks/
-│   ├── useSpeechRecognizer.js  # Custom hook for speech recognition
 │   ├── useWebSocket.js         # Custom hook for WebSocket connections
 │   └── useMindMap.js           # Custom hook for mind map logic
 ├── utils/
