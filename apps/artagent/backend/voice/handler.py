@@ -87,7 +87,13 @@ from src.pools.session_manager import SessionContext
 from src.stateful.state_managment import MemoManager
 from src.speech.speech_recognizer import StreamingSpeechRecognizerFromBytes
 from src.enums.stream_modes import StreamMode
-from config import ACS_STREAMING_MODE, GREETING, STOP_WORDS
+from config import (
+    ACS_STREAMING_MODE,
+    AZURE_OPENAI_CHAT_DEPLOYMENT_ID,
+    AZURE_OPENAI_ENDPOINT,
+    GREETING,
+    STOP_WORDS,
+)
 from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
 from utils.ml_logging import get_logger
@@ -401,6 +407,7 @@ class VoiceHandler:
             on_announcement=handler._on_announcement,
             on_user_transcript=handler._on_user_transcript,
             on_tts_request=handler._on_tts_request,
+            thread_bridge=handler._thread_bridge,
         )
 
         handler._thread_bridge.set_main_loop(event_loop, session_key)
@@ -436,6 +443,60 @@ class VoiceHandler:
     # Lifecycle
     # =========================================================================
 
+    def _apply_session_speech_settings(self) -> None:
+        """Apply the active session agent's STT/VAD config to the pooled recognizer.
+
+        Cascade STT recognizers come from a shared pool constructed with default
+        VAD, and the Azure Speech SDK binds segmentation/VAD at recognizer
+        construction (``prepare_start``), which runs at ``start_recognizer()``.
+        So the session agent's speech overrides must be written onto the
+        recognizer instance *before* it starts. This is the cascade equivalent of
+        how VoiceLive consumes the agent's ``session`` (turn_detection) config at
+        connect — without it, Agent Builder / Quick Tune speech settings persist
+        to the session agent but never take effect on the call.
+        """
+        stt_client = getattr(self._context, "stt_client", None)
+        if stt_client is None or not self._session_id:
+            return
+
+        memo = self._context.memo_manager
+        active_agent_name = (
+            memo.get_value_from_corememory("active_agent") if memo else None
+        )
+        session_agent = None
+        if active_agent_name:
+            session_agent = get_session_agent(self._session_id, active_agent_name)
+        if not session_agent:
+            session_agent = get_session_agent(self._session_id)
+
+        speech = getattr(session_agent, "speech", None) if session_agent else None
+        if not speech:
+            return
+
+        applied: dict[str, object] = {}
+        if (
+            getattr(speech, "vad_silence_timeout_ms", None) is not None
+            and hasattr(stt_client, "vad_silence_timeout_ms")
+        ):
+            stt_client.vad_silence_timeout_ms = speech.vad_silence_timeout_ms
+            applied["vad_silence_timeout_ms"] = speech.vad_silence_timeout_ms
+        if hasattr(stt_client, "use_semantic"):
+            stt_client.use_semantic = bool(speech.use_semantic_segmentation)
+            applied["use_semantic_segmentation"] = bool(speech.use_semantic_segmentation)
+        if getattr(speech, "candidate_languages", None) and hasattr(
+            stt_client, "candidate_languages"
+        ):
+            stt_client.candidate_languages = list(speech.candidate_languages)
+            applied["candidate_languages"] = list(speech.candidate_languages)
+
+        if applied:
+            logger.info(
+                "[%s] Applied session agent speech settings to STT | agent=%s %s",
+                self._session_short,
+                getattr(session_agent, "name", "?"),
+                applied,
+            )
+
     async def start(self) -> None:
         """
         Start speech processing and queue greeting.
@@ -451,6 +512,10 @@ class VoiceHandler:
 
         self._running = True
         self._start_idle_monitor()
+
+        # Apply the session agent's STT/VAD overrides to the recognizer before it
+        # starts (the SDK reads these at construction time inside start_recognizer).
+        self._apply_session_speech_settings()
 
         # Start STT thread (follows SpeechCascadeHandler pattern)
         if self._stt_thread:
@@ -473,6 +538,14 @@ class VoiceHandler:
 
         await self._emit_cascade_connected()
 
+        # Emit a single clean, human-readable summary of the cascade connection,
+        # model, and per-agent settings (mirrors the VoiceLive connection banner)
+        # so the operator can validate which agent/voice/model config is live.
+        try:
+            self._log_connection_banner()
+        except Exception:  # pragma: no cover - banner must never break startup
+            logger.debug("[%s] Failed to log cascade banner", self._session_short, exc_info=True)
+
         # Queue greeting
         if self._greeting_text and not self._greeting_queued:
             self._greeting_queued = True
@@ -484,6 +557,144 @@ class VoiceHandler:
             await self._speech_queue.put(event)
 
         logger.info("[%s] VoiceHandler started", self._session_short)
+
+    def _resolve_active_agent(self) -> tuple[str, Any | None, str]:
+        """Resolve the live start agent name, object, and config source.
+
+        Prefers a session-scoped agent (Agent Builder / Quick Tune overrides),
+        then falls back to the app-wide unified agent registry. The source label
+        explains where the effective config came from so the banner is honest
+        about what is actually live.
+
+        Returns:
+            Tuple of (agent_name, agent_obj_or_None, source_label).
+        """
+        memo = self._context.memo_manager
+        active_agent_name = (
+            memo.get_value_from_corememory("active_agent") if memo else None
+        ) or getattr(self._app_state, "start_agent", "Concierge")
+
+        # Session-scoped agent carries the live overrides applied to this call.
+        session_agent = None
+        if self._session_id:
+            session_agent = get_session_agent(self._session_id, active_agent_name)
+            if not session_agent:
+                session_agent = get_session_agent(self._session_id)
+        if session_agent is not None:
+            return getattr(session_agent, "name", active_agent_name), session_agent, "session"
+
+        # Fall back to the app-wide unified agent registry.
+        unified_agents = getattr(self._app_state, "unified_agents", {}) or {}
+        _, agent_obj = find_agent_by_name(unified_agents, active_agent_name)
+        source = "scenario" if self._config.scenario else "default"
+        return active_agent_name, agent_obj, source
+
+    def _log_connection_banner(self) -> None:
+        """Log a clean, human-readable summary of the SpeechCascade session.
+
+        Mirrors the VoiceLive ``_log_connection_banner`` so the operator can
+        validate — at a glance — which agent, voice, model, and STT/VAD config
+        are live for this call, instead of piecing it together from scattered
+        startup lines.
+        """
+        agent_name, agent_obj, agent_source = self._resolve_active_agent()
+
+        # Model (cascade-mode aware, with per-agent override note).
+        default_model = AZURE_OPENAI_CHAT_DEPLOYMENT_ID or "gpt-4o"
+        model_note = default_model
+        temperature_str = "n/a"
+        if agent_obj is not None:
+            try:
+                model_cfg = agent_obj.get_model_for_mode("cascade")
+                model_name = getattr(model_cfg, "deployment_id", None) or default_model
+                model_note = (
+                    f"{model_name}  (per-agent override; default={default_model})"
+                    if model_name != default_model
+                    else model_name
+                )
+                temp = getattr(model_cfg, "temperature", None)
+                if temp is not None:
+                    temperature_str = str(temp)
+            except Exception:
+                pass
+
+        # Voice + STT/VAD details (defensive — agent or fields may be absent).
+        voice_line = "n/a"
+        vad_line = "n/a"
+        tools_count = 0
+        mcp_servers: list[str] = []
+        if agent_obj is not None:
+            voice = getattr(agent_obj, "voice", None)
+            if voice is not None:
+                voice_line = (
+                    f"{getattr(voice, 'name', '?')} "
+                    f"(type={getattr(voice, 'type', '?')}, "
+                    f"style={getattr(voice, 'style', '?')}, "
+                    f"rate={getattr(voice, 'rate', '?')})"
+                )
+            speech = getattr(agent_obj, "speech", None)
+            if speech is not None:
+                langs = getattr(speech, "candidate_languages", None) or []
+                vad_line = (
+                    f"silence_ms={getattr(speech, 'vad_silence_timeout_ms', '?')}, "
+                    f"semantic={getattr(speech, 'use_semantic_segmentation', '?')}, "
+                    f"langs={','.join(langs) if langs else 'auto'}"
+                )
+            tools_count = len(getattr(agent_obj, "tool_names", []) or [])
+            mcp_servers = list(getattr(agent_obj, "mcp_servers", []) or [])
+
+        # Scenario + agent count (best-effort; never break the banner).
+        scenario_name = self._config.scenario
+        agent_count = len(getattr(self._app_state, "unified_agents", {}) or {})
+        try:
+            cfg = resolve_orchestrator_config(
+                session_id=self._session_id,
+                scenario_name=scenario_name,
+            )
+            scenario_name = scenario_name or getattr(cfg, "scenario_name", None)
+            if getattr(cfg, "agents", None):
+                agent_count = len(cfg.agents)
+        except Exception:
+            pass
+
+        # Redact endpoint to host only (avoid leaking full path/keys in logs).
+        endpoint = AZURE_OPENAI_ENDPOINT or ""
+        try:
+            from urllib.parse import urlparse
+
+            endpoint_host = urlparse(endpoint).netloc or endpoint
+        except Exception:
+            endpoint_host = endpoint
+
+        transport = (
+            self._transport.value if hasattr(self._transport, "value") else str(self._transport)
+        )
+        stream_mode = getattr(self._context, "stream_mode", None)
+        stream_mode_str = getattr(stream_mode, "value", None) or str(stream_mode or "n/a")
+        stt_tier = getattr(getattr(self._context, "stt_tier", None), "value", "?")
+        tts_tier = getattr(getattr(self._context, "tts_tier", None), "value", "?")
+        mcp_line = ", ".join(mcp_servers) if mcp_servers else "none"
+
+        banner = (
+            "\n╭─ SpeechCascade Connection ─────────────────────────────────────\n"
+            f"│ session      : {self._session_id}\n"
+            f"│ call         : {self._context.call_connection_id or '(browser)'}\n"
+            f"│ transport    : {transport}\n"
+            f"│ stream mode  : {stream_mode_str}\n"
+            f"│ endpoint     : {endpoint_host}\n"
+            f"│ model        : {model_note}\n"
+            f"│ temperature  : {temperature_str}\n"
+            f"│ start agent  : {agent_name}  (source={agent_source})\n"
+            f"│ scenario     : {scenario_name or '(none)'}\n"
+            f"│ agents       : {agent_count}\n"
+            f"│ tools        : {tools_count}\n"
+            f"│ mcp servers  : {mcp_line}\n"
+            f"│ voice        : {voice_line}\n"
+            f"│ stt / vad    : {vad_line}\n"
+            f"│ pools        : stt={stt_tier}, tts={tts_tier}\n"
+            "╰────────────────────────────────────────────────────────────────"
+        )
+        logger.info(banner)
 
     async def run(self) -> None:
         """
@@ -935,18 +1146,30 @@ class VoiceHandler:
     def record_turn_kpis(
         self,
         *,
+        ttft_ms: float | None = None,
+        ttfb_ms: float | None = None,
+        synth_ms: float | None = None,
+        stt_ms: float | None = None,
         llm_ttft_ms: float | None = None,
-        tts_ttfb_ms: float | None = None,
+        llm_total_ms: float | None = None,
+        tts_total_ms: float | None = None,
         turn_wall_ms: float | None = None,
         agent_name: str | None = None,
+        latency_anchor: str | None = None,
     ) -> None:
-        """Stamp consolidated turn KPIs onto the headline voice.turn.N.total span."""
+        """Stamp the structured per-turn latency profile on the headline turn span."""
         if self._route_turn_thread:
             self._route_turn_thread.record_turn_kpis(
+                ttft_ms=ttft_ms,
+                ttfb_ms=ttfb_ms,
+                synth_ms=synth_ms,
+                stt_ms=stt_ms,
                 llm_ttft_ms=llm_ttft_ms,
-                tts_ttfb_ms=tts_ttfb_ms,
+                llm_total_ms=llm_total_ms,
+                tts_total_ms=tts_total_ms,
                 turn_wall_ms=turn_wall_ms,
                 agent_name=agent_name,
+                latency_anchor=latency_anchor,
             )
 
     @property
@@ -954,6 +1177,17 @@ class VoiceHandler:
         """Current turn number from the route-turn thread (for KPI correlation)."""
         if self._route_turn_thread:
             return self._route_turn_thread.turn_number
+        return None
+
+    @property
+    def last_recog_end_perf(self) -> float | None:
+        """perf_counter() of the last finalized recognition (end of user speech).
+
+        Used by the orchestrator turn-KPI summary to anchor the per-turn
+        "recognition end -> first token / first audio" latencies.
+        """
+        if self._route_turn_thread:
+            return self._route_turn_thread.last_recog_end_perf
         return None
 
     # =========================================================================

@@ -290,6 +290,17 @@ class CascadeOrchestratorAdapter:
         )
         # Per-turn LLM time-to-first-token (ms), populated during streaming.
         self._last_turn_ttft_ms: float | None = None
+        # perf_counter at turn entry (== finalized user input / recognition
+        # complete) and the recognition->first-token latency derived from it.
+        # ttft_ms is anchored at the LLM request; this is anchored at end of
+        # user speech, so it includes context-build/orchestration overhead.
+        self._turn_perf_start: float | None = None
+        self._last_turn_recog_to_llm_ms: float | None = None
+        # Optional external anchor (perf_counter) marking the end of user speech.
+        # When set before process_turn, it overrides the process_turn-entry
+        # anchor so recog_to_llm_first_ms measures from the true end of
+        # recognition (i.e. includes queue + context-build overhead).
+        self._recognition_anchor: float | None = None
 
         if not self.agents:
             self._load_agents()
@@ -926,6 +937,16 @@ class CascadeOrchestratorAdapter:
     # Turn Processing
     # ─────────────────────────────────────────────────────────────────
 
+    def set_recognition_anchor(self, perf_ts: float | None) -> None:
+        """Set the end-of-recognition perf_counter anchor for the next turn.
+
+        Overrides the default process_turn-entry anchor so the per-turn
+        recognition->first-token KPI reflects the true gap from when the user
+        stopped speaking (including queue + orchestration overhead). Consumed
+        (cleared) on the next process_turn so it never leaks across turns.
+        """
+        self._recognition_anchor = perf_ts
+
     async def process_turn(
         self,
         context: OrchestratorContext | None = None,
@@ -975,6 +996,10 @@ class CascadeOrchestratorAdapter:
         self._metrics.start_turn()  # Increments turn count and resets TTFT tracking
         # Reset per-turn LLM time-to-first-token (captured during streaming).
         self._last_turn_ttft_ms = None
+        # Anchor recognition-complete -> first-token at turn entry (the finalized
+        # user input has arrived by the time process_turn is called).
+        self._turn_perf_start = time.perf_counter()
+        self._last_turn_recog_to_llm_ms = None
 
         # Support both calling patterns: context OR direct parameters
         if context is None:
@@ -1548,7 +1573,7 @@ class CascadeOrchestratorAdapter:
 
         with tracer.start_as_current_span(
             f"invoke_agent {self._active_agent}",
-            kind=SpanKind.CLIENT,
+            kind=SpanKind.INTERNAL,
             attributes=span_attributes,
         ) as span:
             try:

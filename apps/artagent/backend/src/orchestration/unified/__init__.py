@@ -449,6 +449,19 @@ async def route_turn(
         turn_start_ts = time.perf_counter()
         tts_ttfb_holder: list[float] = []
 
+        # Clear the TTS-cancel flag at turn entry. Each partial transcript fires
+        # a barge-in that sets cancel_event (to stop the *previous* response), and
+        # the user's own final partial sets it microseconds before this turn
+        # starts. Without clearing it here, the streaming TTS path aborts on its
+        # first audio chunk (it checks cancel_event.is_set()), so every spoken
+        # turn after the greeting plays no audio. The final transcript means the
+        # user has stopped talking; any genuine barge-in during this turn will
+        # set the flag again. The prior turn is already torn down via task
+        # cancellation, so clearing the cooperative flag here is safe.
+        cancel_event = getattr(ws.state, "cancel_event", None)
+        if cancel_event is not None and cancel_event.is_set():
+            cancel_event.clear()
+
         try:
             # Build session context from MemoManager for prompt rendering
             active_agent = cm.get_value_from_corememory("active_agent") or adapter.current_agent
@@ -549,10 +562,18 @@ async def route_turn(
             adapter.set_on_agent_switch(on_agent_switch)
 
             # Define TTS chunk callback - uses speech_cascade's queue_tts for proper sequencing
-            async def on_tts_chunk(text: str) -> None:
-                """Queue TTS and broadcast structured assistant streaming envelopes."""
+            async def on_tts_chunk(text: str, display_text: str | None = None) -> None:
+                """Queue TTS and broadcast structured assistant streaming envelopes.
+
+                ``text`` is the sanitized (plain) text sent to TTS synthesis.
+                ``display_text`` is the original (markdown-preserving) text used
+                for the UI envelope; it falls back to ``text`` when not provided.
+                """
                 if not text or not text.strip():
                     return
+
+                # Raw text for UI rendering (preserves markdown); plain text drives TTS.
+                ui_text = display_text if (display_text and display_text.strip()) else text
 
                 # First audio chunk for this turn → mark TTS time-to-first-byte.
                 # Bridges to the headline voice.turn.N.total span so the turn's
@@ -566,7 +587,7 @@ async def route_turn(
                         except Exception:
                             logger.debug("Failed to record tts_first_audio on turn span", exc_info=True)
 
-                normalized = text.strip()
+                normalized = ui_text.strip()
                 stream_cache = _ensure_stream_cache(ws)
                 stream_cache.append(normalized)
 
@@ -601,13 +622,13 @@ async def route_turn(
                     )
 
                 envelope = make_assistant_streaming_envelope(
-                    content=text,
+                    content=ui_text,
                     sender=agent_label,
                     session_id=session_id,
                     call_id=call_connection_id,
                 )
                 payload = envelope.setdefault("payload", {})
-                payload.setdefault("message", text)
+                payload.setdefault("message", ui_text)
                 
                 # Use effective turn_id from CascadeSessionScope if available
                 # This ensures post-tool responses use advanced turn_id
@@ -622,7 +643,7 @@ async def route_turn(
                 payload["speaker"] = agent_name
                 payload["run_id"] = run_id
 
-                envelope["message"] = text  # Legacy compatibility
+                envelope["message"] = ui_text  # Legacy compatibility
                 envelope["speaker"] = agent_name
                 envelope["sender"] = agent_label
 
@@ -677,6 +698,18 @@ async def route_turn(
                 except Exception:
                     logger.debug("Failed to emit tool_end frame", exc_info=True)
 
+            # Anchor per-turn latency KPIs at the true end of user speech so the
+            # "recognition end -> first token / first audio" figures include the
+            # queue + context-build gap (not just LLM/TTS time). The handler
+            # stamps this perf_counter at recognition finalization.
+            recog_end_perf = getattr(
+                getattr(ws.state, "speech_cascade", None), "last_recog_end_perf", None
+            )
+            if recog_end_perf is not None:
+                setter = getattr(adapter, "set_recognition_anchor", None)
+                if callable(setter):
+                    setter(recog_end_perf)
+
             # Process the turn
             result = await adapter.process_turn(
                 context,
@@ -699,6 +732,7 @@ async def route_turn(
                 call_connection_id=call_connection_id,
                 turn_start_ts=turn_start_ts,
                 tts_ttfb_holder=tts_ttfb_holder,
+                recog_end_perf=recog_end_perf,
             )
 
             if result.error:
@@ -813,33 +847,82 @@ def _emit_turn_kpis(
     call_connection_id: str | None,
     turn_start_ts: float,
     tts_ttfb_holder: list[float],
+    recog_end_perf: float | None = None,
 ) -> None:
-    """Emit consolidated turn KPIs (TTFT / TTFB / wall time) for the cascade turn.
+    """Emit consolidated turn KPIs (TTFT / TTFB / synth / wall) for the cascade turn.
 
     Mirrors the VoiceLive turn-complete annotation so both orchestration modes
-    surface the same key metrics in logs and App Insights:
-      - llm_ttft_ms     : LLM request → first streamed token
-      - tts_ttfb_ms     : turn start → first audio chunk out (response E2E)
-      - turn.wall_ms    : full orchestration wall time
+    surface the same canonical metrics in logs and App Insights:
+      - turn.ttft_ms  : end of recognition → first streamed LLM token
+      - turn.ttfb_ms  : end of recognition → first audio byte
+      - turn.synth_ms : TTS synthesis delta (ttfb - ttft)
+      - turn.llm_ttft_ms : LLM request → first streamed token (model/network only)
+      - turn.wall_ms  : full orchestration wall time
 
-    KPIs are stamped on the ``unified_orchestrator.route_turn`` span as queryable
+    The ttft/ttfb figures anchor at the moment the user stopped speaking
+    (``recog_end_perf``), so they include the queue + context-build overhead the
+    caller actually waited through; they fall back to turn-start anchoring when no
+    recognition timestamp is available (surfaced via ``turn.latency_anchor``). KPIs
+    are stamped on the ``unified_orchestrator.route_turn`` span as queryable
     dimensions and mirrored onto the headline ``voice.turn.N.total`` span.
     """
     turn_wall_ms = (time.perf_counter() - turn_start_ts) * 1000
     llm_ttft_ms = getattr(result, "ttft_ms", None)
-    tts_ttfb_ms = (tts_ttfb_holder[0] - turn_start_ts) * 1000 if tts_ttfb_holder else None
     final_agent = result.agent_name or adapter.current_agent or "unknown"
+
+    first_audio_perf = tts_ttfb_holder[0] if tts_ttfb_holder else None
+    # Legacy turn-start-anchored TTFB (kept for span back-compat + record_turn_kpis).
+    tts_ttfb_ms = (first_audio_perf - turn_start_ts) * 1000 if first_audio_perf is not None else None
+
+    # End of recognition → first streamed LLM token. The adapter anchors
+    # recog_to_llm_first_ms at recog_end_perf when it was provided, so this is the
+    # true user-perceived "thinking" latency (includes queue + context build).
+    recog_to_ttft_ms = getattr(result, "recog_to_llm_first_ms", None)
+    # End of recognition → first audio byte (the real response-E2E the caller hears).
+    if first_audio_perf is not None and recog_end_perf is not None:
+        recog_to_ttfb_ms = (first_audio_perf - recog_end_perf) * 1000
+    else:
+        recog_to_ttfb_ms = tts_ttfb_ms  # fall back to turn-start anchoring
+
+    # When no audio was produced, explain why so N/A is actionable, not a mystery.
+    if recog_to_ttfb_ms is None:
+        if result.tool_calls:
+            ttfb_display = "N/A(tool_only)"
+        elif getattr(result, "interrupted", False):
+            ttfb_display = "N/A(barge_in)"
+        else:
+            ttfb_display = "N/A(no_audio)"
+    else:
+        ttfb_display = f"{recog_to_ttfb_ms:.0f}ms"
+
+    # TTS synthesis delta: first LLM token -> first audio byte. Both legs are
+    # recognition-anchored, so the difference isolates render + delivery time.
+    synth_ms = (
+        recog_to_ttfb_ms - recog_to_ttft_ms
+        if recog_to_ttfb_ms is not None and recog_to_ttft_ms is not None
+        else None
+    )
+    synth_display = f"{synth_ms:.0f}ms" if synth_ms is not None else "N/A"
 
     speech_cascade = getattr(ws.state, "speech_cascade", None)
     turn_no = getattr(speech_cascade, "turn_number", None) if speech_cascade else None
 
-    # Stamp queryable per-turn dimensions on the route_turn span.
+    # Stamp canonical, queryable per-turn latency KPIs on the route_turn span —
+    # identical vocabulary to the turn-complete log and the VoiceLive turn span
+    # (ttft -> ttfb -> synth). recog-anchored figures include queue + context build.
     span.set_attribute("turn.wall_ms", round(turn_wall_ms, 1))
+    span.set_attribute(
+        "turn.latency_anchor", "recog_end" if recog_end_perf is not None else "turn_start"
+    )
+    if recog_to_ttft_ms is not None:
+        span.set_attribute("turn.ttft_ms", round(recog_to_ttft_ms, 1))
+    if recog_to_ttfb_ms is not None:
+        span.set_attribute("turn.ttfb_ms", round(recog_to_ttfb_ms, 1))
+    if synth_ms is not None:
+        span.set_attribute("turn.synth_ms", round(synth_ms, 1))
     if llm_ttft_ms is not None:
+        # Pure model/network TTFT (excludes queue + context build).
         span.set_attribute("turn.llm_ttft_ms", round(llm_ttft_ms, 1))
-    if tts_ttfb_ms is not None:
-        span.set_attribute("turn.tts_ttfb_ms", round(tts_ttfb_ms, 1))
-        span.set_attribute("turn.response_e2e_ms", round(tts_ttfb_ms, 1))
 
     # Stamp the consolidated KPI summary onto the headline voice.turn.N.total span
     # so the end-to-end picture and core latency drivers live on the turn itself
@@ -847,10 +930,13 @@ def _emit_turn_kpis(
     if speech_cascade is not None:
         try:
             speech_cascade.record_turn_kpis(
-                llm_ttft_ms=llm_ttft_ms,
-                tts_ttfb_ms=tts_ttfb_ms,
+                ttft_ms=recog_to_ttft_ms,
+                ttfb_ms=recog_to_ttfb_ms,
+                synth_ms=synth_ms,
                 turn_wall_ms=turn_wall_ms,
                 agent_name=final_agent,
+                latency_anchor="recog_end" if recog_end_perf is not None else "turn_start",
+                llm_ttft_ms=llm_ttft_ms,
             )
         except Exception:
             logger.debug("Failed to stamp turn KPIs on headline span", exc_info=True)
@@ -892,16 +978,19 @@ def _emit_turn_kpis(
     except Exception:
         logger.debug("Failed to record turn KPI metrics", exc_info=True)
 
-    # Single consolidated KPI log line (mirrors the VoiceLive turn-complete log).
+    # Single consolidated KPI log line with broken-out, recognition-anchored
+    # latencies. ttft = end of speech -> first LLM token; ttfb = end of speech ->
+    # first audio byte; synth isolates the TTS render + delivery delta (ttfb-ttft).
     logger.info(
-        "[Cascade] Turn %s complete | response_e2e=%s (llm_ttft=%s -> first_audio) "
-        "| turn_wall=%.0fms | session=%s agent=%s",
+        "[Cascade] Turn %s complete | agent=%s | ttft=%s ttfb=%s synth=%s "
+        "| turn_wall=%.0fms | session=%s",
         turn_no if turn_no is not None else "?",
-        f"{tts_ttfb_ms:.0f}ms" if tts_ttfb_ms is not None else "N/A",
-        f"{llm_ttft_ms:.0f}ms" if llm_ttft_ms is not None else "N/A",
+        final_agent,
+        f"{recog_to_ttft_ms:.0f}ms" if recog_to_ttft_ms is not None else "N/A",
+        ttfb_display,
+        synth_display,
         turn_wall_ms,
         session_id,
-        final_agent,
     )
 
 

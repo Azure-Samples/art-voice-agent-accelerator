@@ -1690,7 +1690,9 @@ class LiveOrchestrator:
             kind=trace.SpanKind.INTERNAL,
             attributes={
                 "component": "voicelive",
-                "ai.session.id": session_id or "",
+                # App Insights grouping: ai.session.id=call, ai.user.id=session.
+                "ai.session.id": self.call_connection_id or "",
+                "ai.user.id": session_id or "",
                 SpanAttr.SESSION_ID.value: session_id or "",
                 SpanAttr.CALL_CONNECTION_ID.value: self.call_connection_id or "",
                 "transport.type": self._transport.upper() if self._transport else "ACS",
@@ -1796,12 +1798,10 @@ class LiveOrchestrator:
             result: dict[str, Any] = {}
 
             try:
-                with tracer.start_as_current_span(
-                    "voicelive.tool.execute",
-                    kind=trace.SpanKind.INTERNAL,
-                    attributes={"tool.name": name},
-                ):
-                    result = await execute_tool(name, args)
+                # Tool execution runs under the enclosing `execute_tool {name}`
+                # span, which already carries the tool name, args, and timing — no
+                # separate child span is needed.
+                result = await execute_tool(name, args)
             except Exception as exc:
                 notify_status = "error"
                 notify_error = str(exc)
@@ -2423,7 +2423,9 @@ class LiveOrchestrator:
             kind=trace.SpanKind.INTERNAL,
             attributes={
                 "component": "voicelive",
-                "ai.session.id": session_id or "",
+                # App Insights grouping: ai.session.id=call, ai.user.id=session.
+                "ai.session.id": self.call_connection_id or "",
+                "ai.user.id": session_id or "",
                 SpanAttr.SESSION_ID.value: session_id or "",
                 SpanAttr.CALL_CONNECTION_ID.value: self.call_connection_id or "",
                 SpanAttr.GENAI_OPERATION_NAME.value: GenAIOperation.INVOKE_AGENT,
@@ -2498,7 +2500,8 @@ class LiveOrchestrator:
             attributes={
                 "component": "voicelive",
                 "call.connection.id": self.call_connection_id or "",
-                "ai.session.id": session_id or "",
+                # App Insights grouping: ai.session.id=call, ai.user.id=session.
+                "ai.session.id": self.call_connection_id or "",
                 SpanAttr.SESSION_ID.value: session_id or "",
                 "ai.user.id": session_id or "",
                 "transport.type": self._transport.upper() if self._transport else "ACS",

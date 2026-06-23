@@ -925,12 +925,16 @@ class VoiceLiveSDKHandler:
                 # These are independent and can run concurrently to cut startup time.
                 # ─────────────────────────────────────────────────────────────
 
-                async def _connect_voicelive(connection_model: str):
+                async def _connect_voicelive(connection_model: str, byom_query: dict[str, str] | None = None):
                     """Establish VoiceLive WebSocket connection.
 
                     NOTE: The VoiceLive SDK fixes the generative model at connect() time;
                     it cannot be changed later via session.update(). The model must therefore
                     be resolved from the start agent BEFORE connecting (see resolution below).
+
+                    ``byom_query`` carries the BYOM (Bring Your Own Model) connect-time
+                    params (``profile`` and optional ``foundry-resource-override``) when
+                    the start agent opts into BYOM; None preserves managed VoiceLive.
                     """
                     t0 = time.perf_counter()
                     with tracer.start_as_current_span(
@@ -944,9 +948,14 @@ class VoiceLiveSDKHandler:
                             credential=self._credential,
                             model=connection_model,
                             connection_options=connection_options,
+                            **({"query": byom_query} if byom_query else {}),
                         )
                         self._connection = await self._connection_cm.__aenter__()
                         conn_span.set_attribute("voicelive.model", connection_model)
+                        if byom_query:
+                            conn_span.set_attribute(
+                                "voicelive.byom_profile", byom_query.get("profile", "")
+                            )
                     elapsed = (time.perf_counter() - t0) * 1000
                     logger.info(
                         "[VoiceLive Startup] connect_ms=%.1f | session=%s",
@@ -1102,8 +1111,34 @@ class VoiceLiveSDKHandler:
                         self.session_id,
                     )
 
+                # Resolve per-agent BYOM (Bring Your Own Model) config from the start
+                # agent. Like the model, BYOM is bound at connect() time (it's a
+                # WebSocket query param), so it must come from the START agent. None =
+                # managed VoiceLive (no profile param sent).
+                byom_query: dict[str, str] | None = None
+                if start_agent_obj is not None:
+                    try:
+                        byom_query = start_agent_obj.get_byom_query()
+                    except Exception as byom_err:  # pragma: no cover - defensive
+                        logger.warning(
+                            "[VoiceLive Startup] Failed to resolve BYOM config for %s | err=%s",
+                            effective_start_agent, byom_err,
+                        )
+                if byom_query:
+                    logger.info(
+                        "[VoiceLive Startup] BYOM enabled | agent=%s profile=%s%s session=%s",
+                        effective_start_agent,
+                        byom_query.get("profile"),
+                        (
+                            f" foundry_override={byom_query['foundry-resource-override']}"
+                            if "foundry-resource-override" in byom_query
+                            else ""
+                        ),
+                        self.session_id,
+                    )
+
                 # Establish the WebSocket connection with the resolved model.
-                await _connect_voicelive(connection_model)
+                await _connect_voicelive(connection_model, byom_query)
 
 
                 # Set span attributes from resolved values
@@ -1681,6 +1716,13 @@ class VoiceLiveSDKHandler:
                 self.session_id,
                 getattr(event, "response_id", "unknown"),
             )
+            # Agent finished speaking -> finalize and close voice.turn.N.total now so
+            # the turn span is tightly scoped (user speech -> response audio done) and
+            # reads sequentially, instead of lingering until the next utterance.
+            # _finalize_turn_metrics is idempotent (it resets _turn_start_time), so the
+            # safety-net finalize at the next user-speech-start becomes a no-op. Tool-only
+            # responses emit no audio, so this does not fire mid-turn for tool calls.
+            await self._finalize_turn_metrics()
             response_id = getattr(event, "response_id", None)
             if response_id:
                 self._active_response_ids.discard(response_id)
@@ -2282,28 +2324,39 @@ class VoiceLiveSDKHandler:
             agent_name=self._messenger._active_agent_name or "unknown",
         )
 
+        # TTS synthesis delta: first LLM token -> first audio byte (render +
+        # delivery). Both legs are VAD-end anchored, so the difference isolates
+        # the synthesis portion of TTFB.
+        synth_ms = (
+            tts_ttfb_ms - llm_ttft_ms
+            if tts_ttfb_ms is not None and llm_ttft_ms is not None
+            else None
+        )
+
+        # Stamp the structured per-turn latency profile (stt / ttft / ttfb /
+        # synth / wall) on the voice.turn.N.total span through the shared helper so
+        # VoiceLive and Cascade surface identical attributes in App Insights.
         if self._active_turn_span:
-            self._active_turn_span.add_metadata(
-                "latency.reference", "vad_end" if self._vad_end_time else "turn_start"
+            self._active_turn_span.record_turn_kpis(
+                ttft_ms=llm_ttft_ms,
+                ttfb_ms=tts_ttfb_ms,
+                synth_ms=synth_ms,
+                stt_ms=stt_latency_ms,
+                turn_wall_ms=total_turn_duration_ms,
+                agent_name=self._messenger._active_agent_name or "unknown",
+                latency_anchor="vad_end" if self._vad_end_time else "turn_start",
             )
-            if tts_ttfb_ms is not None:
-                # Headline number: VAD end -> first audio byte. Queryable as
-                # customDimensions["turn.metadata.response_e2e_ms"] without
-                # relying on the (wall-clock) span duration.
-                self._active_turn_span.add_metadata(
-                    "response_e2e_ms", round(tts_ttfb_ms, 1)
-                )
 
         logger.info(
-            "[VoiceLive] Turn %d complete | response_e2e=%s (stt=%s + llm_ttft=%s -> first_audio) "
-            "| turn_wall=%.0fms | session=%s agent=%s",
+            "[VoiceLive] Turn %d complete | agent=%s | ttft=%s ttfb=%s synth=%s "
+            "| turn_wall=%.0fms | session=%s",
             self._turn_number,
-            f"{tts_ttfb_ms:.0f}ms" if tts_ttfb_ms else "N/A",
-            f"{stt_latency_ms:.0f}ms" if stt_latency_ms else "N/A",
-            f"{llm_ttft_ms:.0f}ms" if llm_ttft_ms else "N/A",
+            self._messenger._active_agent_name or "unknown",
+            f"{llm_ttft_ms:.0f}ms" if llm_ttft_ms is not None else "N/A",
+            f"{tts_ttfb_ms:.0f}ms" if tts_ttfb_ms is not None else "N/A",
+            f"{synth_ms:.0f}ms" if synth_ms is not None else "N/A",
             total_turn_duration_ms,
             self.session_id,
-            self._messenger._active_agent_name or "unknown",
         )
 
         # Send turn metrics to frontend via WebSocket

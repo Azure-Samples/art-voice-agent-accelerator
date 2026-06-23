@@ -11,7 +11,6 @@ startup completes, allowing the application to start accepting requests faster.
 from __future__ import annotations
 
 import asyncio
-import sys
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -48,7 +47,7 @@ class LifecycleManager:
 
     Design goals:
     - Simple and readable for junior developers
-    - Minimal console noise (single progress line)
+    - Clean, ordered progress logs (one consistent line per step)
     - Clear error reporting
     - Proper tracing for production observability
 
@@ -90,7 +89,10 @@ class LifecycleManager:
 
     async def run_startup(self) -> list[tuple[str, float]]:
         """
-        Execute all startup steps with progress feedback.
+        Execute all blocking startup steps with clean, ordered progress logs.
+
+        Each step is reported as a single, consistently-formatted log line so the
+        sequence stays readable even when components emit their own logs mid-step.
 
         Returns:
             List of (step_name, duration_seconds) for reporting.
@@ -98,10 +100,9 @@ class LifecycleManager:
         results: list[tuple[str, float]] = []
         total = len(self.steps)
 
-        # Single-line progress indicator
-        self._write_progress(f"Starting ({total} steps)...")
+        logger.info("Startup · initializing %d components", total)
 
-        for i, step in enumerate(self.steps):
+        for i, step in enumerate(self.steps, start=1):
             step_start = time.perf_counter()
 
             with self._tracer.start_as_current_span(f"startup.{step.name}") as span:
@@ -113,7 +114,7 @@ class LifecycleManager:
                     step.success = False
                     span.record_exception(exc)
                     span.set_status(Status(StatusCode.ERROR, str(exc)))
-                    self._write_progress(f"✗ {step.name} failed: {exc}\n")
+                    logger.error("  %d/%d %-9s ✗ %s", i, total, step.name, exc)
                     raise
 
                 step.duration = time.perf_counter() - step_start
@@ -121,13 +122,10 @@ class LifecycleManager:
 
             self.executed_steps.append(step)
             results.append((step.name, round(step.duration, 2)))
-
-            # Update progress indicator
-            progress = "·" * i + "●" + "·" * (total - i - 1)
-            self._write_progress(f"[{progress}] {step.name} ({step.duration:.1f}s)")
+            logger.info("  %d/%d %-9s ✓ %.2fs", i, total, step.name, step.duration)
 
         total_time = sum(d for _, d in results)
-        self._write_progress(f"✓ Ready in {total_time:.1f}s\n")
+        logger.info("Startup · core ready in %.1fs", total_time)
 
         return results
 
@@ -149,9 +147,12 @@ class LifecycleManager:
         async def run_deferred():
             results = {}
             deferred_names = [s.name for s in self.deferred_steps]
-            logger.info(f"Starting {len(self.deferred_steps)} deferred task(s): {deferred_names}")
+            total = len(self.deferred_steps)
+            logger.info(
+                "Deferred · %d task(s) in background: %s", total, ", ".join(deferred_names)
+            )
 
-            for step in self.deferred_steps:
+            for i, step in enumerate(self.deferred_steps, start=1):
                 step_start = time.perf_counter()
 
                 with self._tracer.start_as_current_span(f"startup.deferred.{step.name}") as span:
@@ -161,7 +162,9 @@ class LifecycleManager:
                         step.duration = time.perf_counter() - step_start
                         span.set_attribute("duration_sec", step.duration)
                         results[step.name] = {"success": True, "duration": round(step.duration, 2)}
-                        logger.info(f"Deferred task '{step.name}' completed in {step.duration:.2f}s")
+                        logger.info(
+                            "  %d/%d %-9s ✓ %.2fs (deferred)", i, total, step.name, step.duration
+                        )
                     except Exception as exc:
                         step.error = str(exc)
                         step.success = False
@@ -169,7 +172,9 @@ class LifecycleManager:
                         span.record_exception(exc)
                         span.set_status(Status(StatusCode.ERROR, str(exc)))
                         results[step.name] = {"success": False, "error": str(exc), "duration": round(step.duration, 2)}
-                        logger.warning(f"Deferred task '{step.name}' failed (non-blocking): {exc}")
+                        logger.warning(
+                            "  %d/%d %-9s ✗ %s (non-blocking)", i, total, step.name, exc
+                        )
 
                 # Track for shutdown even if failed
                 self.executed_steps.append(step)
@@ -179,7 +184,7 @@ class LifecycleManager:
             total_deferred = sum(r.get("duration", 0) for r in results.values())
             success_count = sum(1 for r in results.values() if r.get("success"))
             logger.info(
-                f"Deferred startup complete: {success_count}/{len(results)} succeeded in {total_deferred:.2f}s"
+                "Deferred · %d/%d complete in %.1fs", success_count, len(results), total_deferred
             )
 
         # Initialize state for readiness checks
@@ -191,17 +196,18 @@ class LifecycleManager:
 
     async def run_shutdown(self) -> None:
         """Execute shutdown steps in reverse order."""
-        self._write_progress("Shutting down...")
+        logger.info("Shutdown · stopping")
 
         # Cancel any pending deferred startup task
         if self.deferred_task is not None and not self.deferred_task.done():
-            self._write_progress("Cancelling deferred startup...")
+            logger.info("  cancelling deferred startup")
             self.deferred_task.cancel()
             try:
                 await asyncio.wait_for(self.deferred_task, timeout=5.0)
             except (asyncio.CancelledError, asyncio.TimeoutError):
                 pass
 
+        stopped = 0
         for step in reversed(self.executed_steps):
             if step.shutdown is None:
                 continue
@@ -209,13 +215,14 @@ class LifecycleManager:
             with self._tracer.start_as_current_span(f"shutdown.{step.name}") as span:
                 try:
                     await step.shutdown()
+                    stopped += 1
                 except Exception as exc:
                     span.record_exception(exc)
                     span.set_status(Status(StatusCode.ERROR, str(exc)))
-                    logger.warning(f"Shutdown step '{step.name}' failed: {exc}")
+                    logger.warning("  shutdown '%s' failed: %s", step.name, exc)
                     # Continue shutdown despite errors
 
-        self._write_progress("✓ Shutdown complete\n")
+        logger.info("Shutdown · complete (%d steps)", stopped)
 
     def get_results_summary(self) -> list[tuple[str, float]]:
         """Get timing results for dashboard display."""
@@ -224,12 +231,3 @@ class LifecycleManager:
     def get_deferred_step_names(self) -> list[str]:
         """Get names of deferred steps (for dashboard display)."""
         return [s.name for s in self.deferred_steps]
-
-    @staticmethod
-    def _write_progress(message: str) -> None:
-        """Write progress to stderr (single-line updates)."""
-        if message.endswith("\n"):
-            sys.stderr.write(f"\r{message}")
-        else:
-            sys.stderr.write(f"\r{message:<60}")
-        sys.stderr.flush()

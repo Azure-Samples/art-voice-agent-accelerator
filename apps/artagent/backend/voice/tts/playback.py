@@ -181,16 +181,23 @@ class TTSPlayback:
                 )
                 return (voice.name, voice.style, voice.rate)
 
-        # Try session agent (Agent Builder override) - has priority over base agents
+        # Try session agent (Agent Builder override) - has priority over base agents.
+        # Look up by the active/start agent name first, then fall back to the
+        # session's default agent: an Agent Builder / Quick Tune edit is stored
+        # under the agent's *own* name, which may differ from app_state.start_agent
+        # (e.g. when a scenario is active). Without this fallback the override's
+        # voice silently never applies.
         start_agent_name = getattr(self._app_state, "start_agent", "Concierge")
         session_agent = get_session_agent(self._context.session_id, start_agent_name)
+        if session_agent is None:
+            session_agent = get_session_agent(self._context.session_id)
         if session_agent and hasattr(session_agent, "voice") and session_agent.voice:
             voice = session_agent.voice
             if voice.name:
                 logger.debug(
                     "[%s] Voice from session agent '%s': %s",
                     self._session_short,
-                    start_agent_name,
+                    getattr(session_agent, "name", start_agent_name),
                     voice.name,
                 )
                 return (voice.name, voice.style, voice.rate)

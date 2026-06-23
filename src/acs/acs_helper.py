@@ -162,14 +162,15 @@ class AcsCaller:
             audio_format=AudioFormat.PCM16_K_MONO,  # Ensure this matches what your STT expects
         )
 
-        # Log configuration for debugging
-        logger.info("=" * 80)
-        logger.info("ACS Helper Configuration:")
-        logger.info(f"  Source Number: {source_number}")
-        logger.info(f"  🔗 Callback URL: {callback_url}")
-        logger.info(f"  🔗 WebSocket URL: {websocket_url}")
-        logger.info(f"  Recording Callback: {recording_callback_url}")
-        logger.info("=" * 80)
+        # Log configuration as a single consolidated block (one log entry instead
+        # of separator-wrapped, per-field lines that interleave with other logs).
+        logger.info(
+            "ACS configuration\n"
+            f"  source number : {source_number}\n"
+            f"  callback url  : {callback_url}\n"
+            f"  websocket url : {websocket_url}\n"
+            f"  recording cb  : {recording_callback_url}"
+        )
 
         # Initialize ACS client with proper authentication
         try:
@@ -215,10 +216,9 @@ class AcsCaller:
         self, websocket_url: str, acs_connection_string: str, acs_endpoint: str
     ):
         """Validate configuration and log warnings for common misconfigurations."""
-        # Log configuration status
-        if websocket_url:
-            logger.info(f"Transcription transport_url (WebSocket): {websocket_url}")
-        else:
+        # Warn on common misconfigurations (the URLs themselves are already logged
+        # once in the consolidated "ACS configuration" block above).
+        if not websocket_url:
             logger.warning("No websocket_url provided for transcription transport")
 
         if not self.source_number:

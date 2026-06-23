@@ -10,6 +10,10 @@ export PATH := $(HOME)/.local/bin:$(PATH)
 
 # Python interpreter to use (via uv)
 PYTHON_INTERPRETER = $(UV_BIN) run python
+# Python interpreter for evaluation runs. The voice-eval layer needs no extra
+# deps (only the already-present opentelemetry); ASSERT runs out-of-process, so
+# no --extra is used here. Kept distinct for future eval-only tooling.
+EVAL_PYTHON_INTERPRETER = $(UV_BIN) run python
 # Ensure current directory is in PYTHONPATH
 export PYTHONPATH=$(PWD):$PYTHONPATH;
 SCRIPTS_DIR = devops/scripts/local-dev
@@ -124,40 +128,49 @@ print('✅ All schemas valid')"
 # Launch interactive evaluation CLI (menu-driven)
 # Usage: make eval
 eval:
-	@$(PYTHON_INTERPRETER) tests/evaluation/eval_cli.py
+	@$(EVAL_PYTHON_INTERPRETER) tests/evaluation/eval_cli.py
 
 # Run a single evaluation scenario with streaming output
-# Usage: make eval-run SCENARIO=tests/evaluation/scenarios/session_based/banking_declined_card_verbosity.yaml
-# eval-run:
-# 	@if [ -z "$(SCENARIO)" ]; then \
-# 		echo "❌ Usage: make eval-run SCENARIO=<path-to-scenario.yaml>"; \
-# 		exit 1; \
-# 	fi
-# 	@$(PYTHON_INTERPRETER) tests/evaluation/run-eval-stream.py run --input $(SCENARIO)
+# Usage: make eval-run SCENARIO=tests/evaluation/scenarios/session_based/banking_multi_agent.yaml
+eval-run:
+	@if [ -z "$(SCENARIO)" ]; then \
+		echo "❌ Usage: make eval-run SCENARIO=<path-to-scenario.yaml>"; \
+		echo "   Example: make eval-run SCENARIO=tests/evaluation/scenarios/smoke/basic_identity_verification.yaml"; \
+		exit 1; \
+	fi
+	@$(EVAL_PYTHON_INTERPRETER) tests/evaluation/run-eval-stream.py run --input $(SCENARIO)
 
-# # Run all declined card evaluation scenarios
-# eval-declined-card:
-# 	@echo "📺 Running all declined card scenarios"
-# 	@echo "═══════════════════════════════════════════════════"
-# 	@for scenario in tests/evaluation/scenarios/session_based/banking_declined_card_*.yaml; do \
-# 		echo ""; \
-# 		echo "📋 Running: $$scenario"; \
-# 		$(PYTHON_INTERPRETER) tests/evaluation/run-eval-stream.py run --input "$$scenario" || true; \
-# 	done
-# 	@echo ""
-# 	@echo "✅ All declined card evaluations complete"
+# Internal helper: run every *.yaml scenario under a directory ($(DIR))
+define _eval_run_dir
+	@echo "═══════════════════════════════════════════════════"
+	@found=0; \
+	for scenario in $(1)/*.yaml; do \
+		[ -e "$$scenario" ] || continue; \
+		case "$$scenario" in *schema*) continue ;; esac; \
+		found=1; \
+		echo ""; \
+		echo "📋 Running: $$scenario"; \
+		$(EVAL_PYTHON_INTERPRETER) tests/evaluation/run-eval-stream.py run --input "$$scenario" || true; \
+	done; \
+	if [ "$$found" = "0" ]; then echo "⚠️  No scenarios found in $(1)"; fi
+	@echo ""
+endef
 
-# # Run all session-based evaluation scenarios
-# eval-session:
-# 	@echo "📺 Running all session-based scenarios"
-# 	@echo "═══════════════════════════════════════════════════"
-# 	@for scenario in tests/evaluation/scenarios/session_based/*.yaml; do \
-# 		echo ""; \
-# 		echo "📋 Running: $$scenario"; \
-# 		$(PYTHON_INTERPRETER) tests/evaluation/run-eval-stream.py run --input "$$scenario" || true; \
-# 	done
-# 	@echo ""
-# 	@echo "✅ All session-based evaluations complete"
+# Run all declined card evaluation scenarios
+eval-declined-card:
+	@echo "📺 Running all declined card scenarios"
+	@echo "═══════════════════════════════════════════════════"
+	@found=0; \
+	for scenario in tests/evaluation/scenarios/session_based/banking_declined_card_*.yaml; do \
+		[ -e "$$scenario" ] || continue; \
+		found=1; \
+		echo ""; \
+		echo "📋 Running: $$scenario"; \
+		$(EVAL_PYTHON_INTERPRETER) tests/evaluation/run-eval-stream.py run --input "$$scenario" || true; \
+	done; \
+	if [ "$$found" = "0" ]; then echo "⚠️  No declined card scenarios found"; fi
+	@echo ""
+	@echo "✅ All declined card evaluations complete"
 
 # # Run smoke tests (quick validation)
 # eval-smoke:
@@ -183,7 +196,12 @@ eval:
 # 	@echo ""
 # 	@echo "✅ A/B comparisons complete"
 
-.PHONY: eval eval-run eval-declined-card eval-session eval-smoke eval-ab
+# Launch the local pop-out evaluation viewer (browses runs/ + live-tails a
+# running eval). Opens the browser automatically. Usage: make eval-ui
+eval-ui:
+	@$(EVAL_PYTHON_INTERPRETER) -m tests.evaluation.ui
+
+.PHONY: eval eval-run eval-declined-card eval-session eval-smoke eval-ab eval-ui
 
 # Convenience targets for full code/test quality cycle
 check_and_fix_code_quality: fix_code_quality check_code_quality
@@ -228,6 +246,22 @@ start_frontend:
 
 start_tunnel:
 	bash $(SCRIPTS_DIR)/start_devtunnel_host.sh
+
+# Dev tunnel port to forward (backend listens on 8010 in local dev)
+DEVTUNNEL_PORT ?= 8010
+
+# All-in-one: create-or-reuse a dev tunnel, sync BASE_URL (backend .env.local)
+# and VITE_BACKEND_BASE_URL (frontend .env), then host it (blocks terminal).
+# Usage: make devtunnel [DEVTUNNEL_PORT=8010]
+devtunnel:
+	bash $(SCRIPTS_DIR)/devtunnel_up.sh --port $(DEVTUNNEL_PORT) --host
+
+# Same as above but only sync env files (does not host the tunnel).
+# Usage: make devtunnel_env [DEVTUNNEL_PORT=8010]
+devtunnel_env:
+	bash $(SCRIPTS_DIR)/devtunnel_up.sh --port $(DEVTUNNEL_PORT)
+
+.PHONY: devtunnel devtunnel_env
 
 # First-time tunnel setup - creates a new dev tunnel with anonymous access
 setup_tunnel:
@@ -655,6 +689,26 @@ test_redis_connection:
 .PHONY: connect_redis test_redis_connection
 
 ############################################################
+# Azure Network Exposure
+# Purpose: Flip azd-deployed private resources back to public
+############################################################
+
+# Make azd-deployed resources publicly accessible (dev/demo convenience).
+# Resolves the resource group from azd env (AZURE_RESOURCE_GROUP) by default.
+# Usage:
+#   make make_resources_public                       # interactive confirm
+#   make make_resources_public ARGS="--yes"          # skip confirmation
+#   make make_resources_public ARGS="--dry-run"      # preview only
+#   make make_resources_public RESOURCE_GROUP=my-rg  # explicit RG
+make_resources_public:
+	@echo "🌐 Making azd-deployed resources publicly accessible"
+	@echo "===================================================="
+	@bash devops/scripts/azd/helpers/make-resources-public.sh \
+		$(if $(RESOURCE_GROUP),--resource-group $(RESOURCE_GROUP),) $(ARGS)
+
+.PHONY: make_resources_public
+
+############################################################
 # Help and Documentation
 ############################################################
 
@@ -684,6 +738,8 @@ help:
 	@echo "  start_frontend                   Start frontend via script"
 	@echo "  start_tunnel                     Start dev tunnel via script"
 	@echo "  setup_tunnel                     First-time tunnel setup (create tunnel, add port)"
+	@echo "  devtunnel                        Create/reuse dev tunnel, sync backend+frontend .env, then host"
+	@echo "  devtunnel_env                    Create/reuse dev tunnel and sync .env files only (no host)"
 	@echo ""
 	@echo "⚡ Load Testing:"
 	@echo "  generate_audio                   Generate PCM audio files for load testing"
@@ -712,6 +768,9 @@ help:
 	@echo "🔴 Azure Redis Management:"
 	@echo "  connect_redis                    Connect to Azure Redis using Azure AD authentication"
 	@echo "  test_redis_connection            Test Redis connection without interactive session"
+	@echo ""
+	@echo "🌐 Azure Network Exposure:"
+	@echo "  make_resources_public            Flip azd-deployed private resources to public (ARGS=--dry-run|--yes)"
 	@echo ""
 	@echo "📖 Configuration Variables:"
 	@echo "  CONDA_ENV                        Conda environment name (default: audioagent)"

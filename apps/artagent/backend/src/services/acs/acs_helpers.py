@@ -75,7 +75,7 @@ def construct_websocket_url(base_url: str, path: str) -> str | None:
         full_path = prefix or path_clean
 
     ws_url = f"{ws_scheme}://{parsed.netloc}/{full_path}" if full_path else f"{ws_scheme}://{parsed.netloc}"
-    logger.info(f"Constructed WebSocket URL: {ws_url}")
+    logger.debug(f"Constructed WebSocket URL: {ws_url}")
     return ws_url
 
 
