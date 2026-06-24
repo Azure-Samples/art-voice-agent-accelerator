@@ -78,6 +78,19 @@ permissions:
   pull-requests: write  # Required for PR comments with preview results
 
 # ==============================================================================
+# CONCURRENCY
+# ==============================================================================
+# Serialize all provision/deploy runs that target the same environment.
+# Overlapping `azd provision`/`up` runs re-apply the Container Apps managed
+# environment simultaneously, leaving it in an `Updating` state. Any container
+# app deploy that lands during that window fails with
+# `ManagedEnvironmentNotProvisioned`. Queue runs (do NOT cancel in-flight ones)
+# so a Terraform apply is never interrupted mid-state.
+concurrency:
+  group: azd-deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+# ==============================================================================
 # JOBS
 # ==============================================================================
 jobs:
