@@ -289,6 +289,20 @@ resource "azapi_update_resource" "backend_sticky_sessions" {
           stickySessions = {
             affinity = "sticky"
           }
+          # azurerm_container_app has no cors_policy argument, so the ingress
+          # CORS policy is set via the Container Apps REST API. Container Apps
+          # ingress (Envoy) answers the CORS preflight (OPTIONS) at the edge
+          # using these values; without it, browser cross-origin calls from the
+          # frontend Container App fail their preflight with "No
+          # 'Access-Control-Allow-Origin' header is present".
+          corsPolicy = {
+            allowedOrigins   = ["https://${azurerm_container_app.frontend.ingress[0].fqdn}"]
+            allowedMethods   = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+            allowedHeaders   = ["Content-Type", "Authorization", "X-Requested-With", "Accept"]
+            exposeHeaders    = ["Content-Length", "Content-Range"]
+            allowCredentials = true
+            maxAge           = 86400
+          }
         }
       }
     }
