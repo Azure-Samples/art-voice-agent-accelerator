@@ -31,11 +31,11 @@ return_greeting: |
 # Voice Configuration (Used by BOTH VoiceLive and Cascade modes)
 # ─────────────────────────────────────────────────────────────────────────────
 voice:
-  name: en-US-Harper:MAI-Voice-2             # Expressive multilingual MAI voice
+  name: en-US-EmmaMultilingualNeural       # Clear, trustworthy
+  # name: en-US-Harper:MAI-Voice-2             # Expressive multilingual MAI voice
   # Alternative voices:
   # name: en-US-AlloyTurboMultilingualNeural # Fast, natural multilingual voice
   # name: en-US-AvaMultilingualNeural        # Warm, professional
-  # name: en-US-EmmaMultilingualNeural       # Clear, trustworthy
   # name: en-US-BrianMultilingualNeural      # Professional male
   type: azure-standard                        # Voice provider (azure-standard or azure-neural)
   rate: "-4%"                                 # Speech rate: -50% (slower) to +100% (faster)

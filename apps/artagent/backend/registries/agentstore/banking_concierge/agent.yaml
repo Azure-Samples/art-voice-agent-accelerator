@@ -31,9 +31,9 @@ return_greeting: |
 # Voice Configuration (Used by BOTH VoiceLive and Cascade modes)
 # ─────────────────────────────────────────────────────────────────────────────
 voice:
-  name: en-US-Harper:MAI-Voice-2             # Expressive multilingual MAI voice
+  name: en-US-AlloyTurboMultilingualNeural # Fast, natural multilingual voice
   # Alternative voices:
-  # name: en-US-AlloyTurboMultilingualNeural # Fast, natural multilingual voice
+  # name: en-US-Harper:MAI-Voice-2             # Expressive multilingual MAI voice
   # name: en-US-AvaMultilingualNeural        # Warm, professional
   # name: en-US-EmmaMultilingualNeural       # Clear, trustworthy
   # name: en-US-BrianMultilingualNeural      # Professional male
