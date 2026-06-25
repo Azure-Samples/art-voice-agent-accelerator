@@ -51,6 +51,7 @@ import {
 } from '../utils/session.js';
 import logger from '../utils/logger.js';
 import { fetchFoundryModels, deriveModelOptions, MANAGED_VOICELIVE_MODELS } from '../utils/foundryModels.js';
+import { OrchestrationDiagramModal } from './OrchestrationDiagram.jsx';
 
 const STREAM_MODE_STORAGE_KEY = 'artagent.streamingMode';
 const STREAM_MODE_FALLBACK = 'voice_live';
@@ -1261,6 +1262,11 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
   // Which settings surface the popover is showing: 'voicelive' | 'cascade'.
   // Defaults from the active stream mode but the user can switch freely.
   const [liveSettingsMode, setLiveSettingsMode] = useState('voicelive');
+  // Which Quick Tune mode toggle is currently hovered (shows an explainer
+  // tooltip contrasting Custom Speech vs VoiceLive). null = none hovered.
+  const [quickTuneTip, setQuickTuneTip] = useState(null);
+  // Whether the interactive "how orchestration works" diagram modal is open.
+  const [showOrchestrationDiagram, setShowOrchestrationDiagram] = useState(false);
   // Snapshot of the current resolved agent config (base for the PUT merge).
   const liveBaseConfigRef = useRef(null);
   // Live model deployments from the connected Foundry resource ({cascade, voicelive}),
@@ -5177,33 +5183,185 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
                         }}
                       >
                         {[
-                          { key: 'cascade', label: 'Custom Speech', color: '#0ea5e9' },
-                          { key: 'voicelive', label: 'VoiceLive', color: '#7c3aed' },
+                          {
+                            key: 'cascade',
+                            label: 'Custom Speech',
+                            color: '#0ea5e9',
+                            tip: {
+                              icon: '🌐',
+                              title: 'Direct Azure Speech Services',
+                              body:
+                                'You orchestrate Azure Speech STT, the LLM, and Azure Speech TTS as separate components yourself. More moving parts, but fine-grained control over each model, voice persona, and routing.',
+                              foot: 'Both modes work — Custom Speech gives you a bit more control.',
+                            },
+                          },
+                          {
+                            key: 'voicelive',
+                            label: 'VoiceLive',
+                            color: '#7c3aed',
+                            tip: {
+                              icon: '⚡️',
+                              title: 'Managed speech channel',
+                              body:
+                                'Azure AI Voice Live hosts the entire STT → LLM → TTS loop as one managed realtime service. Lowest latency (~200-400ms), native barge-in, minimal orchestration code.',
+                              foot: 'Both modes work — VoiceLive trades control for simplicity and speed.',
+                            },
+                          },
                         ].map((opt) => {
                           const selected = liveSettingsMode === opt.key;
                           return (
-                            <button
-                              key={opt.key}
-                              onClick={() => setLiveSettingsMode(opt.key)}
-                              style={{
-                                flex: 1,
-                                padding: '7px 8px',
-                                borderRadius: '8px',
-                                border: selected ? `1px solid ${opt.color}` : '1px solid transparent',
-                                background: selected ? '#fff' : 'transparent',
-                                color: selected ? opt.color : '#64748b',
-                                fontSize: '12px',
-                                fontWeight: selected ? 700 : 600,
-                                cursor: 'pointer',
-                                boxShadow: selected ? '0 1px 3px rgba(15,23,42,0.1)' : 'none',
-                                transition: 'all 0.15s ease',
-                              }}
-                            >
-                              {selected ? '● ' : ''}{opt.label}
-                            </button>
+                            <div key={opt.key} style={{ flex: 1, position: 'relative' }}>
+                              <button
+                                onClick={() => setLiveSettingsMode(opt.key)}
+                                style={{
+                                  width: '100%',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  gap: '5px',
+                                  padding: '7px 8px',
+                                  borderRadius: '8px',
+                                  border: selected ? `1px solid ${opt.color}` : '1px solid transparent',
+                                  background: selected ? '#fff' : 'transparent',
+                                  color: selected ? opt.color : '#64748b',
+                                  fontSize: '12px',
+                                  fontWeight: selected ? 700 : 600,
+                                  cursor: 'pointer',
+                                  boxShadow: selected ? '0 1px 3px rgba(15,23,42,0.1)' : 'none',
+                                  transition: 'all 0.15s ease',
+                                }}
+                              >
+                                {selected ? '● ' : ''}{opt.label}
+                                <span
+                                  onMouseEnter={(e) => {
+                                    const r = e.currentTarget.getBoundingClientRect();
+                                    setQuickTuneTip({
+                                      key: opt.key,
+                                      tip: opt.tip,
+                                      top: r.bottom + 8,
+                                      left: r.left + r.width / 2,
+                                    });
+                                  }}
+                                  onMouseLeave={() =>
+                                    setQuickTuneTip((cur) => (cur?.key === opt.key ? null : cur))
+                                  }
+                                  onClick={(e) => e.stopPropagation()}
+                                  style={{
+                                    width: '14px',
+                                    height: '14px',
+                                    borderRadius: '999px',
+                                    border: `1px solid ${selected ? opt.color : '#cbd5e1'}`,
+                                    color: selected ? opt.color : '#94a3b8',
+                                    fontSize: '9px',
+                                    fontWeight: 700,
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    cursor: 'help',
+                                    lineHeight: 1,
+                                  }}
+                                >
+                                  i
+                                </span>
+                              </button>
+                            </div>
                           );
                         })}
                       </div>
+
+                      {/* Mode tooltip — portaled out so the popover's overflow
+                          doesn't clip it. */}
+                      {quickTuneTip && typeof document !== 'undefined' &&
+                        createPortal(
+                          <div
+                            role="tooltip"
+                            style={{
+                              position: 'fixed',
+                              top: quickTuneTip.top,
+                              left: quickTuneTip.left,
+                              transform: 'translateX(-50%)',
+                              zIndex: 2200,
+                              width: '248px',
+                              padding: '10px 12px',
+                              borderRadius: '10px',
+                              background: '#0f172a',
+                              color: '#cbd5e1',
+                              boxShadow: '0 12px 28px rgba(15,23,42,0.35)',
+                              fontSize: '11px',
+                              lineHeight: 1.5,
+                              textAlign: 'left',
+                              pointerEvents: 'none',
+                            }}
+                          >
+                            <div
+                              style={{
+                                fontWeight: 700,
+                                color: '#fff',
+                                marginBottom: '4px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '5px',
+                              }}
+                            >
+                              <span>{quickTuneTip.tip.icon}</span>
+                              {quickTuneTip.tip.title}
+                            </div>
+                            <div>{quickTuneTip.tip.body}</div>
+                            <div
+                              style={{
+                                marginTop: '7px',
+                                paddingTop: '7px',
+                                borderTop: '1px solid rgba(148,163,184,0.25)',
+                                fontStyle: 'italic',
+                                color: '#94a3b8',
+                                fontSize: '10px',
+                              }}
+                            >
+                              {quickTuneTip.tip.foot}
+                            </div>
+                          </div>,
+                          document.body,
+                        )}
+
+                      {/* How-it-works button → opens the interactive diagram */}
+                      <button
+                        type="button"
+                        onClick={() => setShowOrchestrationDiagram(true)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                          width: '100%',
+                          margin: '0 0 16px',
+                          padding: '10px 12px',
+                          borderRadius: '10px',
+                          border: '1px solid rgba(124,58,237,0.35)',
+                          background: 'linear-gradient(135deg, #faf5ff, #ede9fe)',
+                          color: '#6d28d9',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          boxShadow: '0 1px 3px rgba(124,58,237,0.12)',
+                          transition: 'all 0.15s ease',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = 'linear-gradient(135deg, #f3e8ff, #ddd6fe)';
+                          e.currentTarget.style.boxShadow = '0 4px 12px rgba(124,58,237,0.2)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = 'linear-gradient(135deg, #faf5ff, #ede9fe)';
+                          e.currentTarget.style.boxShadow = '0 1px 3px rgba(124,58,237,0.12)';
+                        }}
+                      >
+                        <span style={{ fontSize: '15px' }}>🗺️</span>
+                        <span style={{ flex: 1, textAlign: 'left', lineHeight: 1.3 }}>
+                          See how it works
+                          <span style={{ display: 'block', fontSize: '10px', fontWeight: 500, color: '#7c3aed', opacity: 0.85 }}>
+                            STT→LLM→TTS vs realtime · tap to explore
+                          </span>
+                        </span>
+                        <span style={{ fontSize: '14px', fontWeight: 800 }}>→</span>
+                      </button>
 
                       {/* MODEL */}
                       <div style={sectionLabel}>
@@ -5225,6 +5383,68 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
                             {arch === 'native'
                               ? '🎙️ Native speech-to-speech (lowest latency)'
                               : '🔤 Cascaded STT→LLM→TTS inside VoiceLive'}
+                          </div>
+                        )}
+                        {isVoiceLive && chosenModel && arch === 'native' && (
+                          <div
+                            style={{
+                              marginTop: '8px',
+                              padding: '10px 12px',
+                              borderRadius: '10px',
+                              background: 'linear-gradient(135deg, #fffbeb, #fef3c7)',
+                              border: '1px solid #fcd34d',
+                              boxShadow: '0 2px 8px rgba(217,119,6,0.12)',
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                fontSize: '11px',
+                                fontWeight: 800,
+                                color: '#b45309',
+                                textTransform: 'uppercase',
+                                letterSpacing: '0.4px',
+                                marginBottom: '6px',
+                              }}
+                            >
+                              <span style={{ fontSize: '13px' }}>⚠️</span>
+                              Realtime model — read before prod
+                            </div>
+                            <ul
+                              style={{
+                                margin: 0,
+                                paddingLeft: '16px',
+                                fontSize: '11px',
+                                lineHeight: 1.5,
+                                color: '#78350f',
+                              }}
+                            >
+                              <li>
+                                <strong>Cannot be fine-tuned.</strong> Native speech-to-speech
+                                models don&apos;t support customization — you steer behavior with
+                                prompts and tools only.
+                              </li>
+                              <li>
+                                <strong>Pricing can be steep.</strong> Audio-in/audio-out tokens
+                                are billed at a premium versus text LLMs — watch cost at scale.
+                              </li>
+                              <li>
+                                <strong>Going to production?</strong> Stand up a robust eval
+                                framework in{' '}
+                                <a
+                                  href="https://learn.microsoft.com/azure/ai-foundry/concepts/evaluation-approach-gen-ai"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  style={{ color: '#b45309', fontWeight: 700 }}
+                                >
+                                  Azure AI Foundry
+                                </a>{' '}
+                                to benchmark these against higher-throughput, lower-cost text
+                                LLMs (cascaded STT→LLM→TTS) before committing.
+                              </li>
+                            </ul>
                           </div>
                         )}
                       </div>
@@ -5818,6 +6038,11 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
             </div>,
             document.body,
           )}
+        <OrchestrationDiagramModal
+          open={showOrchestrationDiagram}
+          onClose={() => setShowOrchestrationDiagram(false)}
+          initialMode={liveSettingsMode}
+        />
         {showDemoForm && typeof document !== 'undefined' &&
           createPortal(
             <>

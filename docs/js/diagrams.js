@@ -387,6 +387,44 @@ const VOICELIVE_PIPELINE = () => `
 </svg>`;
 
 /* ============================================================
+   DIAGRAM 3b — VoiceLive native speech-to-speech: the transcript
+   is a side "best guess", NOT the model's actual input
+   ============================================================ */
+const VOICELIVE_TRANSCRIPT = () => `
+<svg viewBox="0 0 1000 340" xmlns="http://www.w3.org/2000/svg" class="az-svg" role="img" aria-label="Native speech-to-speech transcript is a best guess">
+  ${DEFS}
+
+  <text x="500" y="30" text-anchor="middle" style="font:600 17px Inter,sans-serif;fill:var(--d-text)">Native speech-to-speech — where the transcript comes from</text>
+  <text x="500" y="52" text-anchor="middle" style="font:400 12px Inter,sans-serif;fill:var(--d-text-3)">Audio flows straight into the model and back out. Transcription is a side output — a best guess, not the model's input.</text>
+
+  <!-- Main audio path -->
+  ${tile(40, 120, 'channel', 'Caller audio', 'speech in', 'mic')}
+  <g transform="translate(400, 110)" filter="url(#tile-shadow)">
+    <rect class="tile" width="200" height="84" rx="6" stroke-width="2" stroke="var(--d-ai)"/>
+    <rect class="accent-ai" width="3" height="84" rx="1.5"/>
+    <rect class="icon-bg bg-ai" x="10" y="22" width="40" height="40" rx="5"/>
+    ${ICONS.voicelive}
+    <text class="tile-name" x="58" y="38">Realtime model</text>
+    <text class="tile-desc" x="58" y="56">reasons on audio directly</text>
+  </g>
+  ${tile(760, 120, 'channel', 'Caller audio', 'speech out', 'voicelive')}
+
+  ${flowArrow(240, 152, 400, 152, 'audio')}
+  ${flowArrow(600, 152, 760, 152, 'audio')}
+
+  <!-- Side branch: best-guess transcript -->
+  <path class="flow-arrow flow-arrow-dashed" d="M500 194 L500 250" marker-end="url(#arrow)"/>
+  <rect x="512" y="208" width="92" height="14" rx="7" fill="var(--c-bg)" stroke="var(--d-arrow)" stroke-width="0.8"/>
+  <text class="flow-label" x="558" y="219" text-anchor="middle">side output</text>
+
+  <g transform="translate(330, 250)" filter="url(#tile-shadow)">
+    <rect width="340" height="64" rx="6" fill="var(--d-tile-bg)" stroke="var(--d-tile-border)" stroke-width="1.4" stroke-dasharray="5 3"/>
+    <text class="tile-name" x="18" y="27">📝 Transcript — a "best guess"</text>
+    <text class="tile-desc" x="18" y="47">For your UI &amp; logs · the model never reads this text</text>
+  </g>
+</svg>`;
+
+/* ============================================================
    DIAGRAM 4 — Production Reference (Hub-Spoke + APIM AI Gateway)
    ============================================================ */
 const PRODUCTION_REF = () => {
@@ -1757,6 +1795,7 @@ const DIAGRAMS = {
   'system-overview':       SYSTEM_OVERVIEW,
   'cascade-pipeline':      CASCADE_PIPELINE,
   'voicelive-pipeline':    VOICELIVE_PIPELINE,
+  'voicelive-transcript':  VOICELIVE_TRANSCRIPT,
   'production-ref':        PRODUCTION_REF,
   'cross-cloud':           CROSS_CLOUD,
   'omnichannel-hero':      OMNICHANNEL_HERO,

@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 
 const containerStyle = {
   display: 'flex',
@@ -131,6 +131,68 @@ const footerNoteStyle = {
   lineHeight: 1.4,
 };
 
+const infoIconStyle = {
+  marginLeft: 'auto',
+  flexShrink: 0,
+  width: '16px',
+  height: '16px',
+  borderRadius: '999px',
+  border: '1px solid rgba(99,102,241,0.45)',
+  color: '#6366f1',
+  fontSize: '10px',
+  fontWeight: 700,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  cursor: 'help',
+  lineHeight: 1,
+};
+
+const tooltipStyle = {
+  position: 'absolute',
+  bottom: 'calc(100% + 8px)',
+  right: '0',
+  zIndex: 50,
+  width: '288px',
+  padding: '12px 14px',
+  borderRadius: '12px',
+  background: '#0f172a',
+  color: '#e2e8f0',
+  boxShadow: '0 12px 28px rgba(15,23,42,0.35)',
+  fontSize: '11px',
+  lineHeight: 1.55,
+  textAlign: 'left',
+  pointerEvents: 'none',
+};
+
+const tooltipTitleStyle = {
+  fontSize: '11px',
+  fontWeight: 700,
+  color: '#ffffff',
+  margin: '0 0 4px',
+  display: 'flex',
+  alignItems: 'center',
+  gap: '6px',
+};
+
+const tooltipBodyStyle = {
+  margin: 0,
+  color: '#cbd5e1',
+};
+
+const tooltipDividerStyle = {
+  height: '1px',
+  background: 'rgba(148,163,184,0.25)',
+  margin: '8px 0',
+};
+
+const tooltipFootStyle = {
+  margin: '8px 0 0',
+  fontSize: '10px',
+  color: '#94a3b8',
+  fontStyle: 'italic',
+};
+
 const VOICE_LIVE_BASE_CONFIG = Object.freeze({
   orchestrator: 'voice_live_orchestration',
   contextKey: 'streaming_mode',
@@ -148,6 +210,12 @@ const ACS_STREAMING_MODE_OPTIONS = [
     description:
       'Ultra-low latency playback via Azure AI Voice Live. Ideal for PSTN calls with barge-in.',
     hint: 'Recommended',
+    tooltip: {
+      title: 'Managed speech channel',
+      body:
+        'Azure AI Voice Live hosts the entire STT → LLM → TTS loop as one managed realtime service. Speech-in and speech-out are handled for you — lowest latency (~200-400ms), native barge-in, and minimal orchestration code.',
+      foot: 'Both modes work — Voice Live trades fine-grained control for simplicity and speed.',
+    },
     config: {
       ...VOICE_LIVE_BASE_CONFIG,
       entryPoint: 'acs',
@@ -159,6 +227,12 @@ const ACS_STREAMING_MODE_OPTIONS = [
     icon: '🌐',
     description:
       'Composable STT → LLM → TTS cascade with full control over models, agent policies, voice personas, and adaptive routing.',
+    tooltip: {
+      title: 'Direct Azure Speech Services',
+      body:
+        'You orchestrate Azure Speech STT, the LLM, and Azure Speech TTS as separate components yourself. More moving parts, but you get fine-grained control over each model, voice persona, prompt routing, and adaptive policies.',
+      foot: 'Both modes work — Custom Speech gives you a bit more control over every stage.',
+    },
     config: {
       orchestrator: 'acs_media_pipeline',
       contextKey: 'streaming_mode',
@@ -177,6 +251,12 @@ const REALTIME_STREAMING_MODE_OPTIONS = [
     description:
       'Route /realtime sessions through the Voice Live orchestrator for dual-stream control.',
     hint: 'Voice Live stack',
+    tooltip: {
+      title: 'Managed speech channel',
+      body:
+        'Azure AI Voice Live hosts the entire STT → LLM → TTS loop as one managed realtime service. Speech-in and speech-out are handled for you — lowest latency (~200-400ms), native barge-in, and minimal orchestration code.',
+      foot: 'Both modes work — Voice Live trades fine-grained control for simplicity and speed.',
+    },
     config: {
       ...VOICE_LIVE_BASE_CONFIG,
       entryPoint: 'realtime',
@@ -188,6 +268,12 @@ const REALTIME_STREAMING_MODE_OPTIONS = [
     icon: '🌐',
     description:
       'Composable STT → LLM → TTS cascade with full control over models, agent policies, voice personas, and adaptive routing.',
+    tooltip: {
+      title: 'Direct Azure Speech Services',
+      body:
+        'You orchestrate Azure Speech STT, the LLM, and Azure Speech TTS as separate components yourself. More moving parts, but you get fine-grained control over each model, voice persona, prompt routing, and adaptive policies.',
+      foot: 'Both modes work — Custom Speech gives you a bit more control over every stage.',
+    },
     config: {
       orchestrator: 'browser_sdk_relay',
       endpoints: {
@@ -220,6 +306,7 @@ function StreamingModeSelector({
 }) {
   const resolvedOptions = Array.isArray(options) ? options : [];
   const badgeStyles = useMemo(() => getBadgeStyle(badgeTone), [badgeTone]);
+  const [hoveredValue, setHoveredValue] = useState(null);
 
   return (
     <div style={containerStyle}>
@@ -230,6 +317,7 @@ function StreamingModeSelector({
       <div style={optionsRowStyle}>
         {resolvedOptions.map((option) => {
           const isSelected = option.value === value;
+          const showTooltip = option.tooltip && hoveredValue === option.value;
           return (
             <button
               key={option.value}
@@ -240,10 +328,15 @@ function StreamingModeSelector({
                   onChange?.(option.value, option);
                 }
               }}
+              onMouseEnter={() => option.tooltip && setHoveredValue(option.value)}
+              onMouseLeave={() =>
+                setHoveredValue((current) => (current === option.value ? null : current))
+              }
               style={{
                 ...baseCardStyle,
                 ...(isSelected ? selectedCardStyle : {}),
                 ...(disabled ? disabledCardStyle : {}),
+                position: 'relative',
               }}
               disabled={disabled}
             >
@@ -253,8 +346,32 @@ function StreamingModeSelector({
                   <p style={titleStyle}>{option.label}</p>
                   <p style={descriptionStyle}>{option.description}</p>
                 </div>
+                {option.tooltip ? (
+                  <span
+                    style={infoIconStyle}
+                    aria-hidden="true"
+                    onMouseEnter={() => setHoveredValue(option.value)}
+                  >
+                    i
+                  </span>
+                ) : null}
               </div>
               {option.hint && isSelected && <span style={hintStyle}>{option.hint}</span>}
+              {showTooltip ? (
+                <div style={tooltipStyle} role="tooltip">
+                  <p style={tooltipTitleStyle}>
+                    <span>{option.icon}</span>
+                    {option.tooltip.title}
+                  </p>
+                  <p style={tooltipBodyStyle}>{option.tooltip.body}</p>
+                  {option.tooltip.foot ? (
+                    <>
+                      <div style={tooltipDividerStyle} />
+                      <p style={tooltipFootStyle}>{option.tooltip.foot}</p>
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
             </button>
           );
         })}

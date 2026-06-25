@@ -42,6 +42,7 @@
       <a href="#overview" class="active">Overview</a>
       <a href="#call-lifecycle">Call Lifecycle</a>
       <a href="#orchestration">Orchestration Modes</a>
+      <a href="#voicelive-internals">VoiceLive: native vs cascaded</a>
       <a href="#agent-framework">Agent Framework</a>
       <a href="#storage">Storage Tiers</a>
       <a href="#session-runtime">Session Runtime</a>
@@ -194,6 +195,22 @@ sequenceDiagram
         <li><strong>VoiceLive</strong> keeps conversation state inside the realtime connection. The orchestrator re-injects a throttled <strong>session recap</strong> (recent user messages, slots, last assistant turn) via <code>session.update(instructions=…)</code> before responses, and history is per-connection only — <code>visited_agents</code> is intentionally <em>not</em> replayed to avoid stale context on a fresh call.</li>
         <li><strong>Shared truth.</strong> Slots, tool outputs, and the user profile always land in <code>MemoManager</code> regardless of mode, so a handoff or a Cosmos archive looks identical either way.</li>
       </ul>
+
+      <hr>
+
+      <!-- VoiceLive internals — common confusion point -->
+      <h2 id="voicelive-internals">VoiceLive: native vs cascaded <span class="pill warn">common confusion</span></h2>
+      <p>"VoiceLive" isn't a single architecture — the <strong>model you pick</strong> decides how audio is handled. This trips people up constantly, especially around what the transcript actually represents. Explore it below — toggle modes and the <em>Inside VoiceLive</em> options to see how the audio flows.</p>
+
+      <div id="orchestration-interactive"></div>
+
+      <div class="callout warn" style="margin-top:18px">
+        <p><strong>⚠️ Don't treat the native transcript as ground truth.</strong> Because the model reasoned on audio — not the transcribed text — the transcript can differ from what actually drove the reply. Avoid using it for routing decisions, compliance records, or evals. If you need the text the model truly acted on, use a <strong>cascaded</strong> path (Custom Speech, or cascaded-inside-VoiceLive), where a real STT step produces the actual recognized text.</p>
+      </div>
+
+      <div class="callout warn">
+        <p><strong>Realtime models can't be fine-tuned</strong> and bill premium audio tokens. Before committing to native speech-to-speech in production, benchmark it against higher-throughput text LLMs (the cascade) with a robust eval suite in <a href="https://learn.microsoft.com/azure/ai-foundry/concepts/evaluation-approach-gen-ai" target="_blank">Azure AI Foundry</a>.</p>
+      </div>
 
       <hr>
 
@@ -722,6 +739,7 @@ flowchart LR
 
 <script src="js/main.js?v=2"></script>
 <script src="js/diagrams.js?v=2"></script>
+<script src="js/orchestration-diagram.js?v=1"></script>
 <script src="js/search.js?v=2"></script>
 </body>
 </html>

@@ -86,6 +86,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import { API_BASE_URL } from '../config/constants.js';
 import logger from '../utils/logger.js';
 import { fetchFoundryModels, deriveModelOptions, MANAGED_VOICELIVE_OPTIONS } from '../utils/foundryModels.js';
+import { OrchestrationDiagramModal } from './OrchestrationDiagram.jsx';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STYLES
@@ -1089,6 +1090,8 @@ export default function AgentBuilderContent({
   const [activeTab, setActiveTab] = useState(0);
   // Inner sub-tab for the Model & Audio panel: 'cascade' | 'voicelive'
   const [audioSubTab, setAudioSubTab] = useState('cascade');
+  // Interactive "how orchestration works" diagram dialog.
+  const [showOrchestrationDiagram, setShowOrchestrationDiagram] = useState(false);
   const [isEditMode, setIsEditMode] = useState(editMode);
   // Guard so the live-agent deep-link only auto-applies once per open.
   const liveEditAppliedRef = useRef(false);
@@ -2914,9 +2917,28 @@ export default function AgentBuilderContent({
 
                 {/* Prominent orchestration-mode selector (top of section) */}
                 <Box>
-                  <Typography variant="overline" sx={{ fontWeight: 700, color: 'text.secondary', letterSpacing: 1 }}>
-                    Orchestration Mode
-                  </Typography>
+                  <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.25 }}>
+                    <Typography variant="overline" sx={{ fontWeight: 700, color: 'text.secondary', letterSpacing: 1 }}>
+                      Orchestration Mode
+                    </Typography>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      startIcon={<InfoOutlinedIcon sx={{ fontSize: 16 }} />}
+                      onClick={() => setShowOrchestrationDiagram(true)}
+                      sx={{
+                        textTransform: 'none',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        borderRadius: 2,
+                        borderColor: 'secondary.main',
+                        color: 'secondary.main',
+                        '&:hover': { borderColor: 'secondary.dark', bgcolor: 'secondary.50' },
+                      }}
+                    >
+                      See how it works →
+                    </Button>
+                  </Stack>
                   <ToggleButtonGroup
                     value={audioSubTab}
                     exclusive
@@ -2954,6 +2976,31 @@ export default function AgentBuilderContent({
                             <Typography variant="subtitle2" fontWeight={700} color={audioSubTab === 'cascade' ? 'primary.main' : 'text.primary'}>
                               Custom Speech Cascade
                             </Typography>
+                            <Tooltip
+                              arrow
+                              placement="top"
+                              title={
+                                <Box sx={{ p: 0.5, maxWidth: 260 }}>
+                                  <Typography variant="caption" fontWeight={700} display="block" gutterBottom>
+                                    🌐 Direct Azure Speech Services
+                                  </Typography>
+                                  <Typography variant="caption" display="block">
+                                    You orchestrate Azure Speech STT, the LLM, and Azure Speech TTS as
+                                    separate components yourself. More moving parts, but fine-grained
+                                    control over each model, voice persona, prompt routing, and adaptive
+                                    policies.
+                                  </Typography>
+                                  <Typography variant="caption" display="block" sx={{ mt: 0.75, fontStyle: 'italic', opacity: 0.85 }}>
+                                    Both modes work — Custom Speech gives you a bit more control over every stage.
+                                  </Typography>
+                                </Box>
+                              }
+                            >
+                              <InfoOutlinedIcon
+                                sx={{ fontSize: 15, color: 'text.disabled', cursor: 'help' }}
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                            </Tooltip>
                             {audioSubTab === 'cascade' && <CheckIcon fontSize="small" color="primary" />}
                           </Stack>
                           <Typography variant="caption" color="text.secondary">
@@ -2980,6 +3027,31 @@ export default function AgentBuilderContent({
                             <Typography variant="subtitle2" fontWeight={700} color={audioSubTab === 'voicelive' ? 'secondary.main' : 'text.primary'}>
                               VoiceLive
                             </Typography>
+                            <Tooltip
+                              arrow
+                              placement="top"
+                              title={
+                                <Box sx={{ p: 0.5, maxWidth: 260 }}>
+                                  <Typography variant="caption" fontWeight={700} display="block" gutterBottom>
+                                    ⚡️ Managed speech channel
+                                  </Typography>
+                                  <Typography variant="caption" display="block">
+                                    Azure AI Voice Live hosts the entire STT → LLM → TTS loop as one
+                                    managed realtime service. Speech-in and speech-out are handled for
+                                    you — lowest latency (~200-400ms), native barge-in, and minimal
+                                    orchestration code.
+                                  </Typography>
+                                  <Typography variant="caption" display="block" sx={{ mt: 0.75, fontStyle: 'italic', opacity: 0.85 }}>
+                                    Both modes work — VoiceLive trades fine-grained control for simplicity and speed.
+                                  </Typography>
+                                </Box>
+                              }
+                            >
+                              <InfoOutlinedIcon
+                                sx={{ fontSize: 15, color: 'text.disabled', cursor: 'help' }}
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                            </Tooltip>
                             {audioSubTab === 'voicelive' && <CheckIcon fontSize="small" color="secondary" />}
                           </Stack>
                           <Typography variant="caption" color="text.secondary">
@@ -2990,6 +3062,13 @@ export default function AgentBuilderContent({
                     </ToggleButton>
                   </ToggleButtonGroup>
                 </Box>
+
+                {/* Interactive "how orchestration works" diagram — same modal as Quick Tune */}
+                <OrchestrationDiagramModal
+                  open={showOrchestrationDiagram}
+                  onClose={() => setShowOrchestrationDiagram(false)}
+                  initialMode={audioSubTab}
+                />
 
                 {/* Shared Voice (TTS) — applies to BOTH Cascade and VoiceLive */}
                 <Card variant="outlined" sx={styles.sectionCard}>
