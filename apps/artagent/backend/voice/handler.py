@@ -1183,6 +1183,36 @@ class VoiceHandler:
                 "[%s] Failed to record barge-in latency", self._session_short, exc_info=True
             )
 
+    def _report_barge_in_latency(self, effect_done_ts: float, tts_was_playing: bool) -> None:
+        """Log + record barge-in latency (detection -> effect)."""
+        try:
+            from apps.artagent.backend.voice.speech_cascade.metrics import record_barge_in
+
+            now = time.perf_counter()
+            detected_ts = getattr(self._thread_bridge, "last_barge_in_detected_ts", None)
+            # Effect latency: time spent inside the cancel path this turn.
+            effect_ms = (now - effect_done_ts) * 1000
+            # Detection->effect latency when the STT thread stamped a detection time.
+            detect_to_effect_ms = (now - detected_ts) * 1000 if detected_ts else effect_ms
+
+            logger.info(
+                "[%s] Barge-in took effect | latency=%.0fms (cancel_path=%.0fms) tts_was_playing=%s",
+                self._session_short,
+                detect_to_effect_ms,
+                effect_ms,
+                tts_was_playing,
+            )
+
+            record_barge_in(
+                detect_to_effect_ms,
+                session_id=self._session_id or "",
+                call_connection_id=self._context.call_connection_id,
+                trigger="partial",
+                tts_was_playing=tts_was_playing,
+            )
+        except Exception:
+            logger.debug("[%s] Failed to record barge-in latency", self._session_short, exc_info=True)
+
     async def _on_barge_in(self) -> None:
         """Internal callback for barge-in detection."""
         await self.handle_barge_in()

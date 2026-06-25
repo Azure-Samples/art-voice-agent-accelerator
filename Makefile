@@ -689,28 +689,6 @@ test_redis_connection:
 .PHONY: connect_redis test_redis_connection
 
 ############################################################
-# Azure Network Exposure
-# Purpose: Flip azd-deployed private resources back to public
-############################################################
-
-# Make azd-deployed resources publicly accessible (dev/demo convenience).
-# Resolves the app resource group and remote Terraform state storage from the
-# selected azd env by default.
-# Usage:
-#   make make_resources_public                       # interactive confirm
-#   make make_resources_public ARGS="--yes"          # skip confirmation
-#   make make_resources_public ARGS="--dry-run"      # preview only
-#   make make_resources_public ARGS="--skip-remote-state"  # app RG only
-#   make make_resources_public RESOURCE_GROUP=my-rg  # explicit RG
-make_resources_public:
-	@echo "🌐 Making azd-deployed resources publicly accessible"
-	@echo "===================================================="
-	@bash devops/scripts/azd/helpers/make-resources-public.sh \
-		$(if $(RESOURCE_GROUP),--resource-group $(RESOURCE_GROUP),) $(ARGS)
-
-.PHONY: make_resources_public
-
-############################################################
 # Help and Documentation
 ############################################################
 
