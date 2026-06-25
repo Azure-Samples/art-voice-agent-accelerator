@@ -194,10 +194,15 @@ const styles = {
 };
 
 // Injected once — keyframes + hover effects that inline styles can't express.
+// Perf note: the flow dot animates `transform`/`opacity` only (GPU-composited,
+// no per-frame layout/paint). We deliberately avoid animating `left` or
+// `background-position` here because a single open modal renders ~6–10
+// connectors and those properties would force main-thread reflows/repaints on
+// every frame for every connector.
 const KEYFRAMES = `
-@keyframes od-flow { 0% { background-position: 0% 0; } 100% { background-position: -200% 0; } }
-@keyframes od-dot { 0% { left: 6%; opacity: 0; } 20% { opacity: 1; } 80% { opacity: 1; } 100% { left: 94%; opacity: 0; } }
+@keyframes od-dot { 0% { transform: translate(0, -50%); opacity: 0; } 20% { opacity: 1; } 80% { opacity: 1; } 100% { transform: translate(18px, -50%); opacity: 0; } }
 @keyframes od-fade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.od-dot { animation: od-dot 1.6s linear infinite; will-change: transform, opacity; }
 .od-stage { transition: transform .2s cubic-bezier(.4,0,.2,1), box-shadow .2s ease, border-color .2s ease, background .2s ease; }
 .od-stage:hover { transform: translateY(-3px); box-shadow: 0 12px 24px rgba(15,23,42,.13) !important; }
 .od-card { transition: transform .2s cubic-bezier(.4,0,.2,1), box-shadow .2s ease, border-color .2s ease; }
@@ -205,9 +210,17 @@ const KEYFRAMES = `
 .od-close { transition: background .15s ease, color .15s ease, border-color .15s ease; }
 .od-close:hover { background: #f1f5f9 !important; color: #0f172a !important; border-color: #cbd5e1 !important; }
 .od-fade { animation: od-fade .4s cubic-bezier(.4,0,.2,1); }
+@media (prefers-reduced-motion: reduce) {
+  .od-dot { animation: none; opacity: 1; }
+  .od-fade { animation: none; }
+  .od-stage, .od-card, .od-close { transition: none !important; }
+}
 `;
 
-// Animated flowing connector between pipeline nodes.
+// Flowing connector between pipeline nodes. A static gradient line plus a
+// single GPU-composited dot conveys the "flow" without the previous
+// double infinite animation (background-position + left) that pinned the
+// main thread.
 function FlowConnector({ color }) {
   return (
     <div
@@ -220,22 +233,21 @@ function FlowConnector({ color }) {
         alignSelf: 'center',
         borderRadius: '999px',
         background: `linear-gradient(90deg, ${color.main}22 0%, ${color.main} 50%, ${color.main}22 100%)`,
-        backgroundSize: '200% 100%',
-        animation: 'od-flow 1.6s linear infinite',
         overflow: 'visible',
       }}
     >
       <span
+        className="od-dot"
         style={{
           position: 'absolute',
           top: '50%',
+          left: 0,
           width: '6px',
           height: '6px',
           borderRadius: '50%',
           background: color.main,
           boxShadow: `0 0 8px ${color.main}`,
           transform: 'translateY(-50%)',
-          animation: 'od-dot 1.6s linear infinite',
         }}
       />
     </div>
