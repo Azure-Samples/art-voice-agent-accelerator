@@ -812,6 +812,9 @@ class VoiceLiveSDKHandler:
         self._stop_audio_pending = False
         self._response_audio_frames: dict[str, int] = {}
         self._fallback_audio_frame_index = 0
+        # Responses cancelled by barge-in: their trailing audio deltas are
+        # dropped so no AudioData reaches the transport after a StopAudio.
+        self._cancelled_response_ids: set[str] = set()
         # DTMFProcessor handles tone buffering, timing, and callbacks
         self._dtmf_processor = DTMFProcessor(
             session_id=session_id,
@@ -1619,6 +1622,19 @@ class VoiceLiveSDKHandler:
             response_id = getattr(event, "response_id", None)
             delta_bytes = getattr(event, "delta", None)
 
+            # Drop trailing audio from a response cancelled by barge-in so no
+            # AudioData is relayed after the StopAudio. The first delta of a
+            # fresh response clears the now-stale cancellation set.
+            if response_id and response_id in self._cancelled_response_ids:
+                logger.debug(
+                    "[VoiceLive] Dropping audio from cancelled response | session=%s response=%s",
+                    self.session_id,
+                    response_id,
+                )
+                return
+            if response_id and self._cancelled_response_ids:
+                self._cancelled_response_ids.clear()
+
             # Track TTS TTFB (Time To First Byte) - first audio delta for this turn
             if self._turn_start_time and self._tts_first_audio_time is None:
                 self._tts_first_audio_time = time.perf_counter()
@@ -1674,6 +1690,7 @@ class VoiceLiveSDKHandler:
                 ):
                     await self._send_stop_audio()
                 self._active_response_ids.discard(response_id)
+                self._cancelled_response_ids.discard(response_id)
                 self._mark_audio_playback(False)
             else:
                 logger.debug(
@@ -1691,6 +1708,13 @@ class VoiceLiveSDKHandler:
 
             # Finalize previous turn if still active
             await self._finalize_turn_metrics()
+
+            # Capture in-flight responses so their trailing audio deltas are
+            # dropped — no AudioData may reach the transport after the StopAudio
+            # dispatched below.
+            if self._current_response_id:
+                self._cancelled_response_ids.add(self._current_response_id)
+            self._cancelled_response_ids |= self._active_response_ids
 
             # Start new turn tracking
             self._turn_number += 1

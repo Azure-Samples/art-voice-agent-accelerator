@@ -613,6 +613,38 @@ class TestTTSPlaybackCancelOwnership:
         assert result is False  # stream aborted by the cancel signal
         assert audiodata_count["n"] == 1  # only the in-flight frame, none after
 
+    @pytest.mark.asyncio
+    async def test_browser_streaming_stops_emitting_after_cancel(self, voice_context):
+        """End-to-end: the browser stream halts at the first frame after barge-in.
+
+        Browser is airtight without a transport lock because asyncio is
+        single-threaded and there is no await between the cancel check and the
+        send_json — once cancelled, the next loop iteration bails.
+        """
+        voice_context.transport = TransportType.BROWSER
+        playback = TTSPlayback(voice_context, app_state=MagicMock())
+        audiodata_count = {"n": 0}
+
+        async def send_json(message):
+            if message.get("type") == "audio_data":
+                audiodata_count["n"] += 1
+                # Barge-in sets the cancel flag right after the first frame.
+                playback.cancel()
+
+        ws = MagicMock()
+        ws.send_json = send_json
+        ws.client_state = WebSocketState.CONNECTED
+        ws.application_state = WebSocketState.CONNECTED
+        playback._context._websocket = ws
+
+        # 10 chunks' worth of PCM (4800 bytes per browser frame).
+        result = await playback._stream_to_browser(
+            b"\x00" * (4800 * 10), on_first_audio=None, run_id="t"
+        )
+
+        assert result is False  # stream aborted by the cancel signal
+        assert audiodata_count["n"] == 1  # only the in-flight frame, none after
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
