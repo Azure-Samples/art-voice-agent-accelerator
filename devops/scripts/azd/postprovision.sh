@@ -445,6 +445,45 @@ task_update_urls() {
 }
 
 # ============================================================================
+# Task 3b: Backend Container Apps CORS Policy
+# ============================================================================
+
+task_update_backend_cors() {
+    header "🌐 Task 3b: Backend CORS Policy"
+
+    local cors_script resource_group backend_app frontend_fqdn
+    cors_script="$HELPERS_DIR/update-backend-cors.sh"
+    resource_group=$(azd_get "AZURE_RESOURCE_GROUP")
+    backend_app=$(azd_get "BACKEND_CONTAINER_APP_NAME")
+    frontend_fqdn=$(azd_get "FRONTEND_CONTAINER_APP_FQDN")
+
+    if [[ ! -f "$cors_script" ]]; then
+        warn "update-backend-cors.sh not found, skipping"
+        footer
+        return 0
+    fi
+
+    if [[ -z "$resource_group" || -z "$backend_app" || -z "$frontend_fqdn" ]]; then
+        warn "Missing required values for backend CORS update"
+        [[ -z "$resource_group" ]] && warn "  - AZURE_RESOURCE_GROUP not set"
+        [[ -z "$backend_app" ]] && warn "  - BACKEND_CONTAINER_APP_NAME not set"
+        [[ -z "$frontend_fqdn" ]] && warn "  - FRONTEND_CONTAINER_APP_FQDN not set"
+        footer
+        return 1
+    fi
+
+    if bash "$cors_script" -g "$resource_group" -b "$backend_app" -f "$frontend_fqdn"; then
+        success "Backend CORS policy updated"
+    else
+        warn "Failed to update backend CORS policy"
+        footer
+        return 1
+    fi
+
+    footer
+}
+
+# ============================================================================
 # Summary
 # ============================================================================
 
@@ -818,6 +857,7 @@ main() {
     task_cardapi_provision || true
     task_phone_number || true
     task_update_urls || true
+    task_update_backend_cors || true
     task_sync_appconfig || true
     task_generate_env_local || true
     task_enable_easyauth || true

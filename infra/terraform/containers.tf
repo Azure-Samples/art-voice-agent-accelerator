@@ -298,7 +298,7 @@ resource "azapi_update_resource" "backend_sticky_sessions" {
           corsPolicy = {
             allowedOrigins   = ["https://${azurerm_container_app.frontend.ingress[0].fqdn}"]
             allowedMethods   = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
-            allowedHeaders   = ["Content-Type", "Authorization", "X-Requested-With", "Accept"]
+            allowedHeaders   = ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Cache-Control"]
             exposeHeaders    = ["Content-Length", "Content-Range"]
             allowCredentials = true
             maxAge           = 86400

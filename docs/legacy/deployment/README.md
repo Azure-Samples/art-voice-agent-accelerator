@@ -455,7 +455,24 @@ az containerapp logs show \
 | **OpenAI Rate Limits** | API quota exceeded, throttling errors | Check deployment capacity, monitor usage in Azure Portal, consider scaling up |
 | **WebSocket Connection Fails** | Connection refused, handshake errors, timeout issues | Check Container App ingress settings, test health endpoint, verify CORS configuration |
 | **Live Voice API Issues** | Audio streaming problems, voice quality issues | Verify Azure Speech Live Voice API configuration, check network connectivity, review audio codecs |
+| **ACS Outbound Call Unauthorized** | Call initiation returns ACS `401` / code `7510` / `Denied by the resource provider` | Ensure the backend managed identity has `Communication and Email Service Owner` on the ACS resource, or use connection-string auth |
 | **Agent Routing Problems** | Incorrect model selection, tool call failures | Check agent configuration, verify model deployments, validate tool registry setup |
+
+### Container Apps CORS Preflight Fails
+
+If the deployed frontend reports `No 'Access-Control-Allow-Origin' header is present` when calling the backend, repair the backend Container Apps ingress CORS policy from the current `azd` outputs:
+
+```bash
+azd env get-values > /tmp/azd-values.env
+source /tmp/azd-values.env
+
+bash devops/scripts/azd/helpers/update-backend-cors.sh \
+  -g "$AZURE_RESOURCE_GROUP" \
+  -b "$BACKEND_CONTAINER_APP_NAME" \
+  -f "$FRONTEND_CONTAINER_APP_FQDN"
+```
+
+The helper sets Azure Container Apps edge CORS for the deployed frontend origin. This is separate from the FastAPI `ALLOWED_ORIGINS` setting because Container Apps can answer browser `OPTIONS` preflight requests before the request reaches the app.
 
 ### Health Check Commands
 
