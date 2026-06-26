@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
+import os
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import numpy as np
@@ -64,11 +67,12 @@ from azure.ai.voicelive.models import (
     UserMessageItem,
 )
 from azure.core.credentials import AzureKeyCredential, TokenCredential
-from azure.identity.aio import DefaultAzureCredential
+from azure.identity.aio import DefaultAzureCredential, ManagedIdentityCredential
+from utils.azure_auth import _is_local_dev, _using_managed_identity
 
 # Module-level cached credential to avoid re-probing the credential chain per session.
-# DefaultAzureCredential is thread-safe and reusable across connections.
-_CACHED_CREDENTIAL: DefaultAzureCredential | None = None
+# Azure Identity credentials are reusable across connections.
+_CACHED_CREDENTIAL: Any | None = None
 _CREDENTIAL_LOCK = asyncio.Lock()
 from fastapi import WebSocket
 from fastapi.websockets import WebSocketState
@@ -96,6 +100,34 @@ logger = get_logger("voicelive.handler")
 tracer = trace.get_tracer(__name__)
 
 _DTMF_FLUSH_DELAY_SECONDS = 1.5
+_VOICELIVE_WARMUP_WAIT_SECONDS = 0.75
+
+
+@dataclass
+class VoiceLivePreparedConnection:
+    """Prepared VoiceLive connection that can be adopted by a real media handler."""
+
+    connection: Any
+    connection_cm: Any
+    credential: AzureKeyCredential | TokenCredential
+    settings: Any
+    model: str
+    byom_query: dict[str, str] | None = None
+    session_prepared: bool = False
+    created_at: float = field(default_factory=time.perf_counter)
+    claimed: bool = False
+
+    def matches(self, model: str, byom_query: dict[str, str] | None) -> bool:
+        return self.model == model and (self.byom_query or None) == (byom_query or None)
+
+    def claim(self) -> None:
+        self.claimed = True
+
+    async def close(self) -> None:
+        if self.claimed:
+            return
+        with contextlib.suppress(Exception):
+            await self.connection_cm.__aexit__(None, None, None)
 
 def _resolve_agent_label(agent_name: str | None) -> str | None:
     """Return the agent name as the label (agents define their own display names)."""
@@ -746,6 +778,7 @@ class VoiceLiveSDKHandler:
         call_connection_id: str | None = None,
         transport: VoiceLiveTransport = "acs",
         user_email: str | None = None,
+        prepared_connection: VoiceLivePreparedConnection | None = None,
     ) -> None:
         self.websocket = websocket
         self.session_id = session_id
@@ -766,6 +799,7 @@ class VoiceLiveSDKHandler:
         self._credential: AzureKeyCredential | TokenCredential | None = None
         self._connection = None
         self._connection_cm = None
+        self._prepared_connection = prepared_connection
         self._orchestrator: LiveOrchestrator | None = None
         # Generative model actually bound to the VoiceLive connection (resolved from the
         # start agent's voicelive_model at connect time; falls back to the global setting).
@@ -1138,7 +1172,32 @@ class VoiceLiveSDKHandler:
                     )
 
                 # Establish the WebSocket connection with the resolved model.
-                await _connect_voicelive(connection_model, byom_query)
+                prepared = self._prepared_connection
+                self._prepared_connection = None
+                if prepared and prepared.matches(connection_model, byom_query):
+                    prepared.claim()
+                    self._settings = prepared.settings
+                    self._credential = prepared.credential
+                    self._connection_cm = prepared.connection_cm
+                    self._connection = prepared.connection
+                    logger.info(
+                        "[VoiceLive Startup] adopted_warm_connection=true | session=%s call=%s age_ms=%.1f session_prepared=%s",
+                        self.session_id,
+                        self.call_connection_id,
+                        (time.perf_counter() - prepared.created_at) * 1000,
+                        prepared.session_prepared,
+                    )
+                else:
+                    if prepared:
+                        logger.info(
+                            "[VoiceLive Startup] warm_connection_mismatch | session=%s call=%s warm_model=%s target_model=%s",
+                            self.session_id,
+                            self.call_connection_id,
+                            prepared.model,
+                            connection_model,
+                        )
+                        await prepared.close()
+                    await _connect_voicelive(connection_model, byom_query)
 
 
                 # Set span attributes from resolved values
@@ -1278,6 +1337,9 @@ class VoiceLiveSDKHandler:
     async def stop(self) -> None:
         """Stop event processing and release VoiceLive resources."""
         if not self._running:
+            if self._prepared_connection:
+                await self._prepared_connection.close()
+                self._prepared_connection = None
             return
 
         with tracer.start_as_current_span(
@@ -2240,8 +2302,42 @@ class VoiceLiveSDKHandler:
             async with _CREDENTIAL_LOCK:
                 # Double-check after acquiring lock
                 if _CACHED_CREDENTIAL is None:
-                    _CACHED_CREDENTIAL = DefaultAzureCredential()
-                    logger.info("Created shared DefaultAzureCredential (cached for process lifetime)")
+                    if _using_managed_identity():
+                        client_id = getattr(settings, "azure_client_id", None) or os.getenv(
+                            "AZURE_CLIENT_ID"
+                        )
+                        _CACHED_CREDENTIAL = ManagedIdentityCredential(client_id=client_id)
+                        logger.info(
+                            "Created shared ManagedIdentityCredential for VoiceLive (cached for process lifetime)"
+                        )
+                    elif _is_local_dev():
+                        _CACHED_CREDENTIAL = DefaultAzureCredential(
+                            exclude_environment_credential=False,
+                            exclude_managed_identity_credential=True,
+                            exclude_workload_identity_credential=True,
+                            exclude_shared_token_cache_credential=True,
+                            exclude_visual_studio_code_credential=True,
+                            exclude_cli_credential=False,
+                            exclude_powershell_credential=True,
+                            exclude_interactive_browser_credential=True,
+                        )
+                        logger.info(
+                            "Created shared local DefaultAzureCredential for VoiceLive without managed identity probing"
+                        )
+                    else:
+                        _CACHED_CREDENTIAL = DefaultAzureCredential(
+                            exclude_environment_credential=False,
+                            exclude_managed_identity_credential=False,
+                            exclude_workload_identity_credential=True,
+                            exclude_shared_token_cache_credential=True,
+                            exclude_visual_studio_code_credential=True,
+                            exclude_cli_credential=True,
+                            exclude_powershell_credential=True,
+                            exclude_interactive_browser_credential=True,
+                        )
+                        logger.info(
+                            "Created shared production DefaultAzureCredential for VoiceLive"
+                        )
         return _CACHED_CREDENTIAL
 
     # =========================================================================
@@ -2394,4 +2490,239 @@ class VoiceLiveSDKHandler:
         self._current_response_id = None
 
 
-__all__ = ["VoiceLiveSDKHandler"]
+def _voicelive_warmup_registry(app_state: Any) -> tuple[dict[str, asyncio.Task], asyncio.Lock]:
+    registry = getattr(app_state, "voicelive_warmups", None)
+    if registry is None:
+        registry = {}
+        setattr(app_state, "voicelive_warmups", registry)
+
+    lock = getattr(app_state, "voicelive_warmups_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        setattr(app_state, "voicelive_warmups_lock", lock)
+
+    return registry, lock
+
+
+def start_voicelive_call_warmup(
+    app_state: Any,
+    *,
+    call_connection_id: str | None,
+    session_id: str | None,
+    scenario_name: str | None = None,
+    user_email: str | None = None,
+) -> None:
+    """Start best-effort VoiceLive connection warmup for a pending ACS call."""
+    if not app_state or not call_connection_id or not session_id:
+        return
+
+    registry, _ = _voicelive_warmup_registry(app_state)
+    existing = registry.get(call_connection_id)
+    if existing and not existing.done():
+        return
+
+    task = asyncio.create_task(
+        _prepare_voicelive_call_warmup(
+            app_state=app_state,
+            call_connection_id=call_connection_id,
+            session_id=session_id,
+            scenario_name=scenario_name,
+            user_email=user_email,
+        ),
+        name=f"voicelive-warmup-{call_connection_id[-8:]}",
+    )
+    registry[call_connection_id] = task
+
+    def _consume_result(done: asyncio.Task) -> None:
+        try:
+            done.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.debug(
+                "VoiceLive warmup failed | call=%s session=%s",
+                call_connection_id,
+                session_id,
+                exc_info=True,
+            )
+
+    task.add_done_callback(_consume_result)
+
+
+async def consume_voicelive_call_warmup(
+    app_state: Any,
+    *,
+    call_connection_id: str | None,
+    timeout_sec: float = _VOICELIVE_WARMUP_WAIT_SECONDS,
+) -> VoiceLivePreparedConnection | None:
+    """Return a pending warm VoiceLive connection, or None for cold-start fallback."""
+    if not app_state or not call_connection_id:
+        return None
+
+    registry, lock = _voicelive_warmup_registry(app_state)
+    async with lock:
+        task = registry.pop(call_connection_id, None)
+
+    if not task:
+        return None
+
+    try:
+        return await asyncio.wait_for(asyncio.shield(task), timeout=timeout_sec)
+    except asyncio.TimeoutError:
+        logger.debug(
+            "VoiceLive warmup not ready after %.0fms | call=%s",
+            timeout_sec * 1000,
+            call_connection_id,
+        )
+
+        async def _close_when_ready(done: asyncio.Task) -> None:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                prepared = done.result()
+                if prepared:
+                    await prepared.close()
+
+        task.add_done_callback(lambda done: asyncio.create_task(_close_when_ready(done)))
+        return None
+    except Exception:
+        logger.debug("VoiceLive warmup consume failed | call=%s", call_connection_id, exc_info=True)
+        return None
+
+
+async def _prepare_voicelive_call_warmup(
+    *,
+    app_state: Any,
+    call_connection_id: str,
+    session_id: str,
+    scenario_name: str | None,
+    user_email: str | None,
+) -> VoiceLivePreparedConnection | None:
+    settings = get_settings()
+    connection_options = {
+        "max_msg_size": settings.ws_max_msg_size,
+        "heartbeat": settings.ws_heartbeat,
+        "timeout": settings.ws_timeout,
+    }
+
+    agents, effective_start_agent, connection_model, byom_query, system_vars = (
+        await _resolve_voicelive_warmup_config(
+            app_state=app_state,
+            session_id=session_id,
+            scenario_name=scenario_name,
+            settings=settings,
+            user_email=user_email,
+        )
+    )
+
+    credential = await VoiceLiveSDKHandler._build_credential(settings)
+    connection_cm = connect(
+        endpoint=settings.azure_voicelive_endpoint,
+        credential=credential,
+        model=connection_model,
+        connection_options=connection_options,
+        **({"query": byom_query} if byom_query else {}),
+    )
+    connection = await connection_cm.__aenter__()
+    prepared = VoiceLivePreparedConnection(
+        connection=connection,
+        connection_cm=connection_cm,
+        credential=credential,
+        settings=settings,
+        model=connection_model,
+        byom_query=byom_query,
+    )
+
+    try:
+        start_agent_obj = agents.get(effective_start_agent) if agents else None
+        if start_agent_obj is not None:
+            await start_agent_obj.apply_voicelive_session(
+                connection,
+                system_vars=system_vars,
+                say=None,
+                session_id=session_id,
+                call_connection_id=call_connection_id,
+            )
+            prepared.session_prepared = True
+        logger.info(
+            "[VoiceLive Warmup] prepared connection | call=%s session=%s model=%s agent=%s session_prepared=%s",
+            call_connection_id,
+            session_id,
+            connection_model,
+            effective_start_agent,
+            prepared.session_prepared,
+        )
+        return prepared
+    except Exception:
+        await prepared.close()
+        raise
+
+
+async def _resolve_voicelive_warmup_config(
+    *,
+    app_state: Any,
+    session_id: str,
+    scenario_name: str | None,
+    settings: Any,
+    user_email: str | None,
+) -> tuple[dict[str, Any], str, str, dict[str, str] | None, dict[str, Any]]:
+    if app_state and getattr(app_state, "unified_agents", None):
+        agents = app_state.unified_agents
+    else:
+        agents = discover_agents()
+
+    orchestrator_config = resolve_orchestrator_config(
+        session_id=session_id,
+        scenario_name=scenario_name,
+    )
+    if orchestrator_config and orchestrator_config.has_scenario and orchestrator_config.agents:
+        merged_agents = dict(agents)
+        merged_agents.update(orchestrator_config.agents)
+        agents = merged_agents
+
+    session_agent = get_session_agent(session_id)
+    if session_agent:
+        agents = dict(agents)
+        agents[session_agent.name] = session_agent
+
+    effective_start_agent = DEFAULT_START_AGENT
+    if session_agent:
+        effective_start_agent = session_agent.name
+    elif orchestrator_config and orchestrator_config.start_agent:
+        effective_start_agent = orchestrator_config.start_agent
+    elif getattr(settings, "start_agent", None):
+        effective_start_agent = settings.start_agent
+
+    connection_model = settings.azure_voicelive_model
+    byom_query: dict[str, str] | None = None
+    start_agent_obj = agents.get(effective_start_agent) if agents else None
+    if start_agent_obj is not None:
+        with contextlib.suppress(Exception):
+            vl_model = start_agent_obj.get_model_for_mode("voicelive")
+            if vl_model and getattr(vl_model, "deployment_id", None):
+                connection_model = vl_model.deployment_id
+        with contextlib.suppress(Exception):
+            byom_query = start_agent_obj.get_byom_query()
+
+    system_vars: dict[str, Any] = {"active_agent": effective_start_agent}
+    if user_email:
+        user_profile = await load_user_profile_by_email(user_email)
+        if user_profile:
+            system_vars.update(
+                {
+                    "session_profile": user_profile,
+                    "client_id": user_profile.get("client_id"),
+                    "customer_intelligence": user_profile.get("customer_intelligence", {}),
+                    "caller_name": user_profile.get("full_name"),
+                }
+            )
+            if user_profile.get("institution_name"):
+                system_vars["institution_name"] = user_profile["institution_name"]
+
+    return agents, effective_start_agent, connection_model, byom_query, system_vars
+
+
+__all__ = [
+    "VoiceLiveSDKHandler",
+    "VoiceLivePreparedConnection",
+    "consume_voicelive_call_warmup",
+    "start_voicelive_call_warmup",
+]

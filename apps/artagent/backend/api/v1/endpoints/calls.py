@@ -288,6 +288,20 @@ async def initiate_call(
                                 call_id, base_context
                             )
 
+                        if effective_stream_mode == StreamMode.VOICE_LIVE:
+                            from apps.artagent.backend.voice.voicelive.handler import (
+                                start_voicelive_call_warmup,
+                            )
+
+                            context = request.context or {}
+                            start_voicelive_call_warmup(
+                                http_request.app.state,
+                                call_connection_id=call_id,
+                                session_id=browser_session_id or call_id,
+                                scenario_name=context.get("scenario"),
+                                user_email=context.get("user_email"),
+                            )
+
                     except Exception as e:
                         logger.warning(f"Failed to persist call context for {call_id}: {e}")
 
