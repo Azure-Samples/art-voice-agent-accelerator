@@ -450,7 +450,7 @@ async def test_thread_bridge_schedule_barge_in_with_loop():
     bridge.set_main_loop(asyncio.get_running_loop(), "call-bridge")
     bridge.schedule_barge_in(handler)
     await asyncio.sleep(0.05)
-    assert calls["cancel"] == 1
+    assert calls["cancel"] == 0
     assert calls["handler"] == 1
 
 

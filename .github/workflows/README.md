@@ -18,6 +18,8 @@ This directory contains GitHub Actions workflows for automated deployment of you
 2. Click **Run workflow**
 3. Select environment (`dev`/`staging`/`prod`) and action (`up`)
 
+By default, deployment runs `make make_resources_public ARGS="--yes"` after provisioning and before application deployment. This opens supported azd-managed data-plane resources, including the selected environment's remote Terraform state storage account, for CI access. Clear **Make azd-deployed private-capable resources public during deployment** when you need to opt out.
+
 ### Available Actions
 | Action | Description |
 |--------|-------------|

@@ -694,11 +694,13 @@ test_redis_connection:
 ############################################################
 
 # Make azd-deployed resources publicly accessible (dev/demo convenience).
-# Resolves the resource group from azd env (AZURE_RESOURCE_GROUP) by default.
+# Resolves the app resource group and remote Terraform state storage from the
+# selected azd env by default.
 # Usage:
 #   make make_resources_public                       # interactive confirm
 #   make make_resources_public ARGS="--yes"          # skip confirmation
 #   make make_resources_public ARGS="--dry-run"      # preview only
+#   make make_resources_public ARGS="--skip-remote-state"  # app RG only
 #   make make_resources_public RESOURCE_GROUP=my-rg  # explicit RG
 make_resources_public:
 	@echo "🌐 Making azd-deployed resources publicly accessible"

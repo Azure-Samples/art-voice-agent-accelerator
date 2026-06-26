@@ -95,6 +95,33 @@ class TestSpeechSDKThreadBargeIn:
         mock_recognizer.finalize_current_utterance.assert_called_once()
 
 
+class TestThreadBridgeBargeIn:
+    """Tests for ThreadBridge barge-in scheduling semantics."""
+
+    @pytest.mark.asyncio
+    async def test_schedule_barge_in_does_not_pre_cancel_route_thread(self):
+        """The handler should gate cancellation after checking active playback."""
+        from apps.artagent.backend.voice.speech_cascade.handler import ThreadBridge
+
+        bridge = ThreadBridge()
+        calls = {"cancel": 0, "handler": 0}
+
+        class RouteThread:
+            async def cancel_current_processing(self):
+                calls["cancel"] += 1
+
+        async def handler():
+            calls["handler"] += 1
+
+        bridge.set_route_turn_thread(RouteThread())
+        bridge.set_main_loop(asyncio.get_running_loop(), "test-conn")
+
+        bridge.schedule_barge_in(handler)
+        await asyncio.sleep(0.05)
+
+        assert calls == {"cancel": 0, "handler": 1}
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Issue 2: Instance-level background task tracking tests
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -263,11 +263,6 @@ def setup_azure_monitor(logger_name: str = None) -> bool:
     """
     global _live_metrics_permanently_disabled, _azure_monitor_configured
 
-    from azure.core.exceptions import HttpResponseError, ServiceResponseError
-    from azure.monitor.opentelemetry import configure_azure_monitor
-    from opentelemetry.sdk.resources import Resource
-    from opentelemetry.sdk.trace import TracerProvider
-
     # Allow hard opt-out for local dev or debugging
     if os.getenv("DISABLE_CLOUD_TELEMETRY", "false").lower() == "true":
         logger.info(
@@ -299,6 +294,17 @@ def setup_azure_monitor(logger_name: str = None) -> bool:
     if not connection_string:
         logger.info(
             "ℹ️ APPLICATIONINSIGHTS_CONNECTION_STRING not found, skipping Azure Monitor configuration"
+        )
+        return False
+
+    try:
+        from azure.core.exceptions import HttpResponseError, ServiceResponseError
+        from azure.monitor.opentelemetry import configure_azure_monitor
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+    except ImportError:
+        logger.warning(
+            "⚠️ Azure Monitor OpenTelemetry not available. Install azure-monitor-opentelemetry package."
         )
         return False
 
@@ -367,11 +373,6 @@ def setup_azure_monitor(logger_name: str = None) -> bool:
         _azure_monitor_configured = True
         return True
 
-    except ImportError:
-        logger.warning(
-            "⚠️ Azure Monitor OpenTelemetry not available. Install azure-monitor-opentelemetry package."
-        )
-        return False
     except HttpResponseError as e:
         if "Forbidden" in str(e) or "permissions" in str(e).lower():
             logger.warning(
