@@ -40,6 +40,7 @@ on:
       - 'azure.yaml'
       - 'Makefile'
       - 'devops/scripts/azd/helpers/make-resources-public.sh'
+      - '.github/workflows/deploy-azd-complete.yml'
       - '.github/workflows/_template-deploy-azd.yml'
 
   pull_request:
@@ -51,6 +52,7 @@ on:
       - 'azure.yaml'
       - 'Makefile'
       - 'devops/scripts/azd/helpers/make-resources-public.sh'
+      - '.github/workflows/deploy-azd-complete.yml'
       - '.github/workflows/_template-deploy-azd.yml'
 
 jobs:
