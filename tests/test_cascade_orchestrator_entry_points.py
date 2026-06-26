@@ -313,26 +313,6 @@ class TestPostRefactoringTargets:
     """
 
     @pytest.mark.skip(reason="Target for post-refactoring - currently fails")
-    def test_single_entry_point_process_turn_with_memo_manager(self):
-        """
-        TARGET: After refactoring, process_turn() should accept MemoManager directly.
-
-        Currently, process_user_input() wraps process_turn() to handle MemoManager.
-        After refactoring, process_turn() should handle it directly.
-        """
-        # This is how it SHOULD work after refactoring
-        from apps.artagent.backend.voice.speech_cascade.orchestrator import (
-            CascadeOrchestratorAdapter,
-        )
-
-        adapter = CascadeOrchestratorAdapter.create(start_agent="TestAgent")
-
-        # Should be able to pass MemoManager directly to process_turn
-        # Currently requires wrapping with process_user_input
-        # After refactoring: process_turn signature should support this
-        pass
-
-    @pytest.mark.skip(reason="Target for post-refactoring - currently fails")
     def test_no_wrapper_functions_exist(self):
         """
         TARGET: After refactoring, wrapper functions should not exist.
