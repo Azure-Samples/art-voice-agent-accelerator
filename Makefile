@@ -689,6 +689,22 @@ test_redis_connection:
 .PHONY: connect_redis test_redis_connection
 
 ############################################################
+# Azure Network Exposure
+# Purpose: Flip azd-deployed private-capable resources to public
+############################################################
+
+# Make azd-deployed private-capable resources publicly accessible (dev/demo only).
+# Wraps devops/scripts/azd/helpers/make-resources-public.sh.
+# Usage:
+#   make enable_public_networking                 # interactive (prompts for confirmation)
+#   make enable_public_networking ARGS="--yes"    # skip confirmation
+#   make enable_public_networking ARGS="--dry-run"
+enable_public_networking:
+	@bash devops/scripts/azd/helpers/make-resources-public.sh $(ARGS)
+
+.PHONY: enable_public_networking
+
+############################################################
 # Help and Documentation
 ############################################################
 
@@ -750,7 +766,7 @@ help:
 	@echo "  test_redis_connection            Test Redis connection without interactive session"
 	@echo ""
 	@echo "🌐 Azure Network Exposure:"
-	@echo "  make_resources_public            Flip azd-deployed private resources to public (ARGS=--dry-run|--yes)"
+	@echo "  enable_public_networking         Flip azd-deployed private resources to public (ARGS=--dry-run|--yes)"
 	@echo ""
 	@echo "📖 Configuration Variables:"
 	@echo "  CONDA_ENV                        Conda environment name (default: audioagent)"

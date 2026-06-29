@@ -88,7 +88,13 @@ resource "azurerm_container_app" "frontend" {
       template[0].container[0].image,
       ingress[0].cors,
       ingress[0].client_certificate_mode,
-      ingress[0].ip_security_restriction
+      ingress[0].ip_security_restriction,
+      # EasyAuth's FIC magic secret ("override-use-mi-fic-assertion-client-id")
+      # is added out-of-band by devops/scripts/azd/helpers/enable-easyauth.sh.
+      # Without ignoring it, every `azd provision` (terraform apply) treats it
+      # as drift and deletes it, leaving the authConfig pointing at a missing
+      # secret and breaking the login redirect.
+      secret
     ]
   }
 
