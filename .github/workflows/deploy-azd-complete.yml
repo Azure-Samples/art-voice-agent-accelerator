@@ -23,11 +23,6 @@ on:
           - deploy     # Application only
           - up         # Both infrastructure and application
           - down       # Destroy everything
-      make_resources_public:
-        description: 'Make azd-deployed private-capable resources public during deployment'
-        required: false
-        default: true
-        type: boolean
 
   push:
     branches:
@@ -39,7 +34,6 @@ on:
       - 'apps/**'
       - 'azure.yaml'
       - 'Makefile'
-      - 'devops/scripts/azd/helpers/make-resources-public.sh'
       - '.github/workflows/deploy-azd-complete.yml'
       - '.github/workflows/_template-deploy-azd.yml'
 
@@ -51,7 +45,6 @@ on:
       - 'infra/terraform/**'
       - 'azure.yaml'
       - 'Makefile'
-      - 'devops/scripts/azd/helpers/make-resources-public.sh'
       - '.github/workflows/deploy-azd-complete.yml'
       - '.github/workflows/_template-deploy-azd.yml'
 
@@ -69,5 +62,4 @@ jobs:
       # For pull_request: use target branch to determine environment (staging for staging, dev for main)
       environment: ${{ inputs.environment || (github.event_name == 'push' && github.ref == 'refs/heads/main' && 'prod') || (github.event_name == 'push' && github.ref == 'refs/heads/staging' && 'staging') || (github.event_name == 'pull_request' && github.base_ref == 'main' && 'prod') || (github.event_name == 'pull_request' && github.base_ref == 'staging' && 'staging') || 'dev' }}
       action: ${{ inputs.action || (github.event_name == 'pull_request' && 'provision') || 'up' }}
-      make_resources_public: ${{ github.event_name != 'workflow_dispatch' || inputs.make_resources_public }}
     secrets: inherit

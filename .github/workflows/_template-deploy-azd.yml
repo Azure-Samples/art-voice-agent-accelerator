@@ -15,11 +15,6 @@ on:
         required: true
         default: 'up'
         type: string
-      make_resources_public:
-        description: 'Make private-capable azd resources public during deployment'
-        required: false
-        default: true
-        type: boolean
       rs_resource_group:
         description: 'Resource group for Terraform state storage'
         required: false
@@ -557,12 +552,6 @@ jobs:
           ARM_SUBSCRIPTION_ID: ${{ env.AZURE_SUBSCRIPTION_ID }}
           ARM_USE_OIDC: ${{ env.USE_OIDC }}
           ARM_CLIENT_SECRET: ${{ env.USE_OIDC == 'false' && env.AZURE_CLIENT_SECRET || '' }}
-
-      - name: 🌐 make_resources_public
-        if: inputs.make_resources_public && inputs.action != 'down'
-        run: |
-          echo "🌐 Making private-capable azd resources public..."
-          make make_resources_public ARGS="--yes"
 
       # ----------------------------------------------------------------------
       # ACTION: DEPLOY
