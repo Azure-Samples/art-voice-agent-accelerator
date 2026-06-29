@@ -22,6 +22,7 @@ import asyncio
 import base64
 import json
 import struct
+import time
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
@@ -179,6 +180,7 @@ class MockWebSocket:
         )
         self.sent_text: list[str] = []
         self.sent_bytes: list[bytes] = []
+        self.sent_json: list[dict[str, Any]] = []
         self.closed = False
         self.close_code: int | None = None
         self.close_reason: str | None = None
@@ -190,6 +192,9 @@ class MockWebSocket:
 
     async def send_bytes(self, data: bytes):
         self.sent_bytes.append(data)
+
+    async def send_json(self, data: dict[str, Any]):
+        self.sent_json.append(data)
 
     async def close(self, code: int = 1000, reason: str = ""):
         self.closed = True
@@ -306,7 +311,9 @@ class TestMediaHandlerFactory:
         )
 
         with patch.object(MediaHandler, "_load_memory_manager", return_value=MockMemoManager()):
-            with patch.object(MediaHandler, "_derive_greeting", new_callable=AsyncMock, return_value="Hello"):
+            with patch.object(
+                MediaHandler, "_derive_greeting", new_callable=AsyncMock, return_value="Hello"
+            ):
                 handler = await MediaHandler.create(config, mock_app_state)
 
         assert "test-session" in mock_app_state.tts_pool.acquire_calls
@@ -357,7 +364,9 @@ class TestMediaHandlerFactory:
 
         mm = MockMemoManager()
         with patch.object(MediaHandler, "_load_memory_manager", return_value=mm):
-            with patch.object(MediaHandler, "_derive_greeting", new_callable=AsyncMock, return_value="Hello"):
+            with patch.object(
+                MediaHandler, "_derive_greeting", new_callable=AsyncMock, return_value="Hello"
+            ):
                 handler = await MediaHandler.create(config, mock_app_state)
 
         assert mm.get_value_from_corememory("scenario_name") == "banking"
@@ -384,7 +393,9 @@ class TestMediaHandlerLifecycle:
         )
 
         with patch.object(MediaHandler, "_load_memory_manager", return_value=MockMemoManager()):
-            with patch.object(MediaHandler, "_derive_greeting", new_callable=AsyncMock, return_value="Hello"):
+            with patch.object(
+                MediaHandler, "_derive_greeting", new_callable=AsyncMock, return_value="Hello"
+            ):
                 handler = await MediaHandler.create(config, app_state)
 
         yield handler
@@ -397,7 +408,7 @@ class TestMediaHandlerLifecycle:
         """start() should set running flag."""
         # VoiceHandler has speech_cascade as a read-only property
         # For VoiceHandler, we test start() directly without mocking internal cascade
-        if hasattr(handler, '_stt_thread'):
+        if hasattr(handler, "_stt_thread"):
             # VoiceHandler: start() requires initialized components
             # Just verify _running flag works
             assert handler._running is False
@@ -410,9 +421,66 @@ class TestMediaHandlerLifecycle:
             handler.speech_cascade.start = AsyncMock()
             handler.speech_cascade.queue_greeting = Mock()
             handler._tts_playback = Mock()
-            handler._tts_playback.get_agent_voice = Mock(return_value=("en-US-JennyNeural", None, None))
+            handler._tts_playback.get_agent_voice = Mock(
+                return_value=("en-US-JennyNeural", None, None)
+            )
             await handler.start()
             assert handler._running is True
+
+    @pytest.mark.asyncio
+    async def test_start_queues_greeting_before_stt_start(self):
+        """ACS greeting should not wait behind Speech SDK recognizer startup."""
+        order: list[str] = []
+
+        class RecordingQueue(asyncio.Queue):
+            async def put(self, item):
+                if getattr(item, "is_greeting", False):
+                    order.append("greeting_queued")
+                await super().put(item)
+
+        class FakeRouteTurnThread:
+            async def start(self):
+                order.append("route_start")
+
+            async def stop(self):
+                order.append("route_stop")
+
+        class FakeSTTThread:
+            thread_running = True
+
+            def prepare_thread(self):
+                order.append("stt_prepare")
+
+            def start_recognizer(self):
+                order.append("stt_start")
+
+            def stop(self):
+                order.append("stt_stop")
+
+        ws = MockWebSocket()
+        app_state = create_mock_app_state()
+        config = MediaHandlerConfig(
+            websocket=ws,
+            session_id="test-session",
+            transport=TransportType.ACS,
+        )
+
+        with patch.object(MediaHandler, "_load_memory_manager", return_value=MockMemoManager()):
+            with patch.object(
+                MediaHandler, "_derive_greeting", new_callable=AsyncMock, return_value="Hello"
+            ):
+                handler = await MediaHandler.create(config, app_state)
+
+        handler._speech_queue = RecordingQueue(maxsize=50)
+        handler._route_turn_thread = FakeRouteTurnThread()
+        handler._stt_thread = FakeSTTThread()
+
+        try:
+            await handler.start()
+            assert order.index("greeting_queued") < order.index("stt_start")
+        finally:
+            if not handler._stopped:
+                await handler.stop()
 
     @pytest.mark.asyncio
     async def test_stop_releases_pools(self, handler):
@@ -462,7 +530,9 @@ class TestBargeIn:
         )
 
         with patch.object(MediaHandler, "_load_memory_manager", return_value=MockMemoManager()):
-            with patch.object(MediaHandler, "_derive_greeting", new_callable=AsyncMock, return_value="Hello"):
+            with patch.object(
+                MediaHandler, "_derive_greeting", new_callable=AsyncMock, return_value="Hello"
+            ):
                 handler = await MediaHandler.create(config, app_state)
 
         yield handler
@@ -470,62 +540,115 @@ class TestBargeIn:
             await handler.stop()
 
     @pytest.mark.asyncio
-    async def test_barge_in_sets_cancel_event(self, handler):
-        """Barge-in should use cancel event (MediaHandler) or context.cancel_event (VoiceHandler)."""
-        # VoiceHandler uses context.cancel_event, MediaHandler uses _tts_cancel_event
-        if hasattr(handler, '_context') and handler._context:
-            # VoiceHandler path
-            if handler._context.cancel_event:
-                handler._context.cancel_event.clear()
-                await handler.handle_barge_in()
-                # VoiceHandler resets event after 50ms
-                await asyncio.sleep(0.1)
-        elif hasattr(handler, '_tts_cancel_event'):
-            # MediaHandler path
-            assert not handler._tts_cancel_event.is_set()
-            await handler._on_barge_in()
-            await asyncio.sleep(0.15)
-            assert not handler._tts_cancel_event.is_set()
-        # Test passes if no exception
+    async def test_barge_in_sets_then_clears_cancel_event(self, handler):
+        """Barge-in with active playback sets the cancel event, then resets it."""
+        # Make the barge-in "active" so it is not treated as an idle partial.
+        handler._tts._mark_acs_audio_queued(32000)
+        handler._context.cancel_event.clear()
+
+        await handler.handle_barge_in()
+
+        # After the settle window the gate is re-opened for the next turn.
+        assert not handler._context.cancel_event.is_set()
 
     @pytest.mark.asyncio
-    async def test_barge_in_cancels_tasks(self, handler):
-        """Barge-in should cancel pending tasks."""
-        # VoiceHandler has different task management
-        if hasattr(handler, 'handle_barge_in'):
-            # VoiceHandler: verify method exists
-            assert callable(handler.handle_barge_in)
-        elif hasattr(handler, '_current_tts_task'):
-            # MediaHandler: test task cancellation
-            async def long_task():
-                await asyncio.sleep(10)
-            task = asyncio.create_task(long_task())
-            handler._current_tts_task = task
-            await handler._on_barge_in()
-            assert task.cancelled() or task.done()
+    async def test_barge_in_sends_stop_audio_to_acs(self, handler):
+        """ACS barge-in should actively clear ACS playback with StopAudio."""
+        handler._tts._mark_acs_audio_queued(32000)
+        await handler.handle_barge_in()
+
+        stop_audio_messages = [
+            message for message in handler.websocket.sent_json if message.get("kind") == "StopAudio"
+        ]
+        assert stop_audio_messages
+        assert stop_audio_messages[-1]["StopAudio"] == {}
+        assert not handler._tts.is_playing
 
     @pytest.mark.asyncio
-    async def test_barge_in_debounce(self, handler):
-        """Rapid barge-in calls should be debounced."""
-        # VoiceHandler uses BargeInController with different debounce mechanism
-        if hasattr(handler, '_barge_in_controller'):
-            # VoiceHandler: debounce is handled by BargeInController.barge_in_active
-            assert handler._barge_in_controller is not None
-        elif hasattr(handler, '_cancel_pending_tasks'):
-            # MediaHandler: test debounce
-            call_count = 0
-            original_cancel = handler._cancel_pending_tasks
+    async def test_barge_in_stops_recent_acs_playback_after_sender_finishes(self, handler):
+        """ACS barge-in should stop audio even after chunks were queued quickly."""
+        handler._tts._transport_playback_until = time.perf_counter() - 0.1
+        handler._tts._last_transport_audio_sent_at = time.perf_counter()
 
-            async def counting_cancel():
-                nonlocal call_count
-                call_count += 1
-                await original_cancel()
+        await handler.handle_barge_in()
 
-            handler._cancel_pending_tasks = counting_cancel
-            await handler._on_barge_in()
-            await handler._on_barge_in()
-            await handler._on_barge_in()
-            assert call_count == 1
+        stop_audio_messages = [
+            message for message in handler.websocket.sent_json if message.get("kind") == "StopAudio"
+        ]
+        assert stop_audio_messages
+        assert handler._tts._last_transport_audio_sent_at == 0.0
+
+    @pytest.mark.asyncio
+    async def test_barge_in_holds_cancel_until_settle_then_resets(self, handler):
+        """Cancel event stays asserted during cancellation work, then resets.
+
+        Regression for the double-clear race: if the signal were cleared early,
+        a turn queued mid-barge-in could play over the user.
+        """
+        handler._tts._mark_acs_audio_queued(32000)
+        observed: dict[str, bool] = {}
+
+        original_stop = handler._tts.stop_transport_playback
+
+        async def spy_stop(*args, **kwargs):
+            observed["set_during_cancel"] = handler._context.cancel_event.is_set()
+            return await original_stop(*args, **kwargs)
+
+        handler._tts.stop_transport_playback = spy_stop
+
+        await handler.handle_barge_in()
+
+        assert observed.get("set_during_cancel") is True
+        assert not handler._context.cancel_event.is_set()
+
+    @pytest.mark.asyncio
+    async def test_barge_in_resets_cancel_even_on_error(self, handler):
+        """Cancel event must reset (finally) even if cancellation work raises."""
+        handler._tts._mark_acs_audio_queued(32000)
+
+        async def boom(*args, **kwargs):
+            raise RuntimeError("stop failed")
+
+        handler._tts.stop_transport_playback = boom
+
+        with pytest.raises(RuntimeError):
+            await handler.handle_barge_in()
+
+        assert not handler._context.cancel_event.is_set()
+
+    @pytest.mark.asyncio
+    async def test_barge_in_ignored_when_idle(self, handler):
+        """Idle user speech partials should not clear playback or cancel turns."""
+        handler._context.cancel_event.clear()
+
+        await handler.handle_barge_in()
+
+        assert not handler.websocket.sent_json
+        assert not handler._context.cancel_event.is_set()
+
+    @pytest.mark.asyncio
+    async def test_barge_in_cancels_orchestration_tasks(self, handler):
+        """Barge-in cancels in-flight orchestration tasks and clears the set."""
+        # Make the barge-in "active" so the cancellation path runs.
+        handler._tts._mark_acs_audio_queued(32000)
+
+        async def long_task():
+            await asyncio.sleep(10)
+
+        task = asyncio.create_task(long_task())
+        handler._orchestration_tasks.add(task)
+
+        await handler.handle_barge_in()
+        await asyncio.sleep(0)
+
+        assert task.cancelled() or task.done()
+        assert task not in handler._orchestration_tasks
+
+    @pytest.mark.asyncio
+    async def test_barge_in_has_controller(self, handler):
+        """VoiceHandler wires a BargeInController (debounce lives there)."""
+        assert handler._barge_in_controller is not None
+        assert callable(handler.handle_barge_in)
 
 
 # ============================================================================
@@ -549,7 +672,9 @@ class TestACSMessageHandling:
         )
 
         with patch.object(MediaHandler, "_load_memory_manager", return_value=MockMemoManager()):
-            with patch.object(MediaHandler, "_derive_greeting", new_callable=AsyncMock, return_value="Hello"):
+            with patch.object(
+                MediaHandler, "_derive_greeting", new_callable=AsyncMock, return_value="Hello"
+            ):
                 handler = await MediaHandler.create(config, app_state)
 
         yield handler
@@ -565,7 +690,7 @@ class TestACSMessageHandling:
         msg = {"kind": "AudioMetadata"}
 
         # VoiceHandler has speech_cascade as read-only property
-        if hasattr(handler, '_stt_thread'):
+        if hasattr(handler, "_stt_thread"):
             # VoiceHandler: skip the full message handling, just verify property
             handler._metadata_received = True
             assert handler._metadata_received is True
@@ -576,7 +701,9 @@ class TestACSMessageHandling:
             handler.speech_cascade.speech_sdk_thread.start_recognizer = Mock()
             handler.speech_cascade.queue_greeting = Mock()
             handler._tts_playback = Mock()
-            handler._tts_playback.get_agent_voice = Mock(return_value=("en-US-JennyNeural", None, None))
+            handler._tts_playback.get_agent_voice = Mock(
+                return_value=("en-US-JennyNeural", None, None)
+            )
             await handler.handle_media_message(json.dumps(msg))
             assert handler._metadata_received is True
 
@@ -590,9 +717,9 @@ class TestACSMessageHandling:
         }
 
         # VoiceHandler expects dict, MediaHandler expects string
-        if hasattr(handler, '_stt_thread'):
+        if hasattr(handler, "_stt_thread"):
             # VoiceHandler: verify write_audio method exists
-            assert hasattr(handler, 'write_audio')
+            assert hasattr(handler, "write_audio")
         else:
             # MediaHandler (legacy)
             handler.speech_cascade = Mock()
@@ -609,9 +736,9 @@ class TestACSMessageHandling:
             "audioData": {"data": audio_b64, "silent": True},
         }
 
-        if hasattr(handler, '_stt_thread'):
+        if hasattr(handler, "_stt_thread"):
             # VoiceHandler: verify handler exists
-            assert hasattr(handler, 'handle_media_message')
+            assert hasattr(handler, "handle_media_message")
         else:
             # MediaHandler (legacy)
             handler.speech_cascade = Mock()
@@ -623,7 +750,7 @@ class TestACSMessageHandling:
     async def test_invalid_json_handled(self, handler):
         """Invalid JSON should not raise."""
         # VoiceHandler expects dict, so this test is MediaHandler-specific
-        if hasattr(handler, '_stt_thread'):
+        if hasattr(handler, "_stt_thread"):
             # VoiceHandler: passing invalid input should handle gracefully
             try:
                 await handler.handle_media_message({})  # Empty dict
@@ -643,7 +770,7 @@ class TestACSMessageHandling:
             "dtmfData": {"data": "*"},
         }
 
-        if hasattr(handler, '_stt_thread'):
+        if hasattr(handler, "_stt_thread"):
             # VoiceHandler: expects dict
             await handler.handle_media_message(msg)
         else:
@@ -666,12 +793,13 @@ class TestGreetingDerivation:
         from config import GREETING
 
         # VoiceHandler uses shared/greeting_service, not _derive_default_greeting
-        if hasattr(MediaHandler, '_derive_default_greeting'):
+        if hasattr(MediaHandler, "_derive_default_greeting"):
             greeting = MediaHandler._derive_default_greeting(None, SimpleNamespace())
             assert greeting == GREETING
         else:
             # VoiceHandler: verify greeting service can be imported
             from apps.artagent.backend.voice.shared.greeting_service import resolve_greeting
+
             assert callable(resolve_greeting)
 
     def test_greeting_from_agent_config(self):
@@ -686,12 +814,13 @@ class TestGreetingDerivation:
             auth_agent=None,
         )
 
-        if hasattr(MediaHandler, '_derive_default_greeting'):
+        if hasattr(MediaHandler, "_derive_default_greeting"):
             greeting = MediaHandler._derive_default_greeting(None, app_state)
             assert greeting == "Welcome to Test Bank!"
         else:
             # VoiceHandler: verify greeting service
             from apps.artagent.backend.voice.shared.greeting_service import resolve_greeting
+
             assert callable(resolve_greeting)
 
 
@@ -714,7 +843,9 @@ class TestIdleTimeout:
         )
 
         with patch.object(MediaHandler, "_load_memory_manager", return_value=MockMemoManager()):
-            with patch.object(MediaHandler, "_derive_greeting", new_callable=AsyncMock, return_value="Hello"):
+            with patch.object(
+                MediaHandler, "_derive_greeting", new_callable=AsyncMock, return_value="Hello"
+            ):
                 handler = await MediaHandler.create(config, app_state)
 
         yield handler
@@ -737,16 +868,18 @@ class TestIdleTimeout:
     async def test_idle_monitor_starts(self, handler):
         """Idle monitor should start on start()."""
         # VoiceHandler has speech_cascade as read-only property
-        if hasattr(handler, '_stt_thread'):
+        if hasattr(handler, "_stt_thread"):
             # VoiceHandler: verify idle_task attribute exists
-            assert hasattr(handler, '_idle_task')
+            assert hasattr(handler, "_idle_task")
         else:
             # MediaHandler (legacy)
             handler.speech_cascade = Mock()
             handler.speech_cascade.start = AsyncMock()
             handler.speech_cascade.queue_greeting = Mock()
             handler._tts_playback = Mock()
-            handler._tts_playback.get_agent_voice = Mock(return_value=("en-US-JennyNeural", None, None))
+            handler._tts_playback.get_agent_voice = Mock(
+                return_value=("en-US-JennyNeural", None, None)
+            )
             await handler.start()
             assert handler._idle_task is not None
             assert not handler._idle_task.done()
@@ -773,7 +906,9 @@ class TestHandlerProperties:
         )
 
         with patch.object(MediaHandler, "_load_memory_manager", return_value=MockMemoManager()):
-            with patch.object(MediaHandler, "_derive_greeting", new_callable=AsyncMock, return_value="Hello"):
+            with patch.object(
+                MediaHandler, "_derive_greeting", new_callable=AsyncMock, return_value="Hello"
+            ):
                 handler = await MediaHandler.create(config, app_state)
 
         yield handler
@@ -837,6 +972,7 @@ class TestVoiceHandlerConfig:
         assert config.transport == TransportType.ACS
         assert config.call_connection_id == "call-123"
 
+
 class TestVoiceHandlerInterface:
     """Test that VoiceHandler has the same interface as MediaHandler."""
 
@@ -887,6 +1023,14 @@ class TestConfigCompatibility:
         voice_fields = {f.name for f in VoiceHandlerConfig.__dataclass_fields__.values()}
 
         # Required fields that must match
-        required = {"websocket", "session_id", "transport", "conn_id", "call_connection_id", "stream_mode", "scenario"}
+        required = {
+            "websocket",
+            "session_id",
+            "transport",
+            "conn_id",
+            "call_connection_id",
+            "stream_mode",
+            "scenario",
+        }
         assert required.issubset(media_fields)
         assert required.issubset(voice_fields)

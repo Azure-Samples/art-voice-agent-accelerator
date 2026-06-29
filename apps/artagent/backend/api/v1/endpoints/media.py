@@ -23,6 +23,7 @@ from apps.artagent.backend.voice import (
     VoiceHandlerConfig,
     VoiceLiveSDKHandler,
 )
+from apps.artagent.backend.voice.voicelive.handler import consume_voicelive_call_warmup
 from config import ACS_STREAMING_MODE
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
@@ -279,6 +280,11 @@ async def _create_media_handler(
         )
         return await VoiceHandler.create(config, websocket.app.state)
     elif stream_mode == StreamMode.VOICE_LIVE:
+        prepared_connection = await consume_voicelive_call_warmup(
+            websocket.app.state,
+            call_connection_id=call_connection_id,
+        )
+
         # Initialize MemoManager with session context for VoiceLive
         # This ensures greeting can access caller_name, session_profile, etc.
         redis_mgr = getattr(websocket.app.state, "redis", None)
@@ -307,6 +313,7 @@ async def _create_media_handler(
             websocket=websocket,
             session_id=session_id,
             call_connection_id=call_connection_id,
+            prepared_connection=prepared_connection,
         )
     else:
         await websocket.close(code=1000, reason="Invalid streaming mode")

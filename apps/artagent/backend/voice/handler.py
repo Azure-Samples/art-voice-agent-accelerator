@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import struct
 import time
@@ -58,7 +59,7 @@ from opentelemetry.trace import SpanKind, Status, StatusCode
 
 # Core dependencies - use direct module imports to avoid circular imports
 from apps.artagent.backend.voice.shared import TransportType, VoiceSessionContext
-from apps.artagent.backend.voice.tts import TTSPlayback
+from apps.artagent.backend.voice.tts import SAMPLE_RATE_ACS, TTSPlayback
 from apps.artagent.backend.voice.speech_cascade.handler import (
     ThreadBridge,
     RouteTurnThread,
@@ -68,7 +69,6 @@ from apps.artagent.backend.voice.speech_cascade.handler import (
     SpeechEventType,
 )
 from apps.artagent.backend.voice.messaging import (
-    BrowserBargeInController,
     make_event_envelope,
     send_user_partial_transcript,
     send_user_transcript,
@@ -121,6 +121,7 @@ try:
         SESSION_INACTIVITY_TIMEOUT_S,
         SESSION_INACTIVITY_CHECK_INTERVAL_S,
     )
+
     INACTIVITY_TIMEOUT_S: float = SESSION_INACTIVITY_TIMEOUT_S
     INACTIVITY_CHECK_INTERVAL_S: float = SESSION_INACTIVITY_CHECK_INTERVAL_S
 except ImportError:
@@ -243,12 +244,11 @@ class VoiceHandler:
         self._route_turn_thread: RouteTurnThread | None = None
         self._barge_in_controller: BargeInController | None = None
 
-        # Browser-specific barge-in (for WebSocket message handling)
-        self._browser_barge_in: BrowserBargeInController | None = None
-
         # Greeting
         self._greeting_text: str = ""
         self._greeting_queued = False
+        self._greeting_queued_perf: float | None = None
+        self._greeting_warmup_task: asyncio.Task[bool] | None = None
 
         # State
         self._running = False
@@ -392,6 +392,8 @@ class VoiceHandler:
         if start_agent_name:
             handler._tts.set_active_agent(start_agent_name)
 
+        handler._start_greeting_warmup()
+
         # Create thread management components
         handler._barge_in_controller = BargeInController(
             session_key,
@@ -460,9 +462,7 @@ class VoiceHandler:
             return
 
         memo = self._context.memo_manager
-        active_agent_name = (
-            memo.get_value_from_corememory("active_agent") if memo else None
-        )
+        active_agent_name = memo.get_value_from_corememory("active_agent") if memo else None
         session_agent = None
         if active_agent_name:
             session_agent = get_session_agent(self._session_id, active_agent_name)
@@ -474,9 +474,8 @@ class VoiceHandler:
             return
 
         applied: dict[str, object] = {}
-        if (
-            getattr(speech, "vad_silence_timeout_ms", None) is not None
-            and hasattr(stt_client, "vad_silence_timeout_ms")
+        if getattr(speech, "vad_silence_timeout_ms", None) is not None and hasattr(
+            stt_client, "vad_silence_timeout_ms"
         ):
             stt_client.vad_silence_timeout_ms = speech.vad_silence_timeout_ms
             applied["vad_silence_timeout_ms"] = speech.vad_silence_timeout_ms
@@ -517,22 +516,6 @@ class VoiceHandler:
         # starts (the SDK reads these at construction time inside start_recognizer).
         self._apply_session_speech_settings()
 
-        # Start STT thread (follows SpeechCascadeHandler pattern)
-        if self._stt_thread:
-            # Prepare and start the background thread
-            self._stt_thread.prepare_thread()
-
-            # Wait for thread to be ready
-            for _ in range(10):
-                if self._stt_thread.thread_running:
-                    break
-                await asyncio.sleep(0.05)
-
-            # Start recognizer in executor
-            await asyncio.get_running_loop().run_in_executor(
-                None, self._stt_thread.start_recognizer
-            )
-
         if self._route_turn_thread:
             await self._route_turn_thread.start()
 
@@ -549,12 +532,29 @@ class VoiceHandler:
         # Queue greeting
         if self._greeting_text and not self._greeting_queued:
             self._greeting_queued = True
+            self._greeting_queued_perf = time.perf_counter()
             event = SpeechEvent(
                 event_type=SpeechEventType.GREETING,
                 text=self._greeting_text,
                 is_greeting=True,
             )
             await self._speech_queue.put(event)
+
+        # Start STT after the route/greeting path is live. This lets ACS begin
+        # playing the greeting while the Speech SDK recognizer finishes startup,
+        # but start() still waits for STT readiness before media messages are
+        # processed so caller audio is not dropped into an uninitialized stream.
+        if self._stt_thread:
+            self._stt_thread.prepare_thread()
+
+            for _ in range(10):
+                if self._stt_thread.thread_running:
+                    break
+                await asyncio.sleep(0.05)
+
+            await asyncio.get_running_loop().run_in_executor(
+                None, self._stt_thread.start_recognizer
+            )
 
         logger.info("[%s] VoiceHandler started", self._session_short)
 
@@ -703,7 +703,9 @@ class VoiceHandler:
         For ACS mode, use handle_media_message() instead.
         """
         if self._transport != TransportType.BROWSER:
-            raise RuntimeError("run() is only for Browser transport; use handle_media_message() for ACS")
+            raise RuntimeError(
+                "run() is only for Browser transport; use handle_media_message() for ACS"
+            )
 
         ws = self._context.websocket
         if not ws:
@@ -868,6 +870,11 @@ class VoiceHandler:
         if self._context.cancel_event:
             self._context.cancel_event.set()
 
+        if self._greeting_warmup_task and not self._greeting_warmup_task.done():
+            self._greeting_warmup_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._greeting_warmup_task
+
         # Cancel orchestration tasks
         for task in list(self._orchestration_tasks):
             if not task.done():
@@ -916,27 +923,30 @@ class VoiceHandler:
             self._stt_thread.write_audio(audio_bytes)
 
     async def _handle_browser_audio(self, audio_bytes: bytes) -> None:
-        """Process raw PCM audio from browser WebSocket."""
-        # Check for barge-in (RMS-based)
-        rms = pcm16le_rms(audio_bytes)
-        if rms > BROWSER_SPEECH_RMS_THRESHOLD:
-            self._touch_activity()
-            if self._browser_barge_in:
-                await self._browser_barge_in.on_speech_detected()
+        """Process raw PCM audio from browser WebSocket.
 
-        # Feed to STT
+        Browser barge-in is driven by the shared STT partial path (the Speech
+        SDK thread schedules ``handle_barge_in`` on the first meaningful
+        partial), exactly like ACS. Here we only refresh the activity timer on
+        speech-energy audio and forward the frames to STT.
+        """
+        # Refresh idle timer when the caller is clearly speaking (RMS-based).
+        if pcm16le_rms(audio_bytes) > BROWSER_SPEECH_RMS_THRESHOLD:
+            self._touch_activity()
+
+        # Feed to STT (barge-in is scheduled from on_partial in the STT thread)
         self.write_audio(audio_bytes)
 
     async def _handle_browser_message(self, text: str) -> None:
         """Process text message from browser.
-        
+
         Handles:
         - JSON control messages (e.g., {"type": "stop"})
         - Plain text as user input (sent to orchestrator)
         """
         if text and text.strip():
             self._touch_activity()
-        
+
         try:
             msg = json.loads(text)
             msg_type = msg.get("type")
@@ -952,41 +962,43 @@ class VoiceHandler:
 
     async def send_text_message(self, text: str) -> None:
         """Send a text message from the user to the orchestrator.
-        
+
         This is the text input equivalent of speech recognition.
         Implements barge-in: cancels any ongoing TTS playback or orchestration.
-        
+
         Note: route_turn's on_tts_chunk callback handles:
         - Emitting assistant_streaming envelopes to UI
         - Playing TTS via play_tts_immediate
         So we don't need to call those here.
-        
+
         Args:
             text: User's text message.
         """
         if not text or not text.strip():
             return
-        
+
         text = text.strip()
         logger.info("[%s] User text input: %s", self._session_short, text[:100])
-        
+
         # Always trigger barge-in for text input - cancel any pending TTS or orchestration
         logger.info("[%s] Text barge-in triggered", self._session_short)
         await self.handle_barge_in()
-        
+
         # Send user transcript envelope to UI
         await self._on_user_transcript(text)
-        
+
         # Route to orchestrator
         # Note: route_turn's on_tts_chunk callback handles UI envelopes and TTS playback
         try:
             orchestrator = self._create_orchestrator_wrapper()
             memo_manager = self._context.memo_manager
-            
+
             await orchestrator(memo_manager, text)
             # Response is handled by route_turn's on_tts_chunk callback
         except Exception as e:
-            logger.error("[%s] Text message orchestration error: %s", self._session_short, e, exc_info=True)
+            logger.error(
+                "[%s] Text message orchestration error: %s", self._session_short, e, exc_info=True
+            )
 
     async def handle_media_message(self, message: dict) -> None:
         """
@@ -1033,63 +1045,143 @@ class VoiceHandler:
         3. Cancels pending orchestration tasks
         4. Notifies thread bridge
         """
-        logger.info("[%s] Barge-in triggered", self._session_short)
-        _barge_in_effect_start = time.perf_counter()
-        _tts_was_playing = self._tts is not None
+        tts_was_playing = bool(self._tts and self._tts.is_playing)
+        transport_playback_pending = bool(
+            self._tts and self._tts.has_pending_transport_playback
+        )
+        response_was_active = bool(
+            self._route_turn_thread and self._route_turn_thread.has_active_response
+        )
 
-        # Signal TTS cancellation
+        if not tts_was_playing and not transport_playback_pending and not response_was_active:
+            logger.debug(
+                "[%s] Ignoring barge-in: no active playback, queued transport audio, or response",
+                self._session_short,
+            )
+            return
+
+        logger.info(
+            "[%s] Barge-in triggered | tts_playing=%s transport_pending=%s response_active=%s",
+            self._session_short,
+            tts_was_playing,
+            transport_playback_pending,
+            response_was_active,
+        )
+        _barge_in_effect_start = time.perf_counter()
+        tts_or_transport_was_playing = tts_was_playing or transport_playback_pending
+
+        # Signal TTS cancellation. This method is the single owner of the cancel
+        # event: TTS playback paths only READ it (and bail) so they never wipe
+        # the barge-in signal mid-flight. We always reset it in the finally
+        # below, after a short settle window, so any audio queued during the
+        # interrupt is suppressed instead of slipping through.
         if self._context.cancel_event:
             self._context.cancel_event.set()
             logger.debug("[%s] Cancel event set", self._session_short)
 
-        # Stop TTS playback
-        if self._tts:
-            self._tts.cancel()
-            logger.debug("[%s] TTS cancel() called", self._session_short)
+        try:
+            # Stop TTS playback
+            if self._tts:
+                self._tts.cancel()
+                logger.debug("[%s] TTS cancel() called", self._session_short)
 
-        # Send audio_stop to frontend to clear audio queue
-        ws = self._context.websocket
-        transport = self._context.transport
-        logger.debug("[%s] Barge-in: ws=%s, transport=%s", self._session_short, ws is not None, transport)
-        if ws and transport == TransportType.BROWSER:
-            stop_audio_msg = {
-                "type": "control",
-                "action": "audio_stop",
-                "reason": "barge_in",
-                "session_id": self._context.session_id,
-            }
-            try:
-                await send_session_envelope(
-                    ws,
-                    stop_audio_msg,
-                    session_id=self._context.session_id,
-                    conn_id=self._context.conn_id,
-                    event_label="barge_in_audio_stop",
-                )
-                logger.info("[%s] Sent audio_stop to browser", self._session_short)
-            except Exception as e:
-                logger.warning("[%s] Failed to send audio_stop: %s", self._session_short, e)
+            # Clear transport-side playback buffers. Browser owns a local audio
+            # queue; ACS owns media playback server-side, so it needs an explicit
+            # StopAudio control message instead of only stopping future chunks.
+            ws = self._context.websocket
+            transport = self._context.transport
+            logger.debug(
+                "[%s] Barge-in: ws=%s, transport=%s",
+                self._session_short,
+                ws is not None,
+                transport,
+            )
+            if ws and transport == TransportType.BROWSER:
+                stop_audio_msg = {
+                    "type": "control",
+                    "action": "audio_stop",
+                    "reason": "barge_in",
+                    "session_id": self._context.session_id,
+                }
+                try:
+                    await send_session_envelope(
+                        ws,
+                        stop_audio_msg,
+                        session_id=self._context.session_id,
+                        conn_id=self._context.conn_id,
+                        event_label="barge_in_audio_stop",
+                    )
+                    logger.info("[%s] Sent audio_stop to browser", self._session_short)
+                except Exception as e:
+                    logger.warning("[%s] Failed to send audio_stop: %s", self._session_short, e)
+                finally:
+                    # The browser buffers audio client-side; once we have asked it
+                    # to flush, drop our local buffered-playback bookkeeping so a
+                    # trailing partial cannot keep re-triggering barge-in.
+                    if self._tts:
+                        self._tts.reset_transport_playback_tracking()
+            elif ws and transport == TransportType.ACS and self._tts:
+                stopped = await self._tts.stop_transport_playback(reason="barge_in")
+                if not stopped:
+                    logger.debug("[%s] ACS StopAudio was not sent", self._session_short)
 
-        # Cancel current TTS task
-        if self._current_tts_task and not self._current_tts_task.done():
-            self._current_tts_task.cancel()
-            self._current_tts_task = None
+            if response_was_active and self._route_turn_thread:
+                await self._route_turn_thread.cancel_current_processing()
 
-        # Cancel orchestration tasks
-        for task in list(self._orchestration_tasks):
-            if not task.done():
-                task.cancel()
-        self._orchestration_tasks.clear()
+            # Cancel current TTS task
+            if self._current_tts_task and not self._current_tts_task.done():
+                self._current_tts_task.cancel()
+                self._current_tts_task = None
 
-        # Report barge-in latency: from detection (first meaningful partial in the
-        # STT thread) to the point TTS/orchestration are actually cancelled. This
-        # is the "how long until barge-in takes effect" KPI.
-        self._report_barge_in_latency(_barge_in_effect_start, _tts_was_playing)
+            # Cancel orchestration tasks
+            for task in list(self._orchestration_tasks):
+                if not task.done():
+                    task.cancel()
+            self._orchestration_tasks.clear()
 
-        # Reset cancel event for next turn (after longer delay for TTS to see it)
-        await asyncio.sleep(0.2)
-        if self._context.cancel_event:
-            self._context.cancel_event.clear()
+            # Report barge-in latency: from detection (first meaningful partial in
+            # the STT thread) to the point TTS/orchestration are actually
+            # cancelled. This is the "how long until barge-in takes effect" KPI.
+            self._report_barge_in_latency(_barge_in_effect_start, tts_or_transport_was_playing)
+
+            # Settle window: give in-flight TTS time to observe the cancel before
+            # we re-open the gate for the next turn.
+            await asyncio.sleep(0.2)
+        finally:
+            if self._context.cancel_event:
+                self._context.cancel_event.clear()
+
+    def _report_barge_in_latency(self, effect_done_ts: float, tts_was_playing: bool) -> None:
+        """Log + record barge-in latency (detection -> effect)."""
+        try:
+            from apps.artagent.backend.voice.speech_cascade.metrics import record_barge_in
+
+            now = time.perf_counter()
+            detected_ts = getattr(self._thread_bridge, "last_barge_in_detected_ts", None)
+            # Effect latency: time spent inside the cancel path this turn.
+            effect_ms = (now - effect_done_ts) * 1000
+            # Detection->effect latency when the STT thread stamped a detection time.
+            detect_to_effect_ms = (now - detected_ts) * 1000 if detected_ts else effect_ms
+
+            logger.info(
+                "[%s] Barge-in took effect | latency=%.0fms (cancel_path=%.0fms) tts_was_playing=%s",
+                self._session_short,
+                detect_to_effect_ms,
+                effect_ms,
+                tts_was_playing,
+            )
+
+            record_barge_in(
+                detect_to_effect_ms,
+                session_id=self._session_id or "",
+                call_connection_id=self._context.call_connection_id,
+                trigger="partial",
+                tts_was_playing=tts_was_playing,
+            )
+        except Exception:
+            logger.debug(
+                "[%s] Failed to record barge-in latency", self._session_short, exc_info=True
+            )
 
     def _report_barge_in_latency(self, effect_done_ts: float, tts_was_playing: bool) -> None:
         """Log + record barge-in latency (detection -> effect)."""
@@ -1194,6 +1286,48 @@ class VoiceHandler:
     # Callbacks (from threads → main loop)
     # =========================================================================
 
+    def _start_greeting_warmup(self) -> None:
+        """Start best-effort ACS greeting voice warmup in the background."""
+        if self._transport != TransportType.ACS or not self._tts or not self._greeting_text:
+            return
+        if self._greeting_warmup_task and not self._greeting_warmup_task.done():
+            return
+
+        self._greeting_warmup_task = asyncio.create_task(
+            self._tts.prepare_voice(sample_rate=SAMPLE_RATE_ACS, timeout_sec=2.5),
+            name=f"tts-greeting-warmup-{self._session_short}",
+        )
+        self._greeting_warmup_task.add_done_callback(self._consume_greeting_warmup_result)
+
+    def _consume_greeting_warmup_result(self, task: asyncio.Task[bool]) -> None:
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            task.result()
+
+    async def _wait_for_greeting_warmup(self, max_wait_sec: float = 0.15) -> bool | None:
+        """Return greeting warmup result when ready, with a short grace period."""
+        task = self._greeting_warmup_task
+        if not task:
+            return None
+
+        if not task.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=max_wait_sec)
+            except asyncio.TimeoutError:
+                logger.debug(
+                    "[%s] Greeting TTS warmup still running after %.0fms; starting greeting",
+                    self._session_short,
+                    max_wait_sec * 1000,
+                )
+                return False
+
+        try:
+            return bool(task.result())
+        except asyncio.CancelledError:
+            return False
+        except Exception as exc:
+            logger.debug("[%s] Greeting TTS warmup failed: %s", self._session_short, exc)
+            return False
+
     async def _on_greeting(self, event: SpeechEvent) -> None:
         """Play greeting via TTS and emit to UI."""
         if self._tts and event.text:
@@ -1204,6 +1338,25 @@ class VoiceHandler:
                 self._thread_bridge.suppress_barge_in()
 
             try:
+                warmup_ready = await self._wait_for_greeting_warmup()
+                speak_start = time.perf_counter()
+
+                def record_first_audio() -> None:
+                    now = time.perf_counter()
+                    queue_to_first_ms = (
+                        (now - self._greeting_queued_perf) * 1000
+                        if self._greeting_queued_perf is not None
+                        else None
+                    )
+                    logger.info(
+                        "[%s] Greeting first audio | speak_to_first_ms=%.1f queue_to_first_ms=%s warmup_ready=%s transport=%s",
+                        self._session_short,
+                        (now - speak_start) * 1000,
+                        f"{queue_to_first_ms:.1f}" if queue_to_first_ms is not None else "n/a",
+                        warmup_ready,
+                        self._transport.value,
+                    )
+
                 # Emit greeting envelope to UI
                 await self._emit_to_ui(event.text, is_greeting=True)
                 # Play audio
@@ -1213,6 +1366,7 @@ class VoiceHandler:
                     voice_name=event.voice_name,
                     voice_style=event.voice_style,
                     voice_rate=event.voice_rate,
+                    on_first_audio=record_first_audio,
                 )
             finally:
                 if suppress:
@@ -1230,7 +1384,11 @@ class VoiceHandler:
         if not ws:
             return
 
-        logger.info("[%s] Sending user transcript envelope: %s", self._session_short, text[:50] if text else "")
+        logger.info(
+            "[%s] Sending user transcript envelope: %s",
+            self._session_short,
+            text[:50] if text else "",
+        )
         try:
             # Use send_user_transcript with broadcast_only - broadcasts to session
             await send_user_transcript(
@@ -1289,7 +1447,9 @@ class VoiceHandler:
         if not text or not text.strip():
             return
 
-        logger.info("[%s] play_tts_immediate called: %s", self._session_short, text[:50] if text else "")
+        logger.info(
+            "[%s] play_tts_immediate called: %s", self._session_short, text[:50] if text else ""
+        )
         await self._on_tts_request(
             text,
             SpeechEventType.TTS_RESPONSE,
@@ -1310,7 +1470,12 @@ class VoiceHandler:
             logger.debug("[%s] _emit_to_ui: no websocket", self._session_short)
             return
 
-        logger.info("[%s] _emit_to_ui: text=%s is_greeting=%s", self._session_short, text[:50] if text else "", is_greeting)
+        logger.info(
+            "[%s] _emit_to_ui: text=%s is_greeting=%s",
+            self._session_short,
+            text[:50] if text else "",
+            is_greeting,
+        )
 
         try:
             normalized = (text or "").strip()
@@ -1439,7 +1604,7 @@ class VoiceHandler:
                 )
 
         session_agent = get_session_agent(config.session_id)
-        
+
         # Scenario start_agent takes priority - user explicitly selected the scenario
         if scenario_start_agent:
             start_agent_name = scenario_start_agent
@@ -1520,7 +1685,9 @@ class VoiceHandler:
                 return self._render_greeting_template(rendered, start_agent, context)
 
         # Default greeting
-        return self._render_greeting_template(GREETING, None, {"institution_name": institution_name})
+        return self._render_greeting_template(
+            GREETING, None, {"institution_name": institution_name}
+        )
 
     def _render_greeting_template(
         self,
@@ -1616,13 +1783,12 @@ class VoiceHandler:
         )
         self.queue_event(event)
 
+    # ============================================================================
+    # Backward Compatibility Alias
+    # ============================================================================
 
-# ============================================================================
-# Backward Compatibility Alias
-# ============================================================================
-
-# MediaHandler can be imported from here for gradual migration
-# In future, MediaHandler in api/v1/handlers/media_handler.py will become a thin shim
+    # MediaHandler can be imported from here for gradual migration
+    # In future, MediaHandler in api/v1/handlers/media_handler.py will become a thin shim
 
     # =========================================================================
     # Properties (MediaHandler compatibility)

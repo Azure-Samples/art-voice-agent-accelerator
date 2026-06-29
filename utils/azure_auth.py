@@ -13,8 +13,20 @@ _CREDENTIAL_TIMEOUT_SEC = float(os.getenv("AZURE_CREDENTIAL_TIMEOUT_SEC", "10.0"
 
 def _using_managed_identity() -> bool:
     """Check if running with Managed Identity (Azure hosted environment)."""
+    if os.getenv("MSI_ENDPOINT") or os.getenv("IDENTITY_ENDPOINT"):
+        return True
+
+    return bool(os.getenv("AZURE_CLIENT_ID") and _is_azure_hosted())
+
+
+def _is_azure_hosted() -> bool:
+    """Return True when Azure hosting environment markers are present."""
     return bool(
-        os.getenv("AZURE_CLIENT_ID") or os.getenv("MSI_ENDPOINT") or os.getenv("IDENTITY_ENDPOINT")
+        os.getenv("WEBSITE_SITE_NAME")  # App Service
+        or os.getenv("CONTAINER_APP_NAME")  # Container Apps
+        or os.getenv("FUNCTIONS_WORKER_RUNTIME")  # Functions
+        or os.getenv("IDENTITY_ENDPOINT")
+        or os.getenv("MSI_ENDPOINT")
     )
 
 
@@ -29,17 +41,13 @@ def _is_local_dev() -> bool:
     """
     env = os.getenv("ENVIRONMENT", "").lower()
 
-    if env not in ("prod", "production", "staging"):
+    if env in ("dev", "development", "local"):
         return True
 
-    # Fall back to Azure hosting signals
-    is_azure_hosted = bool(
-        os.getenv("WEBSITE_SITE_NAME")  # App Service
-        or os.getenv("CONTAINER_APP_NAME")  # Container Apps
-        or os.getenv("FUNCTIONS_WORKER_RUNTIME")  # Functions
-    )
+    if env in ("prod", "production", "staging"):
+        return not _is_azure_hosted()
 
-    return not is_azure_hosted
+    return not _is_azure_hosted()
 
 
 def _create_credential_internal():
@@ -75,6 +83,16 @@ def _create_credential_internal():
         exclude_powershell_credential=True,
         exclude_interactive_browser_credential=True,
     )
+
+
+def should_use_managed_identity_for_acs() -> bool:
+    """Return whether ACS clients should prefer managed identity auth."""
+    override = os.getenv("ACS_USE_MANAGED_IDENTITY", "").strip().lower()
+    if override in {"1", "true", "yes", "on"}:
+        return True
+    if override in {"0", "false", "no", "off"}:
+        return False
+    return _using_managed_identity()
 
 
 @lru_cache(maxsize=1)

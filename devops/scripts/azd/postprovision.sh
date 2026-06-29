@@ -445,6 +445,45 @@ task_update_urls() {
 }
 
 # ============================================================================
+# Task 3b: Backend Container Apps CORS Policy
+# ============================================================================
+
+task_update_backend_cors() {
+    header "🌐 Task 3b: Backend CORS Policy"
+
+    local cors_script resource_group backend_app frontend_fqdn
+    cors_script="$HELPERS_DIR/update-backend-cors.sh"
+    resource_group=$(azd_get "AZURE_RESOURCE_GROUP")
+    backend_app=$(azd_get "BACKEND_CONTAINER_APP_NAME")
+    frontend_fqdn=$(azd_get "FRONTEND_CONTAINER_APP_FQDN")
+
+    if [[ ! -f "$cors_script" ]]; then
+        warn "update-backend-cors.sh not found, skipping"
+        footer
+        return 0
+    fi
+
+    if [[ -z "$resource_group" || -z "$backend_app" || -z "$frontend_fqdn" ]]; then
+        warn "Missing required values for backend CORS update"
+        [[ -z "$resource_group" ]] && warn "  - AZURE_RESOURCE_GROUP not set"
+        [[ -z "$backend_app" ]] && warn "  - BACKEND_CONTAINER_APP_NAME not set"
+        [[ -z "$frontend_fqdn" ]] && warn "  - FRONTEND_CONTAINER_APP_FQDN not set"
+        footer
+        return 1
+    fi
+
+    if bash "$cors_script" -g "$resource_group" -b "$backend_app" -f "$frontend_fqdn"; then
+        success "Backend CORS policy updated"
+    else
+        warn "Failed to update backend CORS policy"
+        footer
+        return 1
+    fi
+
+    footer
+}
+
+# ============================================================================
 # Summary
 # ============================================================================
 
@@ -601,16 +640,6 @@ task_enable_easyauth() {
         return 0
     fi
     
-    # Check if EasyAuth was already enabled (via azd env)
-    local easyauth_configured
-    easyauth_configured=$(azd_get "EASYAUTH_ENABLED" "false")
-    
-    if [[ "$easyauth_configured" == "true" ]]; then
-        success "EasyAuth already configured (EASYAUTH_ENABLED=true)"
-        footer
-        return 0
-    fi
-    
     local resource_group container_app uami_client_id
     resource_group=$(azd_get "AZURE_RESOURCE_GROUP")
     container_app=$(azd_get "FRONTEND_CONTAINER_APP_NAME")
@@ -623,6 +652,54 @@ task_enable_easyauth() {
         [[ -z "$uami_client_id" ]] && warn "  - FRONTEND_UAI_CLIENT_ID not set"
         footer
         return 1
+    fi
+    
+    # Check if EasyAuth was already enabled (via azd env).
+    #
+    # The EASYAUTH_ENABLED flag alone is NOT sufficient: a prior run can set it
+    # to "true" while leaving the config half-applied (e.g. the FIC magic secret
+    # 'override-use-mi-fic-assertion-client-id' was never created). When that
+    # happens, trusting the flag makes postprovision skip the script forever and
+    # auth stays broken. So we also verify the secret actually exists, and only
+    # short-circuit when both the flag is true AND the secret is present.
+    local easyauth_configured fic_secret secret_present easyauth_repair
+    easyauth_configured=$(azd_get "EASYAUTH_ENABLED" "false")
+    fic_secret="override-use-mi-fic-assertion-client-id"
+    easyauth_repair="false"
+    
+    if [[ "$easyauth_configured" == "true" ]]; then
+        secret_present=$(az containerapp secret list \
+            --resource-group "$resource_group" \
+            --name "$container_app" \
+            --query "[?name=='$fic_secret'].name | [0]" \
+            -o tsv 2>/dev/null || echo "")
+        
+        if [[ -n "$secret_present" ]]; then
+            success "EasyAuth already configured (flag set and FIC secret present)"
+            footer
+            return 0
+        fi
+        
+        warn "EASYAUTH_ENABLED=true but FIC secret '$fic_secret' is missing — re-applying to self-heal"
+        easyauth_repair="true"
+    fi
+    
+    # Repair path: the user already opted into EasyAuth, but drift removed the
+    # FIC secret -- typically because a later `azd provision` re-applies the
+    # container app from IaC and resets its secret list (the authConfig child
+    # resource survives and keeps pointing at the now-missing secret, which is
+    # what breaks login). Re-apply non-interactively regardless of CI/TTY so
+    # `azd up` / `azd provision` self-heals without waiting on a prompt that
+    # auto-skips when there is no interactive terminal.
+    if [[ "$easyauth_repair" == "true" ]]; then
+        log "Repairing EasyAuth configuration (drift detected)…"
+        if AZD_LOG_IN_BOX=true bash "$easyauth_script" -g "$resource_group" -a "$container_app" -i "$uami_client_id"; then
+            success "EasyAuth re-applied (FIC secret restored)"
+        else
+            warn "Failed to repair EasyAuth configuration"
+        fi
+        footer
+        return 0
     fi
     
     if is_ci; then
@@ -818,6 +895,7 @@ main() {
     task_cardapi_provision || true
     task_phone_number || true
     task_update_urls || true
+    task_update_backend_cors || true
     task_sync_appconfig || true
     task_generate_env_local || true
     task_enable_easyauth || true

@@ -12,7 +12,7 @@ This module consolidates all TTS logic and eliminates:
 
 Usage:
     from apps.artagent.backend.voice.tts import TTSPlayback
-    
+
     tts = TTSPlayback(context, app_state)
     await tts.speak("Hello, how can I help you?")
 """
@@ -45,6 +45,7 @@ if TYPE_CHECKING:
 # Audio sample rates
 SAMPLE_RATE_BROWSER = 48000  # Browser WebAudio prefers 48kHz
 SAMPLE_RATE_ACS = 16000  # ACS telephony uses 16kHz
+_PCM16_BYTES_PER_SAMPLE = 2
 
 # Streaming synthesis: when enabled, audio chunks are sent to the transport as
 # Azure renders them (low time-to-first-audio) instead of waiting for the entire
@@ -56,6 +57,14 @@ _STREAMING_ENABLED = os.getenv("CASCADE_TTS_STREAMING", "true").strip().lower() 
     "yes",
     "on",
 )
+
+try:
+    _ACS_STOP_AUDIO_GRACE_SECONDS = max(
+        0.0,
+        float(os.getenv("CASCADE_ACS_STOP_AUDIO_GRACE_SECONDS", "2.0")),
+    )
+except ValueError:
+    _ACS_STOP_AUDIO_GRACE_SECONDS = 2.0
 
 logger = get_logger("voice.tts.playback")
 tracer = trace.get_tracer(__name__)
@@ -122,7 +131,10 @@ class TTSPlayback:
 
         self._app_state = app_state
         self._tts_lock = asyncio.Lock()
+        self._transport_send_lock = asyncio.Lock()
         self._is_playing = False
+        self._transport_playback_until = 0.0
+        self._last_transport_audio_sent_at = 0.0
 
     @property
     def context(self) -> VoiceSessionContext:
@@ -132,7 +144,25 @@ class TTSPlayback:
     @property
     def is_playing(self) -> bool:
         """Check if TTS is currently playing."""
-        return self._is_playing
+        return self._is_playing or time.perf_counter() < self._transport_playback_until
+
+    @property
+    def has_pending_transport_playback(self) -> bool:
+        """Return True while the transport may still be playing queued audio.
+
+        Applies to every transport: ACS/VoiceLive buffer audio server-side, and
+        the browser buffers PCM frames client-side via its WebAudio worklet. In
+        both cases the backend can finish *sending* frames well before playback
+        actually ends, so barge-in must remain armed for the buffered window.
+        """
+        now = time.perf_counter()
+        if self._is_playing or now < self._transport_playback_until:
+            return True
+
+        return (
+            self._last_transport_audio_sent_at > 0
+            and now - self._last_transport_audio_sent_at < _ACS_STOP_AUDIO_GRACE_SECONDS
+        )
 
     @property
     def _ws(self) -> WebSocket:
@@ -153,6 +183,17 @@ class TTSPlayback:
     def _cancel_event(self) -> asyncio.Event:
         """Get cancel event from context."""
         return self._context.cancel_event
+
+    async def _get_tts_client(self) -> Any:
+        """Return the session-owned TTS client, falling back to pool acquisition."""
+        synth = self._context.tts_client
+        if synth is not None:
+            return synth
+
+        session_key = self._context.call_connection_id or self._session_id
+        synth, _ = await self._app_state.tts_pool.acquire_for_session(session_key)
+        self._context.tts_client = synth
+        return synth
 
     def get_agent_voice(self) -> tuple[str, str | None, str | None]:
         """
@@ -244,7 +285,11 @@ class TTSPlayback:
                     "[%s] Active agent set from session agents: %s (voice=%s)",
                     self._session_short,
                     agent_name,
-                    getattr(session_agent.voice, "name", "unknown") if session_agent.voice else "none",
+                    (
+                        getattr(session_agent.voice, "name", "unknown")
+                        if session_agent.voice
+                        else "none"
+                    ),
                 )
                 return
 
@@ -266,6 +311,81 @@ class TTSPlayback:
                 )
         else:
             self._context.current_agent = None
+
+    async def prepare_voice(
+        self,
+        *,
+        voice_name: str | None = None,
+        voice_style: str | None = None,
+        voice_rate: str | None = None,
+        sample_rate: int | None = None,
+        timeout_sec: float = 2.5,
+    ) -> bool:
+        """Prime the session TTS client for the next utterance's voice."""
+        synth = self._context.tts_client
+        if not synth or not getattr(synth, "is_ready", False):
+            logger.debug(
+                "[%s] TTS voice warmup skipped: synthesizer not ready", self._session_short
+            )
+            return False
+
+        if not hasattr(synth, "warm_connection"):
+            logger.debug(
+                "[%s] TTS voice warmup skipped: no warm_connection hook", self._session_short
+            )
+            return False
+
+        if not voice_name:
+            voice_name, voice_style, voice_rate = self.get_agent_voice()
+
+        resolved_sample_rate = sample_rate
+        if resolved_sample_rate is None:
+            resolved_sample_rate = (
+                SAMPLE_RATE_BROWSER if self._context.is_browser else SAMPLE_RATE_ACS
+            )
+
+        style = voice_style or "conversational"
+        rate = voice_rate or "medium"
+        loop = asyncio.get_running_loop()
+        executor = getattr(self._app_state, "speech_executor", None)
+        warm_func = partial(
+            synth.warm_connection,
+            voice=voice_name,
+            sample_rate=resolved_sample_rate,
+            style=style,
+            rate=rate,
+        )
+
+        start = time.perf_counter()
+        try:
+            result = await asyncio.wait_for(
+                loop.run_in_executor(executor, warm_func),
+                timeout=timeout_sec,
+            )
+        except asyncio.TimeoutError:
+            logger.debug(
+                "[%s] TTS voice warmup timed out | voice=%s sample_rate=%s timeout=%.1fs",
+                self._session_short,
+                voice_name,
+                resolved_sample_rate,
+                timeout_sec,
+            )
+            return False
+        except Exception as exc:
+            logger.debug("[%s] TTS voice warmup failed: %s", self._session_short, exc)
+            return False
+
+        logger.info(
+            "[%s] TTS voice warmup %s | voice=%s style=%s rate=%s sample_rate=%s elapsed_ms=%.1f",
+            self._session_short,
+            "ready" if result else "incomplete",
+            voice_name,
+            style,
+            rate,
+            resolved_sample_rate,
+            (time.perf_counter() - start) * 1000,
+        )
+        return bool(result)
 
     async def speak(
         self,
@@ -398,15 +518,15 @@ class TTSPlayback:
         pcm_bytes = None
         try:
             async with self._tts_lock:
+                # Barge-in owns the cancel event; only read it here so a fresh
+                # barge-in signal is not wiped before the handler resets it.
                 if self._cancel_event.is_set():
-                    self._cancel_event.clear()
                     return False
 
                 self._is_playing = True
                 synth = None
 
-                # Acquire TTS synthesizer from pool
-                synth, tier = await self._app_state.tts_pool.acquire_for_session(self._session_id)
+                synth = await self._get_tts_client()
 
                 # Validate synthesizer has valid config
                 if not synth or not getattr(synth, "is_ready", False):
@@ -429,9 +549,8 @@ class TTSPlayback:
                     synth, text, voice_name, style, rate, SAMPLE_RATE_BROWSER
                 )
 
-            # Lock released — check cancel before streaming
+            # Lock released — check cancel before streaming (read-only).
             if self._cancel_event.is_set():
-                self._cancel_event.clear()
                 return False
 
             if not pcm_bytes:
@@ -503,15 +622,15 @@ class TTSPlayback:
         pcm_bytes = None
         try:
             async with self._tts_lock:
+                # Barge-in owns the cancel event; only read it here so a fresh
+                # barge-in signal is not wiped before the handler resets it.
                 if self._cancel_event.is_set():
-                    self._cancel_event.clear()
                     return False
 
                 self._is_playing = True
                 synth = None
 
-                # Acquire TTS synthesizer from pool
-                synth, tier = await self._app_state.tts_pool.acquire_for_session(self._session_id)
+                synth = await self._get_tts_client()
 
                 # Validate synthesizer has valid config
                 if not synth or not getattr(synth, "is_ready", False):
@@ -522,7 +641,9 @@ class TTSPlayback:
                     return False
 
                 # Synthesize audio (under lock)
-                logger.info("[%s] ACS TTS: Starting synthesis at %dHz", self._session_short, SAMPLE_RATE_ACS)
+                logger.info(
+                    "[%s] ACS TTS: Starting synthesis at %dHz", self._session_short, SAMPLE_RATE_ACS
+                )
 
                 # Streaming path: synthesize and send interleaved (low TTFA).
                 # Held under lock for the full duration since synthesis and
@@ -531,23 +652,30 @@ class TTSPlayback:
                     result = await self._stream_synth_to_acs(
                         synth, text, voice_name, style, rate, blocking, on_first_audio, run_id
                     )
-                    logger.info("[%s] ACS TTS: Stream complete, result=%s", self._session_short, result)
+                    logger.info(
+                        "[%s] ACS TTS: Stream complete, result=%s", self._session_short, result
+                    )
                     return result
 
                 pcm_bytes = await self._synthesize(
                     synth, text, voice_name, style, rate, SAMPLE_RATE_ACS
                 )
 
-            # Lock released — check cancel before streaming
+            # Lock released — check cancel before streaming (read-only).
             if self._cancel_event.is_set():
-                self._cancel_event.clear()
                 return False
 
             if not pcm_bytes:
-                logger.error("[%s] ACS TTS returned empty audio (synthesis failed)", self._session_short)
+                logger.error(
+                    "[%s] ACS TTS returned empty audio (synthesis failed)", self._session_short
+                )
                 return False
 
-            logger.info("[%s] ACS TTS: Synthesis OK, got %d bytes, starting stream", self._session_short, len(pcm_bytes))
+            logger.info(
+                "[%s] ACS TTS: Synthesis OK, got %d bytes, starting stream",
+                self._session_short,
+                len(pcm_bytes),
+            )
 
             # Stream to ACS (without lock)
             result = await self._stream_to_acs(pcm_bytes, blocking, on_first_audio, run_id)
@@ -601,17 +729,15 @@ class TTSPlayback:
         base_timeout = 10.0
         per_char_timeout = len(text) / 100.0  # ~1 second per 100 chars
         synthesis_timeout = min(base_timeout + per_char_timeout, 120.0)  # Cap at 2 minutes
-        
+
         try:
             if executor:
                 result = await asyncio.wait_for(
-                    loop.run_in_executor(executor, synth_func),
-                    timeout=synthesis_timeout
+                    loop.run_in_executor(executor, synth_func), timeout=synthesis_timeout
                 )
             else:
                 result = await asyncio.wait_for(
-                    loop.run_in_executor(None, synth_func),
-                    timeout=synthesis_timeout
+                    loop.run_in_executor(None, synth_func), timeout=synthesis_timeout
                 )
         except asyncio.TimeoutError:
             logger.error(
@@ -711,7 +837,9 @@ class TTSPlayback:
         async def _send_frame(frame: bytes, is_final: bool) -> bool:
             nonlocal first_sent, frame_index
             if not _ws_is_connected(self._ws):
-                logger.warning("[%s] Browser stream aborted: WebSocket disconnected", self._session_short)
+                logger.warning(
+                    "[%s] Browser stream aborted: WebSocket disconnected", self._session_short
+                )
                 return False
             await self._ws.send_json(
                 {
@@ -725,6 +853,7 @@ class TTSPlayback:
                     "is_final": is_final,
                 }
             )
+            self._mark_browser_audio_queued(len(frame))
             frame_index += 1
             if not first_sent:
                 first_sent = True
@@ -739,7 +868,6 @@ class TTSPlayback:
                 synth, text, voice, style, rate, SAMPLE_RATE_BROWSER
             ):
                 if self._cancel_event.is_set():
-                    self._cancel_event.clear()
                     logger.debug("[%s] Browser stream cancelled", self._session_short)
                     return False
                 buffer.extend(pcm)
@@ -808,10 +936,12 @@ class TTSPlayback:
         async def _send_frame(frame: bytes) -> bool:
             nonlocal first_sent, chunks_sent
             if not _ws_is_connected(self._ws):
-                logger.warning("[%s] ACS stream aborted: WebSocket disconnected", self._session_short)
+                logger.warning(
+                    "[%s] ACS stream aborted: WebSocket disconnected", self._session_short
+                )
                 return False
             try:
-                await self._ws.send_json(
+                sent = await self._send_acs_json(
                     {
                         "kind": "AudioData",
                         "audioData": {
@@ -823,8 +953,21 @@ class TTSPlayback:
                     }
                 )
             except Exception as e:
-                logger.error("[%s] ACS stream ERROR sending chunk %d: %s", self._session_short, chunks_sent + 1, e)
+                logger.error(
+                    "[%s] ACS stream ERROR sending chunk %d: %s",
+                    self._session_short,
+                    chunks_sent + 1,
+                    e,
+                )
                 return False
+            if not sent:
+                # Barge-in StopAudio is in effect; stop streaming immediately so
+                # no AudioData reaches ACS after the stop.
+                logger.debug(
+                    "[%s] ACS stream suppressed (barge-in StopAudio)", self._session_short
+                )
+                return False
+            self._mark_acs_audio_queued(len(frame))
             chunks_sent += 1
             if not first_sent:
                 first_sent = True
@@ -840,12 +983,14 @@ class TTSPlayback:
                 synth, text, voice, style, rate, SAMPLE_RATE_ACS
             ):
                 if self._cancel_event.is_set():
-                    self._cancel_event.clear()
                     logger.debug("[%s] ACS stream cancelled", self._session_short)
                     return False
                 buffer.extend(pcm)
                 total_bytes += len(pcm)
                 while len(buffer) >= chunk_size:
+                    if self._cancel_event.is_set():
+                        logger.debug("[%s] ACS stream cancelled", self._session_short)
+                        return False
                     frame = bytes(buffer[:chunk_size])
                     del buffer[:chunk_size]
                     if not await _send_frame(frame):
@@ -898,13 +1043,14 @@ class TTSPlayback:
 
         for i in range(0, len(pcm_bytes), chunk_size):
             if self._cancel_event.is_set():
-                self._cancel_event.clear()
                 logger.debug("[%s] Browser stream cancelled", self._session_short)
                 return False
 
             # Check WebSocket connection before sending
             if not _ws_is_connected(self._ws):
-                logger.warning("[%s] Browser stream aborted: WebSocket disconnected", self._session_short)
+                logger.warning(
+                    "[%s] Browser stream aborted: WebSocket disconnected", self._session_short
+                )
                 return False
 
             chunk = pcm_bytes[i : i + chunk_size]
@@ -922,6 +1068,7 @@ class TTSPlayback:
                     "is_final": is_final,
                 }
             )
+            self._mark_browser_audio_queued(len(chunk))
             chunks_sent += 1
 
             if not first_sent:
@@ -973,7 +1120,6 @@ class TTSPlayback:
 
         for i in range(0, len(pcm_bytes), chunk_size):
             if self._cancel_event.is_set():
-                self._cancel_event.clear()
                 logger.debug("[%s] ACS stream cancelled", self._session_short)
                 return False
 
@@ -982,7 +1128,9 @@ class TTSPlayback:
 
             # Check WebSocket connection before sending
             if not _ws_is_connected(self._ws):
-                logger.warning("[%s] ACS stream aborted: WebSocket disconnected", self._session_short)
+                logger.warning(
+                    "[%s] ACS stream aborted: WebSocket disconnected", self._session_short
+                )
                 return False
 
             message = {
@@ -996,20 +1144,29 @@ class TTSPlayback:
             }
 
             try:
-                await self._ws.send_json(message)
-                chunks_sent += 1
-
-                if chunks_sent == 1:
-                    logger.info("[%s] ACS stream: First chunk sent successfully", self._session_short)
+                sent = await self._send_acs_json(message)
             except Exception as e:
                 logger.error(
                     "[%s] ACS stream ERROR sending chunk %d/%d: %s",
                     self._session_short,
                     chunks_sent + 1,
                     total_chunks,
-                    e
+                    e,
                 )
                 return False
+            if not sent:
+                # Barge-in StopAudio is in effect; stop streaming immediately so
+                # no AudioData reaches ACS after the stop.
+                logger.debug(
+                    "[%s] ACS stream suppressed (barge-in StopAudio)", self._session_short
+                )
+                return False
+            self._mark_acs_audio_queued(len(chunk))
+            chunks_sent += 1
+            if chunks_sent == 1:
+                logger.info(
+                    "[%s] ACS stream: First chunk sent successfully", self._session_short
+                )
 
             if not first_sent:
                 first_sent = True
@@ -1031,6 +1188,76 @@ class TTSPlayback:
             len(pcm_bytes),
             run_id,
         )
+        return True
+
+    async def _send_acs_json(
+        self, message: dict[str, Any], *, allow_during_cancel: bool = False
+    ) -> bool:
+        """Serialize ACS media websocket writes across audio and StopAudio control.
+
+        Returns True if the message was written. ``AudioData`` writes are
+        suppressed (return False) once a barge-in cancel is in effect, so no
+        audio is ever sent *after* a StopAudio control message. The transport
+        lock serializes the two: a StopAudio acquires the lock, and any audio
+        frame that acquires the lock afterwards observes the cancel flag and is
+        dropped. Control messages (StopAudio) pass ``allow_during_cancel=True``
+        to bypass the gate so the stop itself is never suppressed.
+        """
+        async with self._transport_send_lock:
+            if not allow_during_cancel and self._cancel_event.is_set():
+                return False
+            await self._ws.send_json(message)
+            return True
+
+    def _note_transport_audio(self, byte_count: int, sample_rate: int) -> None:
+        """Track how long the transport may keep playing already-sent audio."""
+        if byte_count <= 0:
+            return
+
+        frame_seconds = byte_count / (sample_rate * _PCM16_BYTES_PER_SAMPLE)
+        now = time.perf_counter()
+        self._last_transport_audio_sent_at = now
+        self._transport_playback_until = max(now, self._transport_playback_until) + frame_seconds
+
+    def _mark_acs_audio_queued(self, byte_count: int) -> None:
+        """Track how long ACS may continue playing already-queued audio."""
+        self._note_transport_audio(byte_count, SAMPLE_RATE_ACS)
+
+    def _mark_browser_audio_queued(self, byte_count: int) -> None:
+        """Track how long the browser may keep playing already-buffered audio."""
+        self._note_transport_audio(byte_count, SAMPLE_RATE_BROWSER)
+
+    def reset_transport_playback_tracking(self) -> None:
+        """Clear buffered-playback bookkeeping after a transport stop."""
+        self._is_playing = False
+        self._transport_playback_until = 0.0
+        self._last_transport_audio_sent_at = 0.0
+
+    async def stop_transport_playback(self, *, reason: str = "barge_in") -> bool:
+        """Actively stop ACS-side playback and clear any buffered media."""
+        self.cancel()
+        self.reset_transport_playback_tracking()
+
+        if not (self._context.is_acs or self._context.is_voicelive):
+            return False
+
+        if self._ws is None or not _ws_is_connected(self._ws):
+            logger.debug("[%s] ACS StopAudio skipped: websocket not connected", self._session_short)
+            return False
+
+        stop_message = {
+            "kind": "StopAudio",
+            "AudioData": None,
+            "StopAudio": {},
+        }
+        try:
+            # Bypass the AudioData cancel-gate: the stop itself must always go out.
+            await self._send_acs_json(stop_message, allow_during_cancel=True)
+        except Exception as exc:
+            logger.debug("[%s] Failed to send ACS StopAudio: %s", self._session_short, exc)
+            return False
+
+        logger.info("[%s] Sent ACS StopAudio | reason=%s", self._session_short, reason)
         return True
 
     def cancel(self) -> None:

@@ -139,6 +139,18 @@ resource "azurerm_key_vault_secret" "acs_connection_string" {
 # - Required for Call Automation with speech features
 #
 
+# Allow the backend managed identity to call ACS Call Automation using Entra auth.
+resource "azurerm_role_assignment" "acs_backend_communication_owner" {
+  scope                = azapi_resource.acs.id
+  role_definition_name = "Communication and Email Service Owner"
+  principal_id         = azurerm_user_assigned_identity.backend.principal_id
+
+  depends_on = [
+    azapi_resource.acs,
+    azurerm_user_assigned_identity.backend
+  ]
+}
+
 # Allow ACS managed identity to store call recordings in the primary storage account
 resource "azurerm_role_assignment" "acs_storage_blob_contributor" {
   scope                = azurerm_storage_account.main.id

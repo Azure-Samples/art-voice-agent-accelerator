@@ -340,8 +340,14 @@ configure_federated_credential() {
         success "Updated federated credential on App Registration"
     else
         log "Creating federated identity credential on App Registration..."
-        
-        az ad app federated-credential create \
+
+        # The existence check above can return a false-empty result (e.g. Graph
+        # eventual consistency or a transient list failure swallowed by the
+        # `|| echo ""`). If the FIC actually exists, `create` fails with
+        # "already exists" and, under `set -e`, would abort the script before
+        # Steps 3-4 (secret + authConfig) run -- leaving auth half-configured.
+        # Treat "already exists" as recoverable and fall back to update.
+        if az ad app federated-credential create \
             --id "$APP_ID" \
             --parameters "{
                 \"name\": \"$fic_name\",
@@ -350,9 +356,23 @@ configure_federated_credential() {
                 \"audiences\": [\"$audience\"],
                 \"description\": \"Managed Identity as FIC for EasyAuth\"
             }" \
-            --output none
-        
-        success "Created federated credential on App Registration"
+            --output none 2>/dev/null; then
+            success "Created federated credential on App Registration"
+        else
+            warn "Create reported the credential already exists; updating instead..."
+            az ad app federated-credential update \
+                --id "$APP_ID" \
+                --federated-credential-id "$fic_name" \
+                --parameters "{
+                    \"name\": \"$fic_name\",
+                    \"issuer\": \"$ISSUER\",
+                    \"subject\": \"$UAMI_PRINCIPAL_ID\",
+                    \"audiences\": [\"$audience\"],
+                    \"description\": \"Managed Identity as FIC for EasyAuth\"
+                }" \
+                --output none
+            success "Updated existing federated credential on App Registration"
+        fi
     fi
 
     footer

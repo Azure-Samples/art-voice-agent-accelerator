@@ -12,16 +12,24 @@ simplification proposal.
 """
 
 import asyncio
+import time
 from dataclasses import dataclass
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
+from fastapi.websockets import WebSocketState
 from apps.artagent.backend.registries.agentstore.base import (
     ModelConfig,
     UnifiedAgent,
     VoiceConfig,
 )
+from apps.artagent.backend.voice.tts import (
+    SAMPLE_RATE_ACS,
+    SAMPLE_RATE_BROWSER,
+    TTSPlayback,
+)
+from apps.artagent.backend.voice.tts.playback import _PCM16_BYTES_PER_SAMPLE
 from apps.artagent.backend.voice.shared.context import VoiceSessionContext, TransportType
 
 
@@ -134,7 +142,7 @@ class TestVoiceSessionContext:
     def test_cancel_event_default(self):
         """cancel_event should be created by default."""
         context = VoiceSessionContext(session_id="test-123")
-        
+
         assert context.cancel_event is not None
         assert isinstance(context.cancel_event, asyncio.Event)
         assert not context.cancel_event.is_set()
@@ -356,6 +364,287 @@ class TestAgentVoiceResolution:
 
         assert voice_context.current_agent.voice.name == "en-US-GuyNeural"
         assert voice_context.current_agent.voice.style == "serious"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TTS Warmup Tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestTTSPlaybackWarmup:
+    """Tests for session-scoped TTS voice warmup."""
+
+    @pytest.mark.asyncio
+    async def test_prepare_voice_uses_session_client_and_agent_voice(self, voice_context):
+        """prepare_voice should warm the session client with the active agent voice."""
+        synth = Mock()
+        synth.is_ready = True
+        synth.warm_connection = Mock(return_value=True)
+        voice_context.tts_client = synth
+
+        playback = TTSPlayback(voice_context, app_state=MagicMock(speech_executor=None))
+
+        result = await playback.prepare_voice(sample_rate=SAMPLE_RATE_ACS, timeout_sec=1.0)
+
+        assert result is True
+        synth.warm_connection.assert_called_once_with(
+            voice="en-US-JennyNeural",
+            sample_rate=SAMPLE_RATE_ACS,
+            style="cheerful",
+            rate="+0%",
+        )
+
+    @pytest.mark.asyncio
+    async def test_play_to_acs_reuses_context_tts_client(self, voice_context):
+        """play_to_acs should not bypass the warmed session-owned TTS client."""
+        synth = Mock()
+        synth.is_ready = True
+        synth.synthesize_to_pcm_stream = Mock()
+        voice_context.tts_client = synth
+
+        app_state = MagicMock(speech_executor=None)
+        app_state.tts_pool.acquire_for_session = AsyncMock()
+        playback = TTSPlayback(voice_context, app_state=app_state)
+
+        with patch.object(playback, "_stream_synth_to_acs", new_callable=AsyncMock) as stream:
+            stream.return_value = True
+            result = await playback.play_to_acs("Hello")
+
+        assert result is True
+        app_state.tts_pool.acquire_for_session.assert_not_called()
+        assert stream.await_args.args[0] is synth
+
+    def test_acs_queued_audio_counts_as_playing(self, voice_context):
+        """ACS audio may still be playing after chunks have been sent."""
+        playback = TTSPlayback(voice_context, app_state=MagicMock())
+
+        playback._mark_acs_audio_queued(SAMPLE_RATE_ACS * 2)
+
+        assert playback.is_playing
+
+    def test_recent_acs_audio_remains_stoppable_after_estimate_expires(self, voice_context):
+        """ACS StopAudio should still be allowed just after local playback estimate expires."""
+        playback = TTSPlayback(voice_context, app_state=MagicMock())
+        playback._transport_playback_until = time.perf_counter() - 0.1
+        playback._last_transport_audio_sent_at = time.perf_counter()
+
+        assert playback.has_pending_transport_playback
+
+    def test_browser_queued_audio_counts_as_pending_playback(self, voice_context):
+        """Browser audio is buffered client-side, so barge-in must stay armed.
+
+        Regression: the backend finishes *sending* frames well before the
+        browser finishes *playing* them. If pending playback were only tracked
+        for ACS, web-client barge-in would be silently dropped once the last
+        frame was sent.
+        """
+        voice_context.transport = TransportType.BROWSER
+        playback = TTSPlayback(voice_context, app_state=MagicMock())
+
+        # 2 seconds of 48kHz PCM16 audio just streamed to the browser.
+        playback._mark_browser_audio_queued(SAMPLE_RATE_BROWSER * _PCM16_BYTES_PER_SAMPLE * 2)
+
+        assert playback.is_playing
+        assert playback.has_pending_transport_playback
+
+    def test_reset_transport_playback_tracking_clears_pending_state(self, voice_context):
+        """After a browser audio_stop, buffered-playback bookkeeping is dropped."""
+        voice_context.transport = TransportType.BROWSER
+        playback = TTSPlayback(voice_context, app_state=MagicMock())
+        playback._mark_browser_audio_queued(SAMPLE_RATE_BROWSER * _PCM16_BYTES_PER_SAMPLE * 2)
+
+        playback.reset_transport_playback_tracking()
+
+        assert not playback.is_playing
+        assert not playback.has_pending_transport_playback
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Cancel-Event Ownership Tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestTTSPlaybackCancelOwnership:
+    """TTS playback must only READ the cancel event, never clear it.
+
+    The barge-in handler is the single owner of the cancel event. If a TTS
+    method cleared it, a turn queued during the barge-in settle window could
+    slip through and play over the user (the original ACS bug).
+    """
+
+    @pytest.mark.asyncio
+    async def test_play_to_acs_bails_without_clearing_cancel(self, voice_context):
+        """A cancelled ACS turn returns False and leaves the signal intact."""
+        voice_context.cancel_event.set()
+        playback = TTSPlayback(voice_context, app_state=MagicMock())
+
+        result = await playback.play_to_acs("hello")
+
+        assert result is False
+        assert voice_context.cancel_event.is_set()
+
+    @pytest.mark.asyncio
+    async def test_play_to_browser_bails_without_clearing_cancel(self, voice_context):
+        """A cancelled browser turn returns False and leaves the signal intact."""
+        voice_context.transport = TransportType.BROWSER
+        voice_context.cancel_event.set()
+        playback = TTSPlayback(voice_context, app_state=MagicMock())
+
+        result = await playback.play_to_browser("hello")
+
+        assert result is False
+        assert voice_context.cancel_event.is_set()
+
+    @pytest.mark.asyncio
+    async def test_stream_to_acs_leaves_cancel_set(self, voice_context):
+        """The ACS streaming loop bails on cancel without clearing the signal."""
+        playback = TTSPlayback(voice_context, app_state=MagicMock())
+        playback._context._websocket = MagicMock()
+        voice_context.cancel_event.set()
+
+        result = await playback._stream_to_acs(
+            b"\x00" * 4096, blocking=False, on_first_audio=None, run_id="x"
+        )
+
+        assert result is False
+        assert voice_context.cancel_event.is_set()
+
+    @pytest.mark.asyncio
+    async def test_stream_to_browser_leaves_cancel_set(self, voice_context):
+        """The browser streaming loop bails on cancel without clearing the signal."""
+        voice_context.transport = TransportType.BROWSER
+        playback = TTSPlayback(voice_context, app_state=MagicMock())
+        playback._context._websocket = MagicMock()
+        voice_context.cancel_event.set()
+
+        result = await playback._stream_to_browser(
+            b"\x00" * 4096, on_first_audio=None, run_id="x"
+        )
+
+        assert result is False
+        assert voice_context.cancel_event.is_set()
+
+    @pytest.mark.asyncio
+    async def test_acs_audiodata_suppressed_once_cancel_set(self, voice_context):
+        """ACS AudioData writes are dropped under the lock once barge-in fires."""
+        playback = TTSPlayback(voice_context, app_state=MagicMock())
+        ws = MagicMock()
+        ws.send_json = AsyncMock()
+        playback._context._websocket = ws
+        voice_context.cancel_event.set()
+
+        sent = await playback._send_acs_json({"kind": "AudioData", "audioData": {}})
+
+        assert sent is False
+        ws.send_json.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_acs_stopaudio_bypasses_cancel_gate(self, voice_context):
+        """StopAudio must still be written even while cancel is in effect."""
+        playback = TTSPlayback(voice_context, app_state=MagicMock())
+        ws = MagicMock()
+        ws.send_json = AsyncMock()
+        playback._context._websocket = ws
+        voice_context.cancel_event.set()
+
+        sent = await playback._send_acs_json(
+            {"kind": "StopAudio", "AudioData": None, "StopAudio": {}},
+            allow_during_cancel=True,
+        )
+
+        assert sent is True
+        ws.send_json.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_no_audiodata_after_stopaudio(self, voice_context):
+        """After StopAudio, no further AudioData frame may reach ACS."""
+        playback = TTSPlayback(voice_context, app_state=MagicMock())
+        sent_messages: list[dict] = []
+
+        async def capture(message):
+            sent_messages.append(message)
+
+        ws = MagicMock()
+        ws.send_json = capture
+        ws.client_state = WebSocketState.CONNECTED
+        ws.application_state = WebSocketState.CONNECTED
+        playback._context._websocket = ws
+
+        stopped = await playback.stop_transport_playback()
+        assert stopped is True
+        assert any(m.get("kind") == "StopAudio" for m in sent_messages)
+
+        # A frame that loses the race and tries to send after the stop is dropped.
+        sent = await playback._send_acs_json(
+            {"kind": "AudioData", "audioData": {"data": "AAAA"}}
+        )
+        assert sent is False
+        assert not any(m.get("kind") == "AudioData" for m in sent_messages)
+
+    @pytest.mark.asyncio
+    async def test_streaming_stops_emitting_audiodata_once_cancelled(self, voice_context):
+        """End-to-end: the ACS stream halts at the first frame after barge-in.
+
+        Simulates the barge-in firing the instant the first AudioData frame is
+        on the wire. The streaming loop must not emit any further frames — this
+        is the behavior that made playback stop immediately for ACS instead of
+        only at the next chunk.
+        """
+        playback = TTSPlayback(voice_context, app_state=MagicMock())
+        audiodata_count = {"n": 0}
+
+        async def send_json(message):
+            if message.get("kind") == "AudioData":
+                audiodata_count["n"] += 1
+                # Barge-in sets the cancel flag right after the first frame.
+                playback.cancel()
+
+        ws = MagicMock()
+        ws.send_json = send_json
+        ws.client_state = WebSocketState.CONNECTED
+        ws.application_state = WebSocketState.CONNECTED
+        playback._context._websocket = ws
+
+        # 10 chunks' worth of PCM (1280 bytes per ACS frame).
+        result = await playback._stream_to_acs(
+            b"\x00" * (1280 * 10), blocking=False, on_first_audio=None, run_id="t"
+        )
+
+        assert result is False  # stream aborted by the cancel signal
+        assert audiodata_count["n"] == 1  # only the in-flight frame, none after
+
+    @pytest.mark.asyncio
+    async def test_browser_streaming_stops_emitting_after_cancel(self, voice_context):
+        """End-to-end: the browser stream halts at the first frame after barge-in.
+
+        Browser is airtight without a transport lock because asyncio is
+        single-threaded and there is no await between the cancel check and the
+        send_json — once cancelled, the next loop iteration bails.
+        """
+        voice_context.transport = TransportType.BROWSER
+        playback = TTSPlayback(voice_context, app_state=MagicMock())
+        audiodata_count = {"n": 0}
+
+        async def send_json(message):
+            if message.get("type") == "audio_data":
+                audiodata_count["n"] += 1
+                # Barge-in sets the cancel flag right after the first frame.
+                playback.cancel()
+
+        ws = MagicMock()
+        ws.send_json = send_json
+        ws.client_state = WebSocketState.CONNECTED
+        ws.application_state = WebSocketState.CONNECTED
+        playback._context._websocket = ws
+
+        # 10 chunks' worth of PCM (4800 bytes per browser frame).
+        result = await playback._stream_to_browser(
+            b"\x00" * (4800 * 10), on_first_audio=None, run_id="t"
+        )
+
+        assert result is False  # stream aborted by the cancel signal
+        assert audiodata_count["n"] == 1  # only the in-flight frame, none after
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

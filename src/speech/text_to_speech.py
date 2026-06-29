@@ -1806,7 +1806,15 @@ class SpeechSynthesizer:
             logger.error(f"Error during configuration validation: {e}")
             return False
 
-    def warm_connection(self, timeout_sec: float = 5.0) -> bool:
+    def warm_connection(
+        self,
+        timeout_sec: float = 5.0,
+        *,
+        voice: str | None = None,
+        sample_rate: int = 16000,
+        style: str | None = None,
+        rate: str | None = None,
+    ) -> bool:
         """
         Warm the TTS connection by synthesizing minimal audio.
 
@@ -1815,68 +1823,43 @@ class SpeechSynthesizer:
 
         Args:
             timeout_sec: Maximum time to wait for warmup synthesis (default 5s)
+            voice: Optional voice name to warm. Defaults to the synthesizer voice.
+            sample_rate: Output sample rate to warm (16000, 24000, or 48000).
+            style: Optional voice style to match the first real utterance.
+            rate: Optional voice rate to match the first real utterance.
 
         Returns:
             bool: True if warmup succeeded, False otherwise.
         """
-        import concurrent.futures
-        
+        del timeout_sec  # Timeout is enforced by the async pool/handler caller.
+
         if not self.is_ready:
             logger.warning("TTS warmup skipped: synthesizer not ready")
             return False
 
         try:
-            # Synthesize minimal audio - a single period with minimal text
-            # This establishes the WebSocket connection and caches auth
-            speech_config = self._create_speech_config()
-            speech_config.speech_synthesis_language = self.language
-            speech_config.speech_synthesis_voice_name = self.voice
-            speech_config.set_speech_synthesis_output_format(
-                speechsdk.SpeechSynthesisOutputFormat.Raw16Khz16BitMonoPcm
-            )
+            warmed_bytes = 0
+            for chunk in self.synthesize_to_pcm_stream(
+                text=".",
+                voice=voice or self.voice,
+                sample_rate=sample_rate,
+                style=style,
+                rate=rate,
+                read_chunk_bytes=320,
+            ):
+                warmed_bytes += len(chunk)
 
-            # Use memory synthesis (no audio hardware needed)
-            synthesizer = speechsdk.SpeechSynthesizer(
-                speech_config=speech_config, audio_config=None
-            )
-
-            # Synthesize minimal text with timeout to prevent hanging
-            # The Speech SDK's get() can block indefinitely on connection issues
-            future = synthesizer.speak_text_async(" .")
-            
-            try:
-                # Use concurrent.futures timeout pattern since SDK doesn't support timeout
-                result = future.get()
-            except Exception as get_error:
-                logger.warning("TTS warmup get() failed: %s", get_error)
-                return False
-            finally:
-                # Ensure synthesizer is cleaned up to release connections
-                try:
-                    del synthesizer
-                except Exception:
-                    pass
-
-            if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-                logger.debug("TTS connection warmed successfully")
+            if warmed_bytes > 0:
+                logger.debug(
+                    "TTS connection warmed successfully | voice=%s sample_rate=%s bytes=%s",
+                    voice or self.voice,
+                    sample_rate,
+                    warmed_bytes,
+                )
                 return True
-            elif result.reason == speechsdk.ResultReason.Canceled:
-                # Extract detailed cancellation reason
-                error_msg = f"TTS warmup canceled: {result.reason}"
-                if hasattr(result, "cancellation_details") and result.cancellation_details:
-                    cancel_reason = getattr(result.cancellation_details, "reason", "unknown")
-                    error_details = getattr(result.cancellation_details, "error_details", "")
-                    error_code = getattr(result.cancellation_details, "error_code", "")
-                    
-                    error_msg = (
-                        f"TTS warmup canceled - Reason: {cancel_reason}, "
-                        f"ErrorCode: {error_code}, Details: {error_details or 'none'}"
-                    )
-                logger.warning(error_msg)
-                return False
-            else:
-                logger.warning("TTS warmup synthesis did not complete: %s", result.reason)
-                return False
+
+            logger.warning("TTS warmup completed without audio")
+            return False
 
         except Exception as e:
             logger.warning("TTS connection warmup failed: %s", e)
@@ -1955,7 +1938,9 @@ class SpeechSynthesizer:
         last_error_details = ""
 
         for attempt in range(max_attempts):
-            synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=None)
+            synthesizer = speechsdk.SpeechSynthesizer(
+                speech_config=speech_config, audio_config=None
+            )
 
             result = synthesizer.speak_ssml_async(ssml).get()
             last_result = result

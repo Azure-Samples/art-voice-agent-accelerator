@@ -236,9 +236,7 @@ class ThreadBridge:
             "yes",
             "on",
         ):
-            logger.debug(
-                f"[{self.connection_id}] Barge-in disabled (CASCADE_DISABLE_BARGE_IN)"
-            )
+            logger.debug(f"[{self.connection_id}] Barge-in disabled (CASCADE_DISABLE_BARGE_IN)")
             return
 
         # Check suppression flag (thread-safe)
@@ -254,20 +252,6 @@ class ThreadBridge:
         if not self.main_loop or self.main_loop.is_closed():
             logger.warning(f"[{self.connection_id}] No main loop for barge-in scheduling")
             return
-
-        route_turn_thread = (
-            self._route_turn_thread_ref() if self._route_turn_thread_ref is not None else None
-        )
-
-        if route_turn_thread:
-            try:
-                asyncio.run_coroutine_threadsafe(
-                    route_turn_thread.cancel_current_processing(), self.main_loop
-                )
-            except Exception as exc:
-                logger.error(
-                    f"[{self.connection_id}] Failed to cancel route turn thread during barge-in: {exc}"
-                )
 
         try:
             asyncio.run_coroutine_threadsafe(handler_func(), self.main_loop)
@@ -336,11 +320,15 @@ class ThreadBridge:
                 # Now try to add the important event (still under lock)
                 try:
                     speech_queue.put_nowait(event)
-                    logger.info(f"[{self.connection_id}] Enqueued {event.event_type.value} after eviction")
+                    logger.info(
+                        f"[{self.connection_id}] Enqueued {event.event_type.value} after eviction"
+                    )
                 except asyncio.QueueFull:
                     # For TTS_RESPONSE, use blocking put - must not drop
                     if event.event_type == SpeechEventType.TTS_RESPONSE:
-                        logger.warning(f"[{self.connection_id}] Queue full for TTS, using blocking put")
+                        logger.warning(
+                            f"[{self.connection_id}] Queue full for TTS, using blocking put"
+                        )
                         if self.main_loop and not self.main_loop.is_closed():
                             try:
                                 future = asyncio.run_coroutine_threadsafe(
@@ -455,9 +443,7 @@ class SpeechSDKThread:
                 # and signal the UI to drop the response audio, so skip it (no
                 # barge-in, no partial envelope) until the agent speaks.
                 if self.thread_bridge.turn_guard_active:
-                    logger.debug(
-                        f"[{self._conn_short}] Partial ignored (pre-speech turn guard)"
-                    )
+                    logger.debug(f"[{self._conn_short}] Partial ignored (pre-speech turn guard)")
                     return
                 try:
                     self.thread_bridge.schedule_barge_in(self.barge_in_handler)
@@ -852,7 +838,9 @@ class RouteTurnThread:
                         try:
                             await self.transcript_emitter.emit_user_transcript(event.text)
                         except Exception as e:
-                            logger.warning(f"[{self._conn_short}] Failed to emit user transcript: {e}")
+                            logger.warning(
+                                f"[{self._conn_short}] Failed to emit user transcript: {e}"
+                            )
 
                     # Call orchestrator (LLM processing happens here)
                     if self.orchestrator_func:
@@ -873,7 +861,9 @@ class RouteTurnThread:
                     )
                     raise
                 except Exception as e:
-                    logger.error(f"[{self._conn_short}] Error processing speech with orchestrator: {e}")
+                    logger.error(
+                        f"[{self._conn_short}] Error processing speech with orchestrator: {e}"
+                    )
                 finally:
                     # Turn finished (or errored) -> ensure the pre-speech guard is
                     # released even when the turn produced no audio at all.
@@ -969,6 +959,11 @@ class RouteTurnThread:
     def last_recog_end_perf(self) -> float | None:
         """perf_counter() of the last finalized recognition (end of user speech)."""
         return self._last_recog_end_perf
+
+    @property
+    def has_active_response(self) -> bool:
+        """Whether a response task is currently running and safe to interrupt."""
+        return self.current_response_task is not None and not self.current_response_task.done()
 
     async def cancel_current_processing(self) -> None:
         """Cancel current processing for barge-in."""

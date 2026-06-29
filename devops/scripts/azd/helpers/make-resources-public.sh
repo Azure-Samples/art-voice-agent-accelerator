@@ -18,7 +18,10 @@
 # Options:
 #   -g, --resource-group <name>   Target resource group (default: from azd env
 #                                 AZURE_RESOURCE_GROUP).
-#   --subscription <id>           Subscription id (default: current az context).
+#   --subscription <id>           Subscription id (default: selected azd env,
+#                                 then current az context).
+#   --skip-remote-state           Do not include the azd Terraform state storage
+#                                 account recorded in the selected azd env.
 #   --dry-run                     Print what would change without applying.
 #   -j, --max-jobs <n>            Max parallel az updates (default: 10).
 #   -y, --yes                     Skip the confirmation prompt.
@@ -28,6 +31,9 @@
 #   1. --resource-group flag
 #   2. AZURE_RESOURCE_GROUP environment variable
 #   3. `azd env get-value AZURE_RESOURCE_GROUP`
+#
+# Remote Terraform state is included by default when the selected azd env has
+# RS_RESOURCE_GROUP and RS_STORAGE_ACCOUNT configured and LOCAL_STATE != true.
 # ============================================================================
 
 set -euo pipefail
@@ -65,11 +71,13 @@ SUBSCRIPTION=""
 DRY_RUN=false
 ASSUME_YES=false
 MAX_JOBS=10
+INCLUDE_REMOTE_STATE=true
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -g|--resource-group) RESOURCE_GROUP="${2:-}"; shift 2 ;;
         --subscription)      SUBSCRIPTION="${2:-}"; shift 2 ;;
+        --skip-remote-state) INCLUDE_REMOTE_STATE=false; shift ;;
         --dry-run)           DRY_RUN=true; shift ;;
         -j|--max-jobs)       MAX_JOBS="${2:-10}"; shift 2 ;;
         -y|--yes)            ASSUME_YES=true; shift ;;
@@ -85,29 +93,116 @@ done
 # ----------------------------------------------------------------------------
 command -v az >/dev/null 2>&1 || { fail "Azure CLI (az) is required but not installed."; exit 1; }
 
+get_azd_env() {
+    local line output value=""
+    command -v azd >/dev/null 2>&1 || { echo ""; return 0; }
+    if ! output=$(azd env get-value "$1" 2>/dev/null); then
+        echo ""
+        return 0
+    fi
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        [[ "$line" == "Update available:"* ]] && continue
+        [[ "$line" == "To update,"* ]] && continue
+        value="$line"
+        break
+    done <<< "$output"
+    if [[ -z "$value" ]] || [[ "$value" == "null" ]] || [[ "$value" == ERROR* ]] || [[ "$value" == *"not found"* ]]; then
+        echo ""
+    else
+        echo "$value"
+    fi
+}
+
 if [[ -z "$RESOURCE_GROUP" ]]; then
     RESOURCE_GROUP="${AZURE_RESOURCE_GROUP:-}"
 fi
-if [[ -z "$RESOURCE_GROUP" ]] && command -v azd >/dev/null 2>&1; then
-    RESOURCE_GROUP="$(azd env get-value AZURE_RESOURCE_GROUP 2>/dev/null || true)"
-    [[ "$RESOURCE_GROUP" == "null" || "$RESOURCE_GROUP" == ERROR* ]] && RESOURCE_GROUP=""
+if [[ -z "$RESOURCE_GROUP" ]]; then
+    RESOURCE_GROUP="$(get_azd_env AZURE_RESOURCE_GROUP)"
 fi
 if [[ -z "$RESOURCE_GROUP" ]]; then
     fail "Could not resolve a resource group. Pass --resource-group or set AZURE_RESOURCE_GROUP."
     exit 1
 fi
 
-# Validate the resource group exists
-if ! az ${SUBSCRIPTION:+--subscription "$SUBSCRIPTION"} group show --name "$RESOURCE_GROUP" --output none 2>/dev/null; then
-    fail "Resource group '$RESOURCE_GROUP' not found (check subscription / az login)."
+if [[ -z "$SUBSCRIPTION" ]]; then
+    SUBSCRIPTION="${AZURE_SUBSCRIPTION_ID:-}"
+fi
+if [[ -z "$SUBSCRIPTION" ]]; then
+    SUBSCRIPTION="$(get_azd_env AZURE_SUBSCRIPTION_ID)"
+fi
+
+AZ_SUB_ARGS=()
+[[ -n "$SUBSCRIPTION" ]] && AZ_SUB_ARGS=(--subscription "$SUBSCRIPTION")
+
+APP_RESOURCE_GROUP_EXISTS=true
+if ! az group show "${AZ_SUB_ARGS[@]}" --name "$RESOURCE_GROUP" --output none 2>/dev/null; then
+    APP_RESOURCE_GROUP_EXISTS=false
+fi
+
+REMOTE_STATE_ID=""
+REMOTE_STATE_TYPE="Microsoft.Storage/storageAccounts"
+REMOTE_STATE_LABEL=""
+
+resolve_remote_state_storage() {
+    $INCLUDE_REMOTE_STATE || return 0
+
+    local local_state="${LOCAL_STATE:-}"
+    [[ -z "$local_state" ]] && local_state="$(get_azd_env LOCAL_STATE)"
+    if [[ "$local_state" == "true" ]]; then
+        dim "Terraform remote state: skipped (LOCAL_STATE=true)."
+        return 0
+    fi
+
+    local env_name="${AZURE_ENV_NAME:-}"
+    [[ -z "$env_name" ]] && env_name="$(get_azd_env AZURE_ENV_NAME)"
+
+    local rs_resource_group="${RS_RESOURCE_GROUP:-}"
+    local rs_storage_account="${RS_STORAGE_ACCOUNT:-}"
+    local rs_container_name="${RS_CONTAINER_NAME:-}"
+    local rs_state_key="${RS_STATE_KEY:-}"
+    [[ -z "$rs_resource_group" ]] && rs_resource_group="$(get_azd_env RS_RESOURCE_GROUP)"
+    [[ -z "$rs_storage_account" ]] && rs_storage_account="$(get_azd_env RS_STORAGE_ACCOUNT)"
+    [[ -z "$rs_container_name" ]] && rs_container_name="$(get_azd_env RS_CONTAINER_NAME)"
+    [[ -z "$rs_state_key" ]] && rs_state_key="$(get_azd_env RS_STATE_KEY)"
+    [[ -z "$rs_state_key" && -n "$env_name" ]] && rs_state_key="$env_name.tfstate"
+
+    if [[ -z "$rs_resource_group" || -z "$rs_storage_account" ]]; then
+        warn "Terraform remote state not found in the selected azd env; app resource group only."
+        return 0
+    fi
+
+    local storage_id
+    storage_id=$(az storage account show "${AZ_SUB_ARGS[@]}" \
+        --name "$rs_storage_account" \
+        --resource-group "$rs_resource_group" \
+        --query id -o tsv 2>/dev/null || true)
+
+    if [[ -z "$storage_id" ]]; then
+        warn "Terraform remote state storage account '$rs_storage_account' not found in '$rs_resource_group'; skipping it."
+        return 0
+    fi
+
+    REMOTE_STATE_ID="$storage_id"
+    REMOTE_STATE_LABEL="$rs_storage_account in $rs_resource_group"
+    [[ -n "$rs_container_name" || -n "$rs_state_key" ]] && \
+        REMOTE_STATE_LABEL+=" (${rs_container_name:-?}/${rs_state_key:-?})"
+}
+
+resolve_remote_state_storage
+
+if ! $APP_RESOURCE_GROUP_EXISTS && [[ -z "$REMOTE_STATE_ID" ]]; then
+    fail "Resource group '$RESOURCE_GROUP' not found and no remote Terraform state storage was resolved."
     exit 1
 fi
 
 header "🌐 Make resources public — $RESOURCE_GROUP"
 $DRY_RUN && warn "DRY RUN — no changes will be applied."
+! $APP_RESOURCE_GROUP_EXISTS && warn "App resource group '$RESOURCE_GROUP' not found; app resources will be skipped."
+[[ -n "$REMOTE_STATE_LABEL" ]] && dim "Includes Terraform remote state: $REMOTE_STATE_LABEL"
 
 if ! $DRY_RUN && ! $ASSUME_YES; then
-    warn "This opens data-plane network access to the public internet for the above resource group."
+    warn "This opens data-plane network access to the public internet for the target resources."
     read -r -p "Continue? [y/N] " reply
     [[ "$reply" =~ ^[Yy]$ ]] || { info "Aborted."; exit 0; }
 fi
@@ -115,13 +210,11 @@ fi
 # ----------------------------------------------------------------------------
 # Parallel execution scaffolding
 # ----------------------------------------------------------------------------
-# Subscription flag expanded inline (GUIDs never contain spaces).
-SUB_FLAG="${SUBSCRIPTION:+--subscription $SUBSCRIPTION}"
-
 # Per-job results land here as TSV lines: <status>\t<name>\t<detail>
 # Short single-printf appends are atomic on POSIX, so parallel workers are safe.
 RESULT_DIR="$(mktemp -d)"
 RESULTS="$RESULT_DIR/results.tsv"
+RESOURCES="$RESULT_DIR/resources.tsv"
 : > "$RESULTS"
 trap 'rm -rf "$RESULT_DIR"' EXIT
 
@@ -162,7 +255,7 @@ flip_one() {
 
     case "$type" in
         Microsoft.DocumentDB/databaseAccounts)
-            if az $SUB_FLAG cosmosdb update --ids "$id" \
+            if az cosmosdb update "${AZ_SUB_ARGS[@]}" --ids "$id" \
                     --public-network-access ENABLED --output none 2>/dev/null; then
                 emit OK "$name"
             else
@@ -170,9 +263,9 @@ flip_one() {
             fi
             ;;
         Microsoft.ContainerRegistry/registries)
-            if az $SUB_FLAG acr update --ids "$id" \
+            if az acr update "${AZ_SUB_ARGS[@]}" --ids "$id" \
                     --public-network-enabled true --output none 2>/dev/null; then
-                az $SUB_FLAG acr update --ids "$id" \
+                az acr update "${AZ_SUB_ARGS[@]}" --ids "$id" \
                     --default-action Allow --output none 2>/dev/null || true
                 emit OK "$name"
             else
@@ -181,13 +274,13 @@ flip_one() {
             ;;
         *)
             # Primary, universal control: publicNetworkAccess=Enabled.
-            if az $SUB_FLAG resource update --ids "$id" \
+            if az resource update "${AZ_SUB_ARGS[@]}" --ids "$id" \
                     --set properties.publicNetworkAccess=Enabled --output none 2>/dev/null; then
                 local detail=""
                 # Best-effort: relax network-ACL default action where it exists.
                 case "$type" in
                     Microsoft.CognitiveServices/accounts|Microsoft.Storage/storageAccounts|Microsoft.KeyVault/vaults)
-                        if az $SUB_FLAG resource update --ids "$id" \
+                        if az resource update "${AZ_SUB_ARGS[@]}" --ids "$id" \
                                 --set properties.networkAcls.defaultAction=Allow \
                                 --output none 2>/dev/null; then
                             detail="acl=Allow"
@@ -205,19 +298,33 @@ flip_one() {
 # ----------------------------------------------------------------------------
 # Execute
 # ----------------------------------------------------------------------------
-step "Discovering resources in $RESOURCE_GROUP ..."
+step "Discovering app resources in $RESOURCE_GROUP ..."
 
 DISPATCHED=0
-# Single discovery query for the whole resource group, then fan out updates.
+# Single discovery query for the app resource group, plus the selected azd env's
+# remote Terraform state storage account when it lives outside that group.
+: > "$RESOURCES"
+if $APP_RESOURCE_GROUP_EXISTS; then
+    if ! az resource list "${AZ_SUB_ARGS[@]}" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query "[].[id, type]" -o tsv 2>/dev/null > "$RESOURCES"; then
+        fail "Could not list resources in '$RESOURCE_GROUP' (check subscription / az login)."
+        exit 1
+    fi
+fi
+
+if [[ -n "$REMOTE_STATE_ID" ]] && ! awk -F '\t' -v id="$REMOTE_STATE_ID" '$1 == id { found=1 } END { exit !found }' "$RESOURCES"; then
+    printf '%s\t%s\n' "$REMOTE_STATE_ID" "$REMOTE_STATE_TYPE" >> "$RESOURCES"
+fi
+
+# Fan out updates.
 while IFS=$'\t' read -r id rtype; do
     [[ -z "$id" ]] && continue
     is_supported "$rtype" || continue
     wait_for_slot
     flip_one "$rtype" "$id" &
     DISPATCHED=$((DISPATCHED + 1))
-done < <(az $SUB_FLAG resource list \
-            --resource-group "$RESOURCE_GROUP" \
-            --query "[].[id, type]" -o tsv 2>/dev/null)
+done < "$RESOURCES"
 
 # Wait for all in-flight updates to complete.
 wait

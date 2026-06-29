@@ -88,7 +88,13 @@ resource "azurerm_container_app" "frontend" {
       template[0].container[0].image,
       ingress[0].cors,
       ingress[0].client_certificate_mode,
-      ingress[0].ip_security_restriction
+      ingress[0].ip_security_restriction,
+      # EasyAuth's FIC magic secret ("override-use-mi-fic-assertion-client-id")
+      # is added out-of-band by devops/scripts/azd/helpers/enable-easyauth.sh.
+      # Without ignoring it, every `azd provision` (terraform apply) treats it
+      # as drift and deletes it, leaving the authConfig pointing at a missing
+      # secret and breaking the login redirect.
+      secret
     ]
   }
 
@@ -298,7 +304,7 @@ resource "azapi_update_resource" "backend_sticky_sessions" {
           corsPolicy = {
             allowedOrigins   = ["https://${azurerm_container_app.frontend.ingress[0].fqdn}"]
             allowedMethods   = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
-            allowedHeaders   = ["Content-Type", "Authorization", "X-Requested-With", "Accept"]
+            allowedHeaders   = ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Cache-Control"]
             exposeHeaders    = ["Content-Length", "Content-Range"]
             allowCredentials = true
             maxAge           = 86400

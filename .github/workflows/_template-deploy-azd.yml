@@ -541,6 +541,18 @@ jobs:
           ARM_USE_OIDC: ${{ env.USE_OIDC }}
           ARM_CLIENT_SECRET: ${{ env.USE_OIDC == 'false' && env.AZURE_CLIENT_SECRET || '' }}
 
+      - name: 🏗️ azd provision (up)
+        if: inputs.action == 'up'
+        run: |
+          echo "🏗️ Provisioning infrastructure before deployment..."
+          azd provision --no-prompt
+        env:
+          ARM_CLIENT_ID: ${{ env.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC: ${{ env.USE_OIDC }}
+          ARM_CLIENT_SECRET: ${{ env.USE_OIDC == 'false' && env.AZURE_CLIENT_SECRET || '' }}
+
       # ----------------------------------------------------------------------
       # ACTION: DEPLOY
       # ----------------------------------------------------------------------
@@ -559,11 +571,29 @@ jobs:
       # ----------------------------------------------------------------------
       # ACTION: UP (provision + deploy)
       # ----------------------------------------------------------------------
-      - name: 🚀 azd up
+      - name: 🚀 azd deploy (up)
         if: inputs.action == 'up'
         run: |
-          echo "🚀 Provisioning and deploying..."
-          azd up --no-prompt
+          echo "📦 Deploying application after provisioning..."
+          azd deploy --no-prompt
+        env:
+          ARM_CLIENT_ID: ${{ env.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC: ${{ env.USE_OIDC }}
+          ARM_CLIENT_SECRET: ${{ env.USE_OIDC == 'false' && env.AZURE_CLIENT_SECRET || '' }}
+
+      - name: 🌐 Repair Backend CORS
+        if: inputs.action == 'deploy' || inputs.action == 'up'
+        run: |
+          echo "🌐 Ensuring backend Container Apps CORS allows the deployed frontend..."
+          azd env get-values > /tmp/azd-values.env
+          source /tmp/azd-values.env
+
+          bash devops/scripts/azd/helpers/update-backend-cors.sh \
+            -g "${AZURE_RESOURCE_GROUP}" \
+            -b "${BACKEND_CONTAINER_APP_NAME}" \
+            -f "${FRONTEND_CONTAINER_APP_FQDN}"
         env:
           ARM_CLIENT_ID: ${{ env.AZURE_CLIENT_ID }}
           ARM_TENANT_ID: ${{ env.AZURE_TENANT_ID }}

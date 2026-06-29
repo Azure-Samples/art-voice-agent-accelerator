@@ -690,23 +690,19 @@ test_redis_connection:
 
 ############################################################
 # Azure Network Exposure
-# Purpose: Flip azd-deployed private resources back to public
+# Purpose: Flip azd-deployed private-capable resources to public
 ############################################################
 
-# Make azd-deployed resources publicly accessible (dev/demo convenience).
-# Resolves the resource group from azd env (AZURE_RESOURCE_GROUP) by default.
+# Make azd-deployed private-capable resources publicly accessible (dev/demo only).
+# Wraps devops/scripts/azd/helpers/make-resources-public.sh.
 # Usage:
-#   make make_resources_public                       # interactive confirm
-#   make make_resources_public ARGS="--yes"          # skip confirmation
-#   make make_resources_public ARGS="--dry-run"      # preview only
-#   make make_resources_public RESOURCE_GROUP=my-rg  # explicit RG
-make_resources_public:
-	@echo "🌐 Making azd-deployed resources publicly accessible"
-	@echo "===================================================="
-	@bash devops/scripts/azd/helpers/make-resources-public.sh \
-		$(if $(RESOURCE_GROUP),--resource-group $(RESOURCE_GROUP),) $(ARGS)
+#   make enable_public_networking                 # interactive (prompts for confirmation)
+#   make enable_public_networking ARGS="--yes"    # skip confirmation
+#   make enable_public_networking ARGS="--dry-run"
+enable_public_networking:
+	@bash devops/scripts/azd/helpers/make-resources-public.sh $(ARGS)
 
-.PHONY: make_resources_public
+.PHONY: enable_public_networking
 
 ############################################################
 # Help and Documentation
@@ -770,7 +766,7 @@ help:
 	@echo "  test_redis_connection            Test Redis connection without interactive session"
 	@echo ""
 	@echo "🌐 Azure Network Exposure:"
-	@echo "  make_resources_public            Flip azd-deployed private resources to public (ARGS=--dry-run|--yes)"
+	@echo "  enable_public_networking         Flip azd-deployed private resources to public (ARGS=--dry-run|--yes)"
 	@echo ""
 	@echo "📖 Configuration Variables:"
 	@echo "  CONDA_ENV                        Conda environment name (default: audioagent)"
