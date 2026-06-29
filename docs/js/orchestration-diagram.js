@@ -56,25 +56,33 @@
     },
   };
 
+  // Perf note: the flow dot animates `transform`/`opacity` only (GPU-composited).
+  // We avoid animating `left`/`background-position` because the widget renders
+  // ~6–10 connectors and those would force per-frame reflows/repaints.
   const KEYFRAMES = `
-@keyframes odx-flow { 0% { background-position: 0% 0; } 100% { background-position: -200% 0; } }
-@keyframes odx-dot { 0% { left: 6%; opacity: 0; } 20% { opacity: 1; } 80% { opacity: 1; } 100% { left: 94%; opacity: 0; } }
+@keyframes odx-dot { 0% { transform: translate(0, -50%); opacity: 0; } 20% { opacity: 1; } 80% { opacity: 1; } 100% { transform: translate(18px, -50%); opacity: 0; } }
 @keyframes odx-fade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 #orchestration-interactive { all: initial; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; display: block; }
 #orchestration-interactive * { box-sizing: border-box; }
+.odx-dot { animation: odx-dot 1.6s linear infinite; will-change: transform, opacity; }
 .odx-stage { transition: transform .2s cubic-bezier(.4,0,.2,1), box-shadow .2s ease, border-color .2s ease, background .2s ease; }
 .odx-stage:hover { transform: translateY(-3px); box-shadow: 0 12px 24px rgba(15,23,42,.13) !important; }
 .odx-card { transition: transform .2s cubic-bezier(.4,0,.2,1), box-shadow .2s ease, border-color .2s ease; }
 .odx-card:hover { transform: translateY(-2px); box-shadow: 0 10px 22px rgba(15,23,42,.10); }
 .odx-fade { animation: odx-fade .4s cubic-bezier(.4,0,.2,1); }
 .odx-btn { cursor: pointer; font-family: inherit; }
+@media (prefers-reduced-motion: reduce) {
+  .odx-dot { animation: none; opacity: 1; }
+  .odx-fade { animation: none; }
+  .odx-stage, .odx-card { transition: none !important; }
+}
 `;
 
   const ENDPOINT = 'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;flex:0 0 auto;min-width:58px;padding:11px 8px;border-radius:14px;background:linear-gradient(135deg,#334155 0%,#0f172a 100%);color:#e2e8f0;font-size:10px;font-weight:600;text-align:center;box-shadow:0 4px 10px rgba(15,23,42,0.18)';
 
   function connector(color) {
-    return `<div aria-hidden="true" style="position:relative;flex:0 0 24px;min-width:24px;height:3px;align-self:center;border-radius:999px;background:linear-gradient(90deg,${color.main}22 0%,${color.main} 50%,${color.main}22 100%);background-size:200% 100%;animation:odx-flow 1.6s linear infinite">`
-      + `<span style="position:absolute;top:50%;width:6px;height:6px;border-radius:50%;background:${color.main};box-shadow:0 0 8px ${color.main};transform:translateY(-50%);animation:odx-dot 1.6s linear infinite"></span></div>`;
+    return `<div aria-hidden="true" style="position:relative;flex:0 0 24px;min-width:24px;height:3px;align-self:center;border-radius:999px;background:linear-gradient(90deg,${color.main}22 0%,${color.main} 50%,${color.main}22 100%)">`
+      + `<span class="odx-dot" style="position:absolute;top:50%;left:0;width:6px;height:6px;border-radius:50%;background:${color.main};box-shadow:0 0 8px ${color.main};transform:translateY(-50%)"></span></div>`;
   }
 
   function stageCard(stage, color, active) {
