@@ -41,11 +41,26 @@ async def _emit(
     """
     if is_acs:
         # Use session-aware broadcasting for ACS calls
-        if hasattr(ws.app.state, "conn_manager"):
+        conn_manager = getattr(ws.app.state, "conn_manager", None)
+        if conn_manager is not None:
             if session_id:
                 # Session-safe: Only broadcast to connections in the same session
                 asyncio.create_task(
-                    ws.app.state.conn_manager.broadcast_session(session_id, payload)
+                    conn_manager.broadcast_session(session_id, payload)
+                )
+                # Cross-worker delivery: on an outbound ACS call the call's media
+                # WebSocket and the browser dashboard relay frequently live on
+                # different worker processes, so a local-only broadcast never
+                # reaches the UI. Publish to the distributed session channel too,
+                # mirroring how assistant/status envelopes are delivered via
+                # broadcast_session_envelope. The subscriber skips same-origin
+                # messages, so this never double-delivers on the originating worker.
+                asyncio.create_task(
+                    conn_manager.publish_session_envelope(
+                        session_id,
+                        payload,
+                        event_label=payload.get("type", "tool_event"),
+                    )
                 )
                 logger.debug(
                     "Tool frame broadcasted to session %s: %s",
@@ -54,7 +69,7 @@ async def _emit(
                 )
             else:
                 # Fallback to legacy broadcast
-                asyncio.create_task(ws.app.state.conn_manager.broadcast(payload))
+                asyncio.create_task(conn_manager.broadcast(payload))
     else:
         # Direct send for browser WebSocket
         if not _ws_is_connected(ws):
