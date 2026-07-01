@@ -9,7 +9,9 @@ const SESSION_STORAGE_KEY = 'voice_agent_session_id';
 const getOrCreateSessionId = () => {
   let sessionId = sessionStorage.getItem(SESSION_STORAGE_KEY);
   if (!sessionId) {
-    const tabId = Math.random().toString(36).slice(2, 8);
+    const bytes = new Uint8Array(6);
+    crypto.getRandomValues(bytes);
+    const tabId = Array.from(bytes, (b) => (b % 36).toString(36)).join('');
     sessionId = `session_${Date.now()}_${tabId}`;
     sessionStorage.setItem(SESSION_STORAGE_KEY, sessionId);
   }

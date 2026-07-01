@@ -64,7 +64,7 @@ async def get_dedicated_tts_health(
 
     except Exception as e:
         logger.error(f"[PERF] TTS health check failed: {e}")
-        return {"status": "unhealthy", "error": str(e), "timestamp": None}
+        return {"status": "unhealthy", "error": "internal_error", "timestamp": None}
 
 
 @router.get("/tts/dedicated/metrics")

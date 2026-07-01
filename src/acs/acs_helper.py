@@ -167,7 +167,6 @@ class AcsCaller:
         # debug here to avoid duplicating the same information in the log stream.
         logger.debug(
             "ACS configuration\n"
-            f"  source number : {source_number}\n"
             f"  callback url  : {callback_url}\n"
             f"  websocket url : {websocket_url}\n"
             f"  recording cb  : {recording_callback_url}"

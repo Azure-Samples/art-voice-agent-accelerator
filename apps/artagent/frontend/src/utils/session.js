@@ -2,6 +2,13 @@ import logger from './logger.js';
 
 export const SESSION_STORAGE_KEY = 'voice_agent_session_id';
 
+// Cryptographically strong 6-char base36 suffix for session identifiers.
+const generateTabId = () => {
+  const bytes = new Uint8Array(6);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => (b % 36).toString(36)).join('');
+};
+
 const pickSessionIdFromUrl = () => {
   if (typeof window === 'undefined') return null;
   try {
@@ -35,7 +42,7 @@ export const getOrCreateSessionId = () => {
   }
 
   if (!sessionId) {
-    const tabId = Math.random().toString(36).substr(2, 6);
+    const tabId = generateTabId();
     sessionId = `session_${Date.now()}_${tabId}`;
     setSessionId(sessionId);
   }
@@ -44,7 +51,7 @@ export const getOrCreateSessionId = () => {
 };
 
 export const createNewSessionId = () => {
-  const tabId = Math.random().toString(36).substr(2, 6);
+  const tabId = generateTabId();
   const sessionId = `session_${Date.now()}_${tabId}`;
   return setSessionId(sessionId);
 };

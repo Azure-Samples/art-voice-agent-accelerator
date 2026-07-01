@@ -571,7 +571,7 @@ class ACSLifecycleHandler:
         recording_enabled = record_call if record_call is not None else ENABLE_ACS_CALL_RECORDING
 
         logger.info(
-            f"Answering incoming call from {caller_id} | recording_enabled={recording_enabled}"
+            f"Answering incoming call | recording_enabled={recording_enabled}"
         )
 
         # Answer the call
