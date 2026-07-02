@@ -127,6 +127,7 @@ class AcsCaller:
             )
         self.source_number = source_number
         self.callback_url = callback_url
+        self.websocket_url = websocket_url
         self.cognitive_services_endpoint = cognitive_services_endpoint
         self.speech_recognition_model_endpoint_id = speech_recognition_model_endpoint_id
         self.auth_mode = _normalize_acs_auth_mode(acs_auth_mode)
@@ -162,9 +163,9 @@ class AcsCaller:
             audio_format=AudioFormat.PCM16_K_MONO,  # Ensure this matches what your STT expects
         )
 
-        # Log configuration as a single consolidated block (one log entry instead
-        # of separator-wrapped, per-field lines that interleave with other logs).
-        logger.info(
+        # Endpoint URLs are surfaced in the startup dashboard card, so keep them at
+        # debug here to avoid duplicating the same information in the log stream.
+        logger.debug(
             "ACS configuration\n"
             f"  source number : {source_number}\n"
             f"  callback url  : {callback_url}\n"
@@ -186,13 +187,13 @@ class AcsCaller:
                     raise ValueError(
                         "ACS_CONNECTION_STRING is required when ACS_AUTH_MODE=connection_string"
                     )
-                logger.info("Using ACS connection string for authentication")
+                logger.debug("Using ACS connection string for authentication")
                 self.client = CallAutomationClient.from_connection_string(acs_connection_string)
             else:
                 if not acs_endpoint:
                     raise ValueError("ACS_ENDPOINT is required when ACS_AUTH_MODE=entra")
 
-                logger.info("Using Microsoft Entra ID for ACS authentication")
+                logger.debug("Using Microsoft Entra ID for ACS authentication")
 
                 credentials = get_credential()
 
@@ -210,7 +211,8 @@ class AcsCaller:
 
         # Validate configuration
         self._validate_configuration(websocket_url, acs_connection_string, acs_endpoint)
-        logger.info("AcsCaller initialized")
+        # Auth mode and endpoints are shown in the startup dashboard card.
+        logger.debug("AcsCaller initialized (auth=%s)", effective_auth_mode)
 
     def _validate_configuration(
         self, websocket_url: str, acs_connection_string: str, acs_endpoint: str

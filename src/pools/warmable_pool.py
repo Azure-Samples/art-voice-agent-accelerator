@@ -156,7 +156,7 @@ class WarmableResourcePool(Generic[T]):
 
         ready_count = self._warm_queue.qsize()
         if ready_count == self._warm_pool_size:
-            logger.info(
+            logger.debug(
                 f"[{self._name}] Pool ready with {ready_count}/{self._warm_pool_size} warm resources"
             )
         elif ready_count > 0:

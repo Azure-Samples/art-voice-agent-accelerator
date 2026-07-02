@@ -96,7 +96,7 @@ def initialize_acs_caller_instance() -> AcsCaller | None:
             cognitive_services_endpoint=speech_endpoint,
             recording_storage_container_url=storage_url,
         )
-        logger.info(
+        logger.debug(
             "AcsCaller initialised with phone: %s...",
             acs_phone[:4] if acs_phone else "???",
         )

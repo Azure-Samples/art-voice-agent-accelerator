@@ -668,7 +668,7 @@ class ThreadSafeConnectionManager:
         try:
             pubsub = self._create_pubsub(pattern)
             self._redis_pubsub = pubsub
-            logger.info(
+            logger.debug(
                 "Subscribed to distributed session pattern",
                 extra={"pattern": pattern, "node_id": self._node_id},
             )

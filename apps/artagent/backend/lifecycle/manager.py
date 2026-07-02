@@ -62,6 +62,7 @@ class LifecycleManager:
     executed_steps: list[LifecycleStep] = field(default_factory=list)
     deferred_task: asyncio.Task | None = field(default=None, init=False)
     _tracer: trace.Tracer = field(default=None, init=False)
+    _boot_ts: float = field(default=0.0, init=False)
 
     def __post_init__(self):
         self._tracer = trace.get_tracer(__name__)
@@ -100,7 +101,8 @@ class LifecycleManager:
         results: list[tuple[str, float]] = []
         total = len(self.steps)
 
-        logger.info("Startup · initializing %d components", total)
+        self._boot_ts = time.perf_counter()
+        logger.info("Startup ▸ bringing up %d core components (blocking)", total)
 
         for i, step in enumerate(self.steps, start=1):
             step_start = time.perf_counter()
@@ -114,7 +116,7 @@ class LifecycleManager:
                     step.success = False
                     span.record_exception(exc)
                     span.set_status(Status(StatusCode.ERROR, str(exc)))
-                    logger.error("  %d/%d %-9s ✗ %s", i, total, step.name, exc)
+                    logger.error("  ✗ %d/%d  %-10s failed: %s", i, total, step.name, exc)
                     raise
 
                 step.duration = time.perf_counter() - step_start
@@ -122,10 +124,10 @@ class LifecycleManager:
 
             self.executed_steps.append(step)
             results.append((step.name, round(step.duration, 2)))
-            logger.info("  %d/%d %-9s ✓ %.2fs", i, total, step.name, step.duration)
+            logger.info("  ✓ %d/%d  %-10s %5.2fs", i, total, step.name, step.duration)
 
         total_time = sum(d for _, d in results)
-        logger.info("Startup · core ready in %.1fs", total_time)
+        logger.info("Startup ✓ core ready in %.1fs · now accepting requests", total_time)
 
         return results
 
@@ -149,7 +151,9 @@ class LifecycleManager:
             deferred_names = [s.name for s in self.deferred_steps]
             total = len(self.deferred_steps)
             logger.info(
-                "Deferred · %d task(s) in background: %s", total, ", ".join(deferred_names)
+                "Warmup  ▸ %d background task(s) (deferred, non-blocking): %s",
+                total,
+                ", ".join(deferred_names),
             )
 
             for i, step in enumerate(self.deferred_steps, start=1):
@@ -163,7 +167,7 @@ class LifecycleManager:
                         span.set_attribute("duration_sec", step.duration)
                         results[step.name] = {"success": True, "duration": round(step.duration, 2)}
                         logger.info(
-                            "  %d/%d %-9s ✓ %.2fs (deferred)", i, total, step.name, step.duration
+                            "  ✓ %d/%d  %-10s %5.2fs", i, total, step.name, step.duration
                         )
                     except Exception as exc:
                         step.error = str(exc)
@@ -173,7 +177,7 @@ class LifecycleManager:
                         span.set_status(Status(StatusCode.ERROR, str(exc)))
                         results[step.name] = {"success": False, "error": str(exc), "duration": round(step.duration, 2)}
                         logger.warning(
-                            "  %d/%d %-9s ✗ %s (non-blocking)", i, total, step.name, exc
+                            "  ⚠ %d/%d  %-10s failed: %s (non-blocking)", i, total, step.name, exc
                         )
 
                 # Track for shutdown even if failed
@@ -183,9 +187,25 @@ class LifecycleManager:
             app.state.deferred_startup_results = results
             total_deferred = sum(r.get("duration", 0) for r in results.values())
             success_count = sum(1 for r in results.values() if r.get("success"))
-            logger.info(
-                "Deferred · %d/%d complete in %.1fs", success_count, len(results), total_deferred
+            boot_elapsed = (
+                time.perf_counter() - self._boot_ts if self._boot_ts else total_deferred
             )
+            if success_count == len(results):
+                logger.info(
+                    "Warmup  ✓ %d/%d ready in %.1fs · fully warmed %.1fs after boot",
+                    success_count,
+                    len(results),
+                    total_deferred,
+                    boot_elapsed,
+                )
+            else:
+                logger.warning(
+                    "Warmup  ⚠ %d/%d ready in %.1fs · %d degraded, on-demand fallback active",
+                    success_count,
+                    len(results),
+                    total_deferred,
+                    len(results) - success_count,
+                )
 
         # Initialize state for readiness checks
         app.state.deferred_startup_complete = False
@@ -196,11 +216,11 @@ class LifecycleManager:
 
     async def run_shutdown(self) -> None:
         """Execute shutdown steps in reverse order."""
-        logger.info("Shutdown · stopping")
+        logger.info("Shutdown ▸ stopping")
 
         # Cancel any pending deferred startup task
         if self.deferred_task is not None and not self.deferred_task.done():
-            logger.info("  cancelling deferred startup")
+            logger.info("  ⏸ cancelling in-flight background warmup")
             self.deferred_task.cancel()
             try:
                 await asyncio.wait_for(self.deferred_task, timeout=5.0)
@@ -219,10 +239,10 @@ class LifecycleManager:
                 except Exception as exc:
                     span.record_exception(exc)
                     span.set_status(Status(StatusCode.ERROR, str(exc)))
-                    logger.warning("  shutdown '%s' failed: %s", step.name, exc)
+                    logger.warning("  ⚠ shutdown '%s' failed: %s", step.name, exc)
                     # Continue shutdown despite errors
 
-        logger.info("Shutdown · complete (%d steps)", stopped)
+        logger.info("Shutdown ✓ complete · %d step(s) stopped", stopped)
 
     def get_results_summary(self) -> list[tuple[str, float]]:
         """Get timing results for dashboard display."""
