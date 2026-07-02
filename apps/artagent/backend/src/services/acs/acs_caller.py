@@ -96,10 +96,7 @@ def initialize_acs_caller_instance() -> AcsCaller | None:
             cognitive_services_endpoint=speech_endpoint,
             recording_storage_container_url=storage_url,
         )
-        logger.info(
-            "AcsCaller initialised with phone: %s...",
-            acs_phone[:4] if acs_phone else "???",
-        )
+        logger.debug("AcsCaller initialised")
     except Exception as exc:  # pylint: disable=broad-except
         logger.error("Failed to initialise AcsCaller: %s", exc, exc_info=True)
         _instance = None

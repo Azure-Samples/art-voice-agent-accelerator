@@ -362,7 +362,7 @@ async def initiate_call(
             op.set_error(str(e))
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Internal server error: {str(e)}",
+                detail="Internal server error",
             )
 
 
@@ -522,7 +522,7 @@ async def list_calls(
             op.set_error(str(e))
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to list calls: {str(e)}",
+                detail="Failed to list calls",
             )
 
 
@@ -716,7 +716,7 @@ async def answer_inbound_call(
 
         except Exception as exc:
             op.set_error(str(exc))
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            return JSONResponse({"error": "Internal server error"}, status_code=500)
 
 
 @router.post(
@@ -854,4 +854,4 @@ async def handle_acs_callbacks(
 
     except Exception as exc:
         logger.error(f"Unexpected error processing ACS callbacks: {exc}")
-        return JSONResponse({"error": str(exc)}, status_code=500)
+        return JSONResponse({"error": "Internal server error"}, status_code=500)

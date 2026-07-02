@@ -225,7 +225,7 @@ def _validate_phone_number(phone_number: str) -> tuple[bool, str]:
                 f"Phone number length invalid (8-15 digits expected): {phone_number}",
             )
 
-        logger.debug(f"Phone number validation successful: {phone_number}")
+        logger.debug("Phone number validation successful")
         return True, ""
     except Exception as e:
         logger.error(f"Error validating phone number: {e}")
@@ -881,7 +881,7 @@ async def appconfig_status(request: Request, refresh: bool = False):
                 "status": "error",
                 "timestamp": time.time(),
                 "response_time_ms": round((time.time() - start_time) * 1000, 2),
-                "error": str(e),
+                "error": "internal_error",
                 "message": "Failed to get App Configuration status",
             },
             status_code=500,
@@ -932,7 +932,7 @@ async def appconfig_refresh(request: Request):
                 "status": "error",
                 "timestamp": time.time(),
                 "response_time_ms": round((time.time() - start_time) * 1000, 2),
-                "error": str(e),
+                "error": "internal_error",
                 "message": "Failed to refresh App Configuration cache",
             },
             status_code=500,
@@ -1391,7 +1391,7 @@ def _extract_agent_info(agent: Any, defn: AgentDefinition) -> dict[str, Any] | N
         return {
             "name": defn.name,
             "status": "error",
-            "error": str(e),
+            "error": "internal_error",
         }
 
 
@@ -1516,7 +1516,7 @@ async def get_agents_info(request: Request, include_state: bool = False):
         return JSONResponse(
             content={
                 "status": "error",
-                "error": str(e),
+                "error": "internal_error",
                 "response_time_ms": round((time.time() - start_time) * 1000, 2),
             },
             status_code=500,
@@ -1698,7 +1698,7 @@ async def update_agent_config(agent_name: str, config: AgentConfigUpdate, reques
         return JSONResponse(
             content={
                 "status": "error",
-                "error": str(e),
+                "error": "internal_error",
                 "response_time_ms": round((time.time() - start_time) * 1000, 2),
             },
             status_code=500,

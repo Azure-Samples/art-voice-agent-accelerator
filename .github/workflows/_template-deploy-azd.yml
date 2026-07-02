@@ -527,6 +527,42 @@ jobs:
           fi
 
       # ----------------------------------------------------------------------
+      # PRE-DEPLOY: Open data-plane network access so the CI runner can reach
+      # the deployed infra (ACR image push, Key Vault, App Config, Cosmos, etc.)
+      # during provision/deploy. Skipped entirely on the first run when nothing
+      # has been deployed yet (resource group absent).
+      # ----------------------------------------------------------------------
+      - name: 🌐 Make Resources Public (pre-deploy)
+        if: inputs.action == 'up' || inputs.action == 'deploy'
+        run: |
+          set -euo pipefail
+
+          # Refresh azd env values so we target the currently-deployed infra.
+          if azd env get-values > /tmp/azd-values.env 2>/dev/null; then
+            set -a
+            # shellcheck disable=SC1091
+            source /tmp/azd-values.env
+            set +a
+          fi
+
+          RG="${AZURE_RESOURCE_GROUP:-}"
+          if [ -z "$RG" ]; then
+            echo "ℹ️ AZURE_RESOURCE_GROUP not resolved — nothing deployed yet. Skipping make-resources-public."
+            exit 0
+          fi
+
+          AZ_SUB_ARGS=()
+          [ -n "${AZURE_SUBSCRIPTION_ID:-}" ] && AZ_SUB_ARGS=(--subscription "$AZURE_SUBSCRIPTION_ID")
+
+          if ! az group show "${AZ_SUB_ARGS[@]}" --name "$RG" --output none 2>/dev/null; then
+            echo "ℹ️ Resource group '$RG' does not exist yet — nothing deployed. Skipping make-resources-public."
+            exit 0
+          fi
+
+          echo "🌐 Opening data-plane network access on deployed resources for CI (RG: $RG)..."
+          make enable_public_networking ARGS="--yes"
+
+      # ----------------------------------------------------------------------
       # ACTION: PROVISION
       # ----------------------------------------------------------------------
       - name: 🏗️ azd provision

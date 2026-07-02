@@ -544,9 +544,14 @@ async def add_mcp_server(
     )
 
     if register_error:
+        logger.error(
+            "Connected to MCP server '%s' but failed to register tools: %s",
+            server.name,
+            register_error,
+        )
         raise HTTPException(
             status_code=500,
-            detail=f"Connected to server but failed to register tools: {register_error}",
+            detail="Connected to server but failed to register tools",
         )
 
     # Store in runtime registry (including headers for tool execution)

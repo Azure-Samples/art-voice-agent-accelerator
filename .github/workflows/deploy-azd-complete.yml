@@ -48,6 +48,11 @@ on:
       - '.github/workflows/deploy-azd-complete.yml'
       - '.github/workflows/_template-deploy-azd.yml'
 
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write  # Required by _template-deploy-azd.yml for PR preview comments
+
 jobs:
   # ============================================================================
   # DEPLOY - Calls the reusable template workflow

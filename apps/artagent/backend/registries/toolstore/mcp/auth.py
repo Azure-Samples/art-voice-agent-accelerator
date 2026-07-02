@@ -121,7 +121,7 @@ async def get_mcp_auth_token(app_id: str) -> str | None:
         async with _TOKEN_CACHE_LOCK:
             _TOKEN_CACHE[app_id] = (token, expiry)
         
-        logger.info(f"Acquired auth token for MCP server (app_id={app_id[:30]}...)")
+        logger.debug(f"Acquired auth token for MCP server (app_id={app_id[:30]}...)")
         return token
         
     except Exception as e:

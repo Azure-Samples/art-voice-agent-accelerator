@@ -345,8 +345,15 @@ def register_external_services_step(manager: LifecycleManager, app: FastAPI) -> 
         app.state.speech_phrase_manager = PhraseListManager(initial_phrases=initial_bias)
         set_global_phrase_manager(app.state.speech_phrase_manager)
 
-        # Hydrate phrase list from Cosmos (non-blocking)
-        await _hydrate_phrases_from_cosmos(app)
+        # Hydrate phrase list from Cosmos in the background so startup is not
+        # blocked on a Cosmos query (~seconds). STT works with the default
+        # env-derived phrases until this completes; the hydrated names only add
+        # recognition bias, so there is no functional dependency on it finishing
+        # before the app starts serving calls.
+        app.state.phrase_hydration_task = asyncio.create_task(
+            _hydrate_phrases_from_cosmos(app),
+            name="phrase-hydration",
+        )
 
     manager.add_step("services", start)
 
@@ -497,7 +504,7 @@ def register_mcp_servers_step(manager: LifecycleManager, app: FastAPI) -> None:
             app.state.mcp_ready = True
             return
 
-        logger.info(f"Validating {len(servers)} MCP server(s): {[s['name'] for s in servers]}")
+        logger.debug(f"Validating {len(servers)} MCP server(s): {[s['name'] for s in servers]}")
         
         mcp_status: dict[str, dict] = {}
         total_tools_registered = 0
@@ -518,7 +525,7 @@ def register_mcp_servers_step(manager: LifecycleManager, app: FastAPI) -> None:
                 else:
                     auth_headers = await get_mcp_auth_headers(app_id)
                     if auth_headers:
-                        logger.info(f"Acquired auth token for MCP server '{name}'")
+                        logger.debug(f"Acquired auth token for MCP server '{name}'")
                     else:
                         logger.warning(f"Failed to acquire auth token for MCP server '{name}'")
             
@@ -666,7 +673,8 @@ def register_mcp_servers_step(manager: LifecycleManager, app: FastAPI) -> None:
                             total_tools_registered += 1
                         
                         await session.disconnect()
-                        logger.info(f"MCP server '{name}' healthy at {url}, registered {tools_count} tools: {tool_names}")
+                        logger.info(f"MCP '{name}' healthy · {tools_count} tool(s) registered")
+                        logger.debug(f"MCP '{name}' at {url} · tools: {tool_names}")
                     else:
                         error_msg = "MCP client connection failed"
                         is_healthy = False

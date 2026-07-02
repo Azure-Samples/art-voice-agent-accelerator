@@ -472,7 +472,7 @@ def initialize_tools() -> int:
             f"Failed to load {len(failed_modules)} modules: {', '.join(failed_modules)}"
         )
     else:
-        logger.info(f"Tool registry initialized successfully with {len(_TOOL_DEFINITIONS)} tools")
+        logger.debug(f"Tool registry initialized successfully with {len(_TOOL_DEFINITIONS)} tools")
 
     return len(_TOOL_DEFINITIONS)
 

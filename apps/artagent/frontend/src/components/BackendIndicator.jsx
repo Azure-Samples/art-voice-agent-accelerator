@@ -88,7 +88,7 @@ const BackendIndicator = ({ url, onConfigureClick, onStatusChange, onAgentSelect
       const host = urlObj.hostname;
       const protocol = urlObj.protocol.replace(':', '');
       
-      if (host.includes('.azurecontainerapps.io')) {
+      if (host.endsWith('.azurecontainerapps.io')) {
         const appName = host.split('.')[0];
         setDisplayUrl(`${protocol}://${appName}.azure...`);
       } else if (host === 'localhost') {

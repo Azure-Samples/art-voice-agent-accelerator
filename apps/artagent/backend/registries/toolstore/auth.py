@@ -296,8 +296,8 @@ async def _lookup_user_in_cosmos(
     cosmos = _get_demo_users_manager()
     if cosmos is None:
         logger.warning(
-            "⚠️ Cosmos manager unavailable for identity lookup: %s / %s",
-            full_name, ssn_last_4
+            "⚠️ Cosmos manager unavailable for identity lookup for %s",
+            full_name
         )
         return None, "unavailable"
 
@@ -309,8 +309,8 @@ async def _lookup_user_in_cosmos(
     }
 
     logger.info(
-        "🔍 Cosmos identity lookup | full_name=%s | ssn_last_4=%s",
-        full_name, ssn_last_4
+        "🔍 Cosmos identity lookup | full_name=%s",
+        full_name
     )
 
     try:
@@ -339,8 +339,8 @@ async def _lookup_user_in_cosmos(
         return None, "error"
 
     logger.warning(
-        "✗ No user found in Cosmos | full_name=%s | ssn_last_4=%s",
-        full_name, ssn_last_4
+        "✗ No user found in Cosmos | full_name=%s",
+        full_name
     )
     return None, "not_found"
 
@@ -363,10 +363,9 @@ def _format_identity_success(user: dict[str, Any], *, source: str) -> dict[str, 
 def _log_mock_usage(full_name: str, ssn_last_4: str, reason: str | None) -> None:
     reason_text = f"reason={reason}" if reason else "no cosmos access"
     logger.warning(
-        "⚠️ verify_client_identity using mock dataset (%s) for %s / %s",
+        "⚠️ verify_client_identity using mock dataset (%s) for %s",
         reason_text,
         full_name,
-        ssn_last_4,
     )
 
 
@@ -575,10 +574,9 @@ async def verify_client_identity(args: dict[str, Any]) -> dict[str, Any]:
         return _format_identity_success(user, source="mock")
 
     logger.warning(
-        "✗ Identity verification failed after Cosmos lookup (%s): %s / %s",
+        "✗ Identity verification failed after Cosmos lookup (%s): %s",
         cosmos_failure or "no_match",
         raw_full_name,
-        ssn_last_4,
     )
     return {
         "success": False,

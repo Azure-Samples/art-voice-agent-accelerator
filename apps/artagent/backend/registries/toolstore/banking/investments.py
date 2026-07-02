@@ -209,8 +209,8 @@ async def get_account_routing_info(args: GetAccountRoutingInfoArgs) -> Dict[str,
         acct_id = bank_profile.get("primaryCheckingAccountId", "unknown")
         
         logger.info(
-            "✅ Account info retrieved | client=%s acct=****%s routing=%s",
-            client_id, acct_last4, routing
+            "✅ Account info retrieved | client=%s",
+            client_id
         )
         
         return _json(
@@ -366,8 +366,8 @@ async def get_rollover_options(args: GetRolloverOptionsArgs) -> Dict[str, Any]:
             return _json(False, "client_id is required.")
         
         logger.info(
-            "📊 Presenting rollover options | client=%s prev_employer=%s",
-            client_id, previous_employer or "unspecified"
+            "📊 Presenting rollover options | client=%s",
+            client_id
         )
         
         # First check if session profile was injected by orchestrator
@@ -913,8 +913,8 @@ async def schedule_advisor_consultation(args: ScheduleAdvisorConsultationArgs) -
             ])
         
         logger.info(
-            "📅 Advisor consultation scheduled | client=%s topic=%s advisor=%s urgency=%s appt=%s",
-            client_id, topic, advisor_type, urgency, appointment_id
+            "📅 Advisor consultation scheduled | client=%s advisor=%s urgency=%s appt=%s",
+            client_id, advisor_type, urgency, appointment_id
         )
         
         return _json(

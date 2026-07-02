@@ -179,9 +179,8 @@ async def transfer_call(
         except HttpResponseError as exc:
             span.set_status(Status(StatusCode.ERROR, str(exc)))
             logger.error(
-                "ACS transfer failed | call=%s target=%s error=%s",
+                "ACS transfer failed | call=%s error=%s",
                 connection_id,
-                target_address,
                 exc,
             )
             return {
@@ -192,9 +191,8 @@ async def transfer_call(
         except Exception as exc:  # pragma: no cover - defensive
             span.set_status(Status(StatusCode.ERROR, str(exc)))
             logger.exception(
-                "Unexpected error during ACS transfer | call=%s target=%s",
+                "Unexpected error during ACS transfer | call=%s",
                 connection_id,
-                target_address,
             )
             return {
                 "success": False,
@@ -207,9 +205,8 @@ async def transfer_call(
         span.set_status(Status(StatusCode.OK))
 
         logger.info(
-            "ACS transfer initiated | call=%s target=%s status=%s",
+            "ACS transfer initiated | call=%s status=%s",
             connection_id,
-            target_address,
             status_value,
         )
 

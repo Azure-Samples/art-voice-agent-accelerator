@@ -104,7 +104,7 @@ class CallEventHandlers:
             caller_info = event_data.get("from", {})
             caller_id = CallEventHandlers._extract_caller_id(caller_info)
 
-            logger.info(f"📞 Inbound call received from {caller_id}")
+            logger.info("📞 Inbound call received")
 
             # Initialize inbound call state
             if context.memo_manager:
