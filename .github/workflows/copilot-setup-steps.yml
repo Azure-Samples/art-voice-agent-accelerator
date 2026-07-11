@@ -1,0 +1,66 @@
+name: Copilot Setup Steps
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+      - Makefile
+      - pyproject.toml
+      - uv.lock
+      - apps/artagent/frontend/package.json
+      - apps/artagent/frontend/package-lock.json
+  pull_request:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+      - Makefile
+      - pyproject.toml
+      - uv.lock
+      - apps/artagent/frontend/package.json
+      - apps/artagent/frontend/package-lock.json
+
+jobs:
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 59
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/artagent/frontend/package-lock.json
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Cache uv artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
+      - name: Install Python dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix apps/artagent/frontend --ignore-scripts
+
+      - name: Environment smoke check
+        run: make ci-fast

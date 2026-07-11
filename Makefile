@@ -4,8 +4,12 @@
 # Each target is documented for clarity and maintainability
 ############################################################
 
-# Ensure uv is in PATH (installed via curl -LsSf https://astral.sh/uv/install.sh | sh)
+# Resolve uv from PATH first (works in GitHub Actions via setup-uv),
+# then fall back to the default local install location.
+UV_BIN ?= $(shell command -v uv 2>/dev/null)
+ifeq ($(strip $(UV_BIN)),)
 UV_BIN := $(HOME)/.local/bin/uv
+endif
 export PATH := $(HOME)/.local/bin:$(PATH)
 
 # Python interpreter to use (via uv)
@@ -206,6 +210,19 @@ eval-ui:
 # Convenience targets for full code/test quality cycle
 check_and_fix_code_quality: fix_code_quality check_code_quality
 check_and_fix_test_quality: run_unit_tests
+
+# Fast deterministic validation used by GitHub Copilot coding-agent setup
+ci-fast:
+	@echo "⚡ Running ci-fast validation"
+	@echo "- Python bytecode compile check"
+	@for d in apps/artagent/backend src tests/evaluation utils; do \
+		echo "  • $$d"; \
+		$(UV_BIN) run python -m compileall -q "$$d"; \
+	done
+	@echo "- Dependency import smoke check"
+	$(UV_BIN) run python -c "import fastapi, yaml, pydantic, aiohttp; print('imports: ok')"
+	@echo "- Scenario orchestration YAML parse check"
+	$(UV_BIN) run python -c "from pathlib import Path; import yaml; files=list(Path('apps/artagent/backend/registries/scenariostore').rglob('orchestration.yaml')); [yaml.safe_load(p.read_text(encoding='utf-8')) for p in files]; print(f'orchestration yamls: {len(files)} parsed')"
 
 
 # ANSI color codes for pretty output
