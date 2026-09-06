@@ -281,8 +281,6 @@ class BasicVoiceAssistant:
         self.connection: Optional["VoiceLiveConnection"] = None
         self.audio_processor: Optional[AudioProcessor] = None
         self.session_ready = False
-        self._active_response = False
-        self._response_api_done = False
         self._current_voice_name = voice
         self._alternate_voices = ("en-US-AndrewNeural", "en-US-AvaNeural")
         self._alternate_index = 0
@@ -378,16 +376,6 @@ class BasicVoiceAssistant:
 
             ap.skip_pending_audio()
 
-            # Only cancel if response is active and not already done
-            if self._active_response and not self._response_api_done:
-                try:
-                    await conn.response.cancel()
-                    logger.debug("Cancelled in-progress response due to barge-in")
-                except Exception as e:
-                    if "no active response" in str(e).lower():
-                        logger.debug("Cancel ignored - response already completed")
-                    else:
-                        logger.warning("Cancel failed: %s", e)
         elif event.type == ServerEventType.SESSION_UPDATED:
             logger.info("Session updated: %s", event.session.id)
             logger.info("Session details: %s", event)
@@ -402,8 +390,6 @@ class BasicVoiceAssistant:
 
         elif event.type == ServerEventType.RESPONSE_CREATED:
             logger.info("🤖 Assistant response created")
-            self._active_response = True
-            self._response_api_done = False
 
         elif event.type == ServerEventType.RESPONSE_AUDIO_DELTA:
             logger.debug("Received audio delta")
@@ -415,8 +401,6 @@ class BasicVoiceAssistant:
 
         elif event.type == ServerEventType.RESPONSE_DONE:
             logger.info("✅ Response complete")
-            self._active_response = False
-            self._response_api_done = True
             try:
                 await self._rotate_voice_for_next_response()
             except Exception:
@@ -424,11 +408,8 @@ class BasicVoiceAssistant:
 
         elif event.type == ServerEventType.ERROR:
             msg = event.error.message
-            if "Cancellation failed: no active response" in msg:
-                logger.debug("Benign cancellation error: %s", msg)
-            else:
-                logger.error("❌ VoiceLive error: %s", msg)
-                print(f"Error: {msg}")
+            logger.error("❌ VoiceLive error: %s", msg)
+            print(f"Error: {msg}")
 
         elif event.type == ServerEventType.CONVERSATION_ITEM_CREATED:
             logger.debug("Conversation item created: %s", event.item.id)
