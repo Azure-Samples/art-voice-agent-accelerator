@@ -1255,7 +1255,7 @@ class LiveOrchestrator:
 
     async def _handle_speech_started(self) -> None:
         """Handle user speech started (barge-in)."""
-        logger.debug("User speech started → cancel current response")
+        logger.debug("User speech started → stop current playback")
         
         # Sync state to MemoManager in background - don't block barge-in response
         # This ensures any partial response context is preserved
@@ -1263,16 +1263,6 @@ class LiveOrchestrator:
         
         if self.audio:
             await self.audio.stop_playback()
-        # Only cancel when a response is actually in flight. Cancelling with no
-        # active response makes VoiceLive emit a `response_cancel_not_active`
-        # server error, which the handler treats as a hard error (StopAudio +
-        # UI error) and breaks the next turn. This race widens when VAD fires
-        # speech_started right after a turn completes (low silence_duration).
-        if self._active_response_id:
-            try:
-                await self.conn.response.cancel()
-            except Exception:
-                logger.debug("response.cancel() failed during barge-in", exc_info=True)
         if self.messenger and self._active_response_id:
             try:
                 await self.messenger.send_assistant_cancelled(
@@ -2576,4 +2566,3 @@ __all__ = [
     "get_voicelive_orchestrator",
     "get_orchestrator_registry_size",
 ]
-

@@ -161,13 +161,14 @@ async def _switch_to(self, agent_name: str, system_vars: dict):
 
 ### Barge-In Handling
 
-Automatic via `SPEECH_STARTED` events:
+With the default `interrupt_response=true` VAD configuration, VoiceLive cancels
+the response automatically. The `SPEECH_STARTED` handler only needs to stop local
+playback, not send another `response.cancel`:
 
 ```python
 async def _handle_speech_started(self):
     if self.audio:
         await self.audio.stop_playback()
-    await self.conn.response.cancel()
 ```
 
 ---

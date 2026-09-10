@@ -24,6 +24,7 @@ import pytest
 from fastapi.websockets import WebSocketState
 
 from apps.artagent.backend.voice.voicelive.handler import VoiceLiveSDKHandler
+from apps.artagent.backend.voice.voicelive.orchestrator import LiveOrchestrator
 from azure.ai.voicelive.models import ServerEventType
 
 
@@ -147,3 +148,38 @@ async def test_response_done_prunes_cancelled_set():
     )
 
     assert "resp-1" not in handler._cancelled_response_ids
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_id", [None, "resp-1"])
+@pytest.mark.parametrize("with_audio", [False, True])
+async def test_orchestrator_stops_playback_without_cancelling_response(response_id, with_audio):
+    conn = SimpleNamespace(response=SimpleNamespace(cancel=AsyncMock()))
+    audio = SimpleNamespace(stop_playback=AsyncMock()) if with_audio else None
+    messenger = SimpleNamespace(send_assistant_cancelled=AsyncMock())
+    orchestrator = LiveOrchestrator(
+        conn=conn,
+        agents={"Concierge": Mock()},
+        audio_processor=audio,
+        messenger=messenger,
+    )
+    orchestrator._active_response_id = response_id
+    orchestrator._schedule_background_sync = Mock()
+
+    await orchestrator.handle_event(
+        SimpleNamespace(type=ServerEventType.INPUT_AUDIO_BUFFER_SPEECH_STARTED)
+    )
+
+    orchestrator._schedule_background_sync.assert_called_once_with()
+    conn.response.cancel.assert_not_called()
+    if audio:
+        audio.stop_playback.assert_awaited_once_with()
+    if response_id:
+        messenger.send_assistant_cancelled.assert_awaited_once_with(
+            response_id=response_id,
+            sender="Concierge",
+            reason="user_barge_in",
+        )
+    else:
+        messenger.send_assistant_cancelled.assert_not_called()
+    assert orchestrator._active_response_id is None

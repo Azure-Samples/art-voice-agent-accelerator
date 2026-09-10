@@ -258,19 +258,20 @@ async def _execute_tool_call(
 
 ## Barge-In Handling
 
-When the user starts speaking, the orchestrator cancels the current response:
+With the default `interrupt_response=true` VAD configuration, VoiceLive cancels the
+current response when the user starts speaking. The orchestrator stops local
+playback and notifies the UI without sending a redundant `response.cancel`.
+Explicit cancellation is still needed for application-driven handoffs and
+transfers, or custom configurations that disable automatic interruption.
 
 ```python
 async def _handle_speech_started(self) -> None:
     """Handle user speech started (barge-in)."""
-    logger.debug("User speech started → cancel current response")
+    logger.debug("User speech started → stop current playback")
     
     # Stop audio playback
     if self.audio:
         await self.audio.stop_playback()
-    
-    # Cancel model response
-    await self.conn.response.cancel()
     
     # Notify UI
     if self.messenger and self._active_response_id:
