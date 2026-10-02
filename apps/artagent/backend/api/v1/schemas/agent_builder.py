@@ -89,7 +89,9 @@ class SpeechConfigSchema(
 ):
     """Speech recognition (STT) configuration schema."""
 
-    transcription_model: Literal["azure-speech", "mai-transcribe"] = "azure-speech"
+    transcription_model: Literal["azure-speech", "mai-transcribe", "mai-transcribe-2"] = (
+        SpeechConfig.transcription_model
+    )
     vad_silence_timeout_ms: int = Field(
         default=SpeechConfig.vad_silence_timeout_ms, ge=100, le=5000
     )
@@ -104,7 +106,7 @@ class SpeechConfigSchema(
     @classmethod
     def _reject_mai_customization(cls, value: Any) -> Any:
         if isinstance(value, dict):
-            model = value.get("transcription_model", "azure-speech")
+            model = value.get("transcription_model", SpeechConfig.transcription_model)
             if isinstance(model, str):
                 validate_mai_customization(model, value)
         return value
@@ -128,7 +130,7 @@ class SessionConfigSchema(BaseModel):
     @field_validator("input_audio_transcription_settings")
     @classmethod
     def _normalize_transcription(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
-        if value is not None and isinstance(value.get("model"), str):
+        if value is not None and value.get("model") is not None:
             return {**value, "model": normalize_transcription_model(value["model"])}
         return value
 

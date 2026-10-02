@@ -10,7 +10,171 @@ This directory contains GitHub Actions workflows for automated deployment of you
 | **Deploy Documentation** | [`docs.yml`](./docs.yml) | Deploys static HTML docs to GitHub Pages |
 | **Test AZD Hooks** | [`test-azd-hooks.yml`](./test-azd-hooks.yml) | Tests preprovision/postprovision hooks across platforms |
 | **Live Evals (Staging)** | [`live-evals-staging.yml`](./live-evals-staging.yml) | Strict scenario and voice E2E gates after staging application deployment |
+| **Weekly Voice Live roadmap** | [`voicelive-roadmap.md`](./voicelive-roadmap.md) | Monday documentation/code review; new integration proposals or timestamped updates to similar issues |
 | **_template-deploy-azd** | [`_template-deploy-azd.yml`](./_template-deploy-azd.yml) | ⚠️ Internal template - do not run directly |
+
+## Validate deployment-state access before deploying
+
+The manual **Deploy to Azure** workflow supports `action=validate-state`,
+including the `mosdev` environment. This mode opens only the runner's temporary
+state-access rule, checks the existing state blob with Entra authentication,
+initializes azd's Terraform cache, and runs `azd env refresh`. It does not run
+Terraform plan/apply, build or deploy images, change application networking, or
+update GitHub environment variables. The owned rule is cleaned up with
+`always()`, including when validation fails.
+
+Before enabling this path in GitHub:
+
+1. Publish only reviewed changes on a separate branch. Do not push unfinished
+   work to `staging` or `main`, which have deployment triggers. Keep internal
+   network guides, IPAM exports, local `.azure` files, state, plans, and
+   credentials out of the public repository.
+2. Create the target GitHub environment with deployment-branch restrictions
+   and the required approval policy. Configure an OIDC identity whose trust
+   matches that repository/environment; prefer no client secret.
+3. Configure its Azure authentication secrets and `RS_RESOURCE_GROUP`,
+   `RS_STORAGE_ACCOUNT`, and `RS_CONTAINER_NAME` variables.
+4. Set `TF_STATE_MANAGE_RUNNER_IP=true` and the existing
+   `TF_STATE_NSP_PROFILE_ID`. Give the identity state-blob permissions,
+   account metadata read access, and narrowly scoped NSP rule-management and
+   association-read permissions as described below.
+5. Select the reviewed branch, target environment, and `validate-state` action.
+   Review its result before selecting a deployment action.
+
+Raw Terraform/azd output is not printed or uploaded by the validation step.
+Terraform's GitHub wrapper is disabled so child `terraform output` calls do
+not publish sensitive state outputs as step outputs.
+
+The legacy **Make Resources Public** step is disabled unless
+`ALLOW_LEGACY_PUBLIC_NETWORKING=true` is explicitly configured. Even then it
+refuses to run with NSP or Front Door. Deployment access must not reopen private
+origins or bypass the state perimeter. Post-deployment CORS uses the Front Door
+frontend hostname when enabled.
+
+For `mosdev`, the checked-in parameters preserve `westus2`, workload profiles,
+and the opted-in Front Door configuration. Review a full Terraform plan before
+an apply, particularly when changing from a human deployer to a CI identity.
+Environments enabling Front Door must also configure the environment secret
+`FRONT_DOOR_ALLOWED_SERVICE_TAGS` with an approved JSON array of egress service
+tags. Preview and execution pass it as `TF_VAR_front_door_allowed_service_tags`;
+the default is empty and enabled deployments reject it. Keep organization-specific
+allowlists out of checked-in parameter files.
+
+Triggering this workflow from a VPN-connected laptop is supported without
+direct laptop access to state. Running `azd` **on the laptop itself** is
+different: its Storage-facing egress must match an approved NSP rule (or use a
+private route). VPN membership alone does not grant that access.
+
+## Weekly Voice Live roadmap
+
+This [GitHub Agentic Workflow](https://github.github.com/gh-aw/) runs every Monday
+at **09:17 UTC** (`17 9 * * 1`) and supports manual dispatch. It uses the native
+repository agent
+[`voicelive-roadmap`](../agents/voicelive-roadmap.agent.md), also selectable in
+Copilot for interactive research. The agent is imported into the workflow prompt
+and selected through `engine.agent`; its code-context map is versioned alongside
+the application. Interactive invocations without safe-output tools produce
+drafts only.
+
+The starting source is the
+[public Python Voice Live integration guide](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-voice-agent-integration?pivots=programming-language-python).
+The agent follows relevant official overview, release, API and SDK links, then
+traces candidate features through the **checked-out code and tests**, including
+native Voice Live, SpeechCascade compatibility, agent YAML, Quick Tune, SDK pins,
+and deployment prerequisites. Scheduled runs inspect the default branch, not
+unmerged local work. Manual runs inspect the selected ref and cite its commit.
+
+Each proposal includes evidence/source URLs, preview/GA status, SDK/API and
+region/model/auth requirements, concrete code gaps, P0-P3 priority, S/M/L/XL
+complexity, rough effort/confidence, implementation outline and acceptance criteria.
+The first scan establishes baseline gaps; it does not label every feature new.
+
+### Duplicate handling and publication boundaries
+
+The agent searches open **and closed** issues, bodies and comments, feature
+synonyms, and related PRs, including human-authored issues without automation
+labels. It matches intended outcomes and runtime contracts, not only titles.
+Visible `Feature ID: voicelive:<capability>` lines preserve capability identity
+across renames and preview-to-GA transitions. HTML comment markers are not used
+for this identity because safe-output sanitization removes agent-authored HTML.
+
+A similar issue receives one **timestamped delta comment** only when material
+evidence changes; the original description and maintainer decisions are preserved.
+Unchanged scans do not post heartbeat comments. Closed/completed, rejected,
+ambiguous, already implemented, and in-flight PR cases have explicit handling in
+the agent profile; nothing is automatically reopened or assigned.
+
+The research job has read-only GitHub permissions. Separate safe-output jobs can
+create at most **five issues** and **ten comments** per run in this repository,
+with title deduplication as an additional backstop. There are no code/PR, issue
+state, label-editing or assignment outputs. Safe outputs sanitize content and
+retain the framework's threat detection. The workflow serializes runs across
+refs so a manual run cannot race the weekly scan.
+
+`min-integrity: none` deliberately lets deduplication see outsider and bot issues
+that the public-repository default would filter. All retrieved content is
+untrusted; it cannot authorize commands or override instructions. This broadens
+read visibility, not write permissions. Semantic similarity and material-change
+assessment are model judgments, not a deterministic guarantee; review proposals.
+The built-in `add-comment` handler can technically address PRs, but the agent is
+explicitly limited to issue comments. There are no cross-repository write targets.
+
+Existing issue/comment history is the durable baseline; there is no expiring
+cache to cause repeat proposals. Missing source/search evidence is reported as
+incomplete rather than "no changes"; affected writes are withheld. No weekly
+summary or automatic failure issues are created. Review Actions logs, summaries,
+safe-output previews and artifacts for outcomes, deferred items, and errors.
+
+### Activation
+
+1. Enable GitHub Issues and Actions in **AIappsGBBFactory/art-voice-agent-accelerator**.
+2. Configure the repository Actions secret **`COPILOT_GITHUB_TOKEN`** with a
+   fine-grained PAT belonging to a Copilot-enabled account and the account
+   permission **Copilot Requests: Read**. Enter it through GitHub Settings or
+   `gh secret set COPILOT_GITHUB_TOKEN --repo AIappsGBBFactory/art-voice-agent-accelerator`.
+   Never put the value in a file, prompt, issue, or commit. The ordinary
+   `GITHUB_TOKEN` supplies scoped repository reads and issue publication, not
+   Copilot inference; the existing deployment `GH_PAT` is not reused.
+3. Merge the agent, Markdown workflow and generated `voicelive-roadmap.lock.yml`
+   onto the default branch. A local file or agent profile alone does **not**
+   activate a schedule. GitHub Actions executes the generated lock file.
+4. Run **Weekly Voice Live roadmap** from Actions with `dry_run` checked (the
+   manual default). Review the issue/comment previews before a publishing run.
+   Uncheck `dry_run` to publish manually; scheduled runs publish automatically.
+
+```bash
+gh workflow run voicelive-roadmap.lock.yml \
+  --repo AIappsGBBFactory/art-voice-agent-accelerator --ref main -f dry_run=true
+```
+
+An organization with supported Copilot centralized billing can instead configure
+`permissions.copilot-requests: write` and recompile, following the
+[official authentication guide](https://github.github.com/gh-aw/reference/auth/).
+This alternative is not enabled here: an existing Copilot subscription alone does
+not prove organization inference billing is configured. No Azure credentials or
+application dependencies are needed by the researcher.
+
+GitHub may delay scheduled runs and disables schedules in inactive public
+repositories after 60 days. Enable workflow failure notifications and inspect the
+Actions history; absence of an issue does not prove that a scan completed.
+Actions and Copilot usage/billing apply. Disable this workflow in Actions to pause.
+
+### Maintaining the workflow
+
+The checked-in lock file is generated with **gh-aw v0.88.7**. Do not edit it by
+hand. Recompile after modifying the Markdown workflow or imported agent:
+
+```bash
+gh extension install github/gh-aw --pin v0.88.7  # if not already installed
+gh aw compile voicelive-roadmap --validate --no-check-update
+pytest tests/test_voicelive_roadmap_workflow.py -q
+```
+
+Commit the source, agent, generated lock, and `.github/aw/actions-lock.json`
+together. Deliberately review compiler upgrades and generated action/container
+pins. The offline regressions check the
+schedule, staged default, read/write separation, output limits, agent binding,
+and source/lock parity; they do not claim to prove model-level semantic matching.
 
 ## Staging live evaluations
 
@@ -173,6 +337,86 @@ AZURE_CLIENT_SECRET
 AZURE_TENANT_ID
 AZURE_SUBSCRIPTION_ID
 ```
+
+### Terraform state behind an enforced network security perimeter
+
+GitHub-hosted runners can use a temporary, uniquely named inbound access rule on
+an enforced Azure Network Security Perimeter (NSP) profile. Configure these
+GitHub environment variables:
+
+```text
+TF_STATE_MANAGE_RUNNER_IP=true
+TF_STATE_NSP_PROFILE_ID=/subscriptions/.../providers/Microsoft.Network/networkSecurityPerimeters/.../profiles/...
+```
+
+IP management defaults to `false`, which performs no network writes. An
+optional `TF_STATE_RUNNER_IP` environment variable may supply one pre-approved
+IPv4 address; CIDRs, IPv6 addresses, wildcards, and all-network ranges are
+rejected. Without the override, the helper discovers the runner's public IPv4
+over bounded HTTPS.
+
+Before any preview, provision, deploy, up, or down operation that can initialize
+Terraform, the reusable workflow:
+
+1. Uses the explicit `AZURE_SUBSCRIPTION_ID`, `RS_RESOURCE_GROUP`,
+   `RS_STORAGE_ACCOUNT`, `RS_CONTAINER_NAME`, and environment state key.
+2. Validates that the profile is a full ARM ID in the same subscription, the
+   state account has `publicNetworkAccess=SecuredByPerimeter`, and exactly one
+   matching resource association is `Enforced`. It never changes the account
+   posture, association mode, tags, firewall defaults, or other rules.
+3. Reads existing inbound profile rules first. If an approved CIDR already
+   covers the runner, it is reused and never removed. Otherwise, the helper
+   creates one per-job rule containing only `<runner-ip>/32`, using the stable
+   `Microsoft.Network/networkSecurityPerimeters/profiles/accessRules@2024-07-01`
+   REST schema.
+4. Writes a mode-`0600` lease under `RUNNER_TEMP` before mutation, adds only the
+   exact created rule ID and ownership to it, and polls
+   `az storage blob exists --auth-mode login`. An `exists:false` result fails
+   rather than creating alternate or empty state.
+5. Runs an `always()` cleanup step that deletes only the exact NSP rule ID owned
+   by the lease. Cleanup is idempotent when open was skipped or no rule was
+   added.
+
+If `TF_STATE_NSP_PROFILE_ID` is unset, the helper retains compatibility with the
+classic storage firewall and requires `publicNetworkAccess=Enabled` plus
+`defaultAction=Deny`; it adds/removes a bare IPv4 rule because Storage rejects
+literal `/31` and `/32` rules. A `SecuredByPerimeter` account is rejected unless
+an explicit profile is configured.
+
+The workflow identity needs **Storage Blob Data Contributor** on the state
+container/account. NSP mode also needs narrowly scoped read access to the
+configured profile and resource associations, plus access-rule read/write/delete
+on that profile. Classic mode instead needs
+`Microsoft.Storage/storageAccounts/read` and
+`Microsoft.Storage/storageAccounts/write` on the state account. Neither mode
+uses account keys or Shared Key authorization. See the official
+[NSP CLI quickstart](https://learn.microsoft.com/azure/private-link/create-network-security-perimeter-cli)
+and [2024-07-01 access-rule schema](https://learn.microsoft.com/azure/templates/microsoft.network/2024-07-01/networksecurityperimeters/profiles/accessrules).
+
+The helper can also be exercised directly after Azure CLI login:
+
+```bash
+export TF_STATE_MANAGE_RUNNER_IP=true
+export AZURE_SUBSCRIPTION_ID=...
+export RS_RESOURCE_GROUP=...
+export RS_STORAGE_ACCOUNT=...
+export RS_CONTAINER_NAME=...
+export RS_STATE_KEY=dev.tfstate
+export TF_STATE_NSP_PROFILE_ID=/subscriptions/.../profiles/...
+
+python devops/scripts/azd/helpers/terraform-state-access.py open \
+  --lease-file .terraform-state-access-lease.json
+# Run the state operation.
+python devops/scripts/azd/helpers/terraform-state-access.py close \
+  --lease-file .terraform-state-access-lease.json
+```
+
+GitHub's `always()` cleanup covers ordinary success, failure, and cancellation,
+but no workflow can guarantee cleanup after abrupt runner loss. If that occurs,
+use the failed run's lease/logged run identifier and runner IP to verify the
+exact rule, then delete only the recorded NSP access-rule ID (or exact classic
+IP rule). Never replace this with Learning mode, a broad GitHub/Azure address
+range, or an all-networks fallback.
 
 ## ⚙️ Environment Variables
 

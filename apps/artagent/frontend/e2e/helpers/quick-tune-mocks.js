@@ -112,6 +112,10 @@ export async function installQuickTuneMocks(page) {
   });
   await page.route('**/api/v1/agent-builder/tools', (route) => respond(route, { tools: TOOL_CATALOG }));
   await page.route('**/api/v1/agent-builder/voices{,?*}', (route) => respond(route, {
+    runtime_transcription_models: {
+      cascade: ['mai-transcribe-2', 'mai-transcribe', 'azure-speech'],
+      voicelive: ['mai-transcribe-2', 'mai-transcribe', 'azure-speech', 'whisper-1'],
+    },
     voices: [
       { name: 'en-US-AvaMultilingualNeural', display_name: 'Ava' },
       { name: 'en-US-JennyNeural', display_name: 'Jenny' },

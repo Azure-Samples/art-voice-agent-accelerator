@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom';
 import {
   Box,
+  Alert,
   Button,
   Divider,
   IconButton,
@@ -23,6 +24,7 @@ import IndustryTag from './IndustryTag.jsx';
 import SessionSelector from './SessionSelector.jsx';
 import WaveformVisualization from './WaveformVisualization.jsx';
 import ConversationControls from './ConversationControls.jsx';
+import CommunicationProviders from './CommunicationProviders.jsx';
 import ChatBubble from './ChatBubble.jsx';
 import GraphCanvas from './graph/GraphCanvas.jsx';
 import GraphListView from './graph/GraphListView.jsx';
@@ -32,6 +34,7 @@ import AgentBuilder from './AgentBuilder.jsx';
 import AgentScenarioBuilder from './AgentScenarioBuilder.jsx';
 import QuickTuneWorkspace from './QuickTuneWorkspace.jsx';
 import useBargeIn from '../hooks/useBargeIn.js';
+import useCommunicationProviders from '../hooks/useCommunicationProviders.js';
 import { API_BASE_URL, WS_URL } from '../config/constants.js';
 import { ensureVoiceAppKeyframes, styles } from '../styles/voiceAppStyles.js';
 import {
@@ -58,6 +61,7 @@ import { flattenSessionEnvelope, isSessionEnvelope } from '../utils/sessionEnvel
 import { createEnvelopeDeduper } from '../utils/envelopeDedupe.js';
 import { deriveSessionContract } from '../utils/sessionContract.js';
 import { resolveTurnId } from '../utils/turnMessages.js';
+import { callErrorMessage, SERVICE_PROVIDERS } from '../utils/communicationProviders.js';
 
 // Mirrors WS_CLOSE_CODE_VOICE_ERROR in
 // apps/artagent/backend/voice/shared/errors.py. Private-use close code meaning
@@ -203,8 +207,13 @@ function RealTimeVoiceApp() {
   const [micMuted, setMicMuted] = useState(false);
   const [targetPhoneNumber, setTargetPhoneNumber] = useState("");
   const [callActive, setCallActive] = useState(false);
+  const [callInitiating, setCallInitiating] = useState(false);
+  const [callAwaitingConnection, setCallAwaitingConnection] = useState(false);
+  const callInitiatingRef = useRef(false);
+  const [callError, setCallError] = useState('');
   const [activeSpeaker, setActiveSpeaker] = useState(null);
   const [showPhoneInput, setShowPhoneInput] = useState(false);
+  const providers = useCommunicationProviders(showPhoneInput);
   const [showRealtimeModePanel, setShowRealtimeModePanel] = useState(false);
   const [pendingRealtimeStart, setPendingRealtimeStart] = useState(false);
   const [agentInventory, setAgentInventory] = useState(null);
@@ -1271,14 +1280,17 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
       profileHighlightTimeoutRef.current = null;
     }, 3500);
   }, []);
-  const isCallDisabled =
-    systemStatus.status === "degraded" && systemStatus.acsOnlyIssue;
-
-  useEffect(() => {
-    if (isCallDisabled) {
-      setShowPhoneInput(false);
-    }
-  }, [isCallDisabled]);
+  // Discovery, rather than standalone ACS health, gates each provider. Keep
+  // the panel accessible even when configuration is missing so it can be retried.
+  const callBusy = callInitiating || callAwaitingConnection || callActive || Boolean(currentCallId);
+  const telephonyProviderLabel = SERVICE_PROVIDERS.telephony.find(
+    (provider) => provider.id === providers.telephonyProvider,
+  ).label;
+  const handleTelephonyProviderChange = useCallback((provider) => {
+    if (callBusy || callInitiatingRef.current) return;
+    setCallError('');
+    providers.selectProvider(provider);
+  }, [callBusy, providers.selectProvider]);
 
   useEffect(() => {
     return () => {
@@ -1822,6 +1834,8 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
 
 
   const resetCallLifecycle = useCallback(() => {
+    setCurrentCallId(null);
+    setCallAwaitingConnection(false);
     const state = callLifecycleRef.current;
     state.pending = false;
     state.active = false;
@@ -1933,6 +1947,7 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
   }, [recording]);
 
   const handleResetSession = useCallback(() => {
+    if (callInitiatingRef.current || callLifecycleRef.current.pending) return;
     const newSessionId = createNewSessionId();
     setSessionId(newSessionId);
     setSessionProfiles({});
@@ -2009,32 +2024,32 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
           }
         : null;
     try {
-      if (payload) {
-        const res = await fetch(`${API_BASE_URL}/api/v1/calls/terminate`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (!res.ok) {
-          const errorBody = await res.json().catch(() => ({}));
-          appendLog(
-            `Hangup failed: ${errorBody.detail || res.statusText || res.status}`
-          );
-        } else {
-          appendLog("📴 Hangup requested");
-        }
+      setCallError('');
+      if (!payload) throw new Error('Cannot confirm hangup without a call ID. Check the call on the server.');
+      const res = await fetch(`${API_BASE_URL}/api/v1/calls/terminate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const errorBody = await res.json().catch(() => ({}));
+        throw new Error(callErrorMessage(errorBody, `Hangup failed (HTTP ${res.status}).`));
       }
+      appendLog("📴 Hangup requested");
     } catch (err) {
-      appendLog(`Hangup error: ${err?.message || err}`);
-    } finally {
-      stopRecognitionRef.current?.();
-      setCallActive(false);
-      setActiveSpeaker(null);
-      setShowPhoneInput(false);
-      setCurrentCallId(null);
-      resetCallLifecycle();
-      closeRelaySocket("call terminated");
+      const message = err.message || 'Unable to confirm hangup.';
+      setCallError(message);
+      setShowPhoneInput(true);
+      appendLog(`Hangup error: ${message}`);
+      return;
     }
+    stopRecognitionRef.current?.();
+    setCallActive(false);
+    setActiveSpeaker(null);
+    setShowPhoneInput(false);
+    setCurrentCallId(null);
+    resetCallLifecycle();
+    closeRelaySocket("call terminated");
   }, [
     appendLog,
     closeRelaySocket,
@@ -2046,15 +2061,13 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
   ]);
 
   const handlePhoneButtonClick = useCallback(() => {
-    if (isCallDisabled && !callActive) {
-      return;
-    }
-    if (callActive) {
+    if (callInitiatingRef.current) return;
+    if (callActive || currentCallId) {
       terminateACSCall();
       return;
     }
     setShowPhoneInput((prev) => !prev);
-  }, [isCallDisabled, callActive, setShowPhoneInput, terminateACSCall]);
+  }, [callActive, currentCallId, setShowPhoneInput, terminateACSCall]);
 
   const handleQuickTuneAgentSaved = useCallback(async (config, { isNew, reconnect, live, mode }) => {
     notifyAgentUpdate(config, isNew ? 'created' : 'updated', { mode, confirmed: true });
@@ -2918,12 +2931,14 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
       }
 
       if (payload.event_type === "call_connected") {
+        setCallAwaitingConnection(false);
         setCallActive(true);
         appendLog("📞 Call connected");
         const lifecycle = callLifecycleRef.current;
         lifecycle.pending = true;
         lifecycle.active = true;
         lifecycle.callId = payload.call_connection_id || lifecycle.callId;
+        if (lifecycle.callId) setCurrentCallId(lifecycle.callId);
         lifecycle.lastEnvelopeAt = Date.now();
         lifecycle.reconnectAttempts = 0;
         lifecycle.reconnectScheduled = false;
@@ -3831,14 +3846,18 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
   }, [appendLog, sessionId]);
 
   const startACSCall = async () => {
-    if (systemStatus.status === "degraded" && systemStatus.acsOnlyIssue) {
-      appendLog("🚫 Outbound calling disabled until ACS configuration is provided.");
+    if (callInitiatingRef.current || callBusy || callLifecycleRef.current.pending) return;
+    if (!providers.canCall) {
+      setCallError('The selected telephony provider is not confirmed as configured. Refresh providers before calling.');
       return;
     }
-    if (!/^\+\d+$/.test(targetPhoneNumber)) {
-      alert("Enter phone in E.164 format e.g. +15551234567");
+    if (!/^\+[1-9]\d{1,14}$/.test(targetPhoneNumber)) {
+      setCallError('Enter a phone number in E.164 format, for example +15551234567.');
       return;
     }
+    callInitiatingRef.current = true;
+    setCallInitiating(true);
+    setCallError('');
     try {
       // Get the current session ID for this browser session
       const currentSessionId = getOrCreateSessionId();
@@ -3855,32 +3874,31 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
         body: JSON.stringify({ 
           target_number: targetPhoneNumber,
           streaming_mode: selectedStreamingMode,
+          telephony_provider: providers.telephonyProvider,
           context: {
             browser_session_id: currentSessionId,  // 🎯 Pass browser session ID for ACS coordination
             streaming_mode: selectedStreamingMode,
           }
         }),
       });
-      const json = await res.json();
+      const json = await res.json().catch(() => null);
       if (!res.ok) {
-        appendLog(`Call error: ${json.detail||res.statusText}`);
-        resetCallLifecycle();
-        return;
+        throw new Error(callErrorMessage(json, `Call initiation failed (HTTP ${res.status}).`));
       }
-      const newCallId = json.call_id ?? json.callId ?? null;
+      const newCallId = json?.call_id ?? json?.callId ?? null;
       setCurrentCallId(newCallId);
+      setCallAwaitingConnection(true);
       if (!newCallId) {
-        appendLog("⚠️ Call initiated but call_id missing from response");
+        setCallError('The server accepted the request without a call ID. Call state is unconfirmed; check the server before retrying.');
       }
       // show in chat with dedicated system card
       const readableMode = selectedStreamingModeLabel || selectedStreamingMode;
-      appendSystemMessage("📞 Call started", {
+      appendSystemMessage("📞 Call initiated — waiting for connection", {
         tone: "call",
-        statusCaption: `→ ${targetPhoneNumber} · Mode: ${readableMode}`,
+        statusCaption: `→ ${targetPhoneNumber} · ${telephonyProviderLabel} · Engine: ${readableMode}`,
         statusLabel: "Call Initiated",
       });
-      appendLog(`📞 Call initiated (mode: ${readableMode})`);
-      setShowPhoneInput(false);
+      appendLog(`📞 Call initiated (${telephonyProviderLabel}, mode: ${readableMode})`);
       const lifecycle = callLifecycleRef.current;
       lifecycle.pending = true;
       lifecycle.active = false;
@@ -3893,9 +3911,14 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
 
       logger.info('🔗 [FRONTEND] Starting dashboard relay WebSocket to monitor session:', currentSessionId);
       openRelaySocket(currentSessionId, { reason: "call-start" });
-    } catch(e) {
-      appendLog(`Network error starting call: ${e.message}`);
+    } catch (e) {
+      const message = e.message || 'Unable to start the call.';
+      setCallError(message);
+      appendLog(`Call error: ${message}`);
       resetCallLifecycle();
+    } finally {
+      callInitiatingRef.current = false;
+      setCallInitiating(false);
     }
   };
 
@@ -4742,7 +4765,9 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
             <ConversationControls
               recording={recording}
               callActive={callActive}
-              isCallDisabled={isCallDisabled}
+              callPending={Boolean(currentCallId)}
+              callInitiating={callInitiating || (callAwaitingConnection && !currentCallId)}
+              isCallDisabled={callInitiating || (callAwaitingConnection && !currentCallId)}
               scenarioSwitching={scenarioSwitching}
               onResetSession={handleResetSession}
               onMicToggle={handleMicToggle}
@@ -4776,40 +4801,76 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
 
         {/* Phone Input Panel */}
       {showPhoneInput && (
-        <div ref={phonePanelRef} style={styles.phoneInputSection}>
-          <div style={{ marginBottom: '8px', fontSize: '12px', color: '#64748b' }}>
-            {callActive ? '📞 Call in progress' : '📞 Enter your phone number to get a call'}
-          </div>
+        <Box
+          ref={phonePanelRef}
+          role="region"
+          aria-label="Phone call"
+          sx={{
+            ...styles.phoneInputSection,
+            display: 'flex',
+            position: { xs: 'fixed', sm: 'absolute' },
+            bottom: { xs: 24, sm: 120 },
+            right: { xs: 16, sm: 32 },
+            width: { xs: 'calc(100vw - 32px)', sm: 440 },
+            minWidth: 0,
+            maxWidth: 440,
+            maxHeight: 'calc(100dvh - 160px)',
+            overflowY: 'auto',
+            boxSizing: 'border-box',
+          }}
+        >
+          <Typography variant="subtitle2" role="status">
+            {callActive ? `📞 Connected · ${telephonyProviderLabel}`
+              : callInitiating ? '📞 Initiating call…'
+                : currentCallId ? `📞 Calling · ${telephonyProviderLabel} — waiting for connection`
+                  : callAwaitingConnection ? '📞 Call state unconfirmed'
+                  : '📞 Enter your phone number to get a call'}
+          </Typography>
+          <CommunicationProviders
+            catalog={providers.catalog}
+            loading={providers.loading}
+            error={providers.error}
+            telephonyProvider={providers.telephonyProvider}
+            onProviderChange={handleTelephonyProviderChange}
+            onRefresh={providers.refresh}
+            callBusy={callBusy}
+          />
+          <Typography variant="subtitle2">Voice engine (independent of telephony)</Typography>
           <AcsStreamingModeSelector
+            title="Phone voice engine"
+            badgeText="Orchestration"
+            footnote="Applies to the next ACS or Teams Phone call. Browser voice remains unchanged."
             value={selectedStreamingMode}
             onChange={handleStreamingModeChange}
-            disabled={callActive || isCallDisabled}
+            disabled={callBusy}
           />
+          {callError && <Alert severity="error">{callError}</Alert>}
           <div style={styles.phoneInputRow}>
             <input
               type="tel"
+              aria-label="Phone number"
               value={targetPhoneNumber}
               onChange={(e) => setTargetPhoneNumber(e.target.value)}
               placeholder="+15551234567"
-              style={styles.phoneInput}
-              disabled={callActive || isCallDisabled}
+              style={{ ...styles.phoneInput, minWidth: 0 }}
+              disabled={callBusy}
             />
             <button
-              onClick={callActive ? stopRecognition : startACSCall}
-              style={styles.callMeButton(callActive, isCallDisabled)}
+              onClick={callActive || currentCallId ? terminateACSCall : startACSCall}
+              style={styles.callMeButton(callActive || Boolean(currentCallId), callInitiating || (!callBusy && !providers.canCall))}
               title={
-                callActive
+                callActive || currentCallId
                   ? "🔴 Hang up call"
-                  : isCallDisabled
-                    ? "Configure Azure Communication Services to enable calling"
+                  : !providers.canCall
+                    ? "Check the selected provider's server configuration before calling"
                     : "📞 Start phone call"
               }
-              disabled={callActive || isCallDisabled}
+              disabled={callInitiating || (callAwaitingConnection && !currentCallId) || (!callBusy && !providers.canCall)}
             >
-              {callActive ? "🔴 Hang Up" : "📞 Call Me"}
+              {callInitiating ? "Initiating…" : callActive || currentCallId ? "🔴 Hang Up" : callAwaitingConnection ? "Unconfirmed" : "📞 Call Me"}
             </button>
           </div>
-        </div>
+        </Box>
       )}
         {showRealtimeModePanel && typeof document !== 'undefined' &&
           createPortal(

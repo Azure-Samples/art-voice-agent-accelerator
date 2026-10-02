@@ -24,6 +24,9 @@ on:
       - '.github/workflows/live-evals-staging.yml'
       - '.github/workflows/_template-deploy-azd.yml'
       - '.github/workflows/deploy-azd-complete.yml'
+      - '.github/workflows/voicelive-roadmap.md'
+      - '.github/workflows/voicelive-roadmap.lock.yml'
+      - '.github/agents/voicelive-roadmap.agent.md'
       - '.github/quarantined-tests.txt'
   pull_request:
     branches: [main, staging]
@@ -37,6 +40,9 @@ on:
       - '.github/workflows/live-evals-staging.yml'
       - '.github/workflows/_template-deploy-azd.yml'
       - '.github/workflows/deploy-azd-complete.yml'
+      - '.github/workflows/voicelive-roadmap.md'
+      - '.github/workflows/voicelive-roadmap.lock.yml'
+      - '.github/agents/voicelive-roadmap.agent.md'
       - '.github/quarantined-tests.txt'
   workflow_dispatch:
 

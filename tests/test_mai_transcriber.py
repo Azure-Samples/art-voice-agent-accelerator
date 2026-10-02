@@ -225,6 +225,19 @@ async def test_real_session_contract_and_ordered_audio(
 
 
 @pytest.mark.asyncio
+async def test_default_mai_2_is_sent_verbatim_and_rejects_alias_acknowledgement(mai_input) -> None:
+    bundle = mai_input(speech=SpeechConfig())
+    bundle.socket.ack_overrides = {"input_audio_transcription": {"model": "mai-transcribe"}}
+    with pytest.raises(mai.MAITranscriptionError, match="did not acknowledge mai-transcribe-2"):
+        await bundle.provider.start()
+    assert bundle.socket.sent[0]["session"]["input_audio_transcription"] == {
+        "model": "mai-transcribe-2"
+    }
+    assert bundle.http.closed and bundle.socket.closed
+    assert [event["type"] for event in bundle.socket.sent] == ["session.update"]
+
+
+@pytest.mark.asyncio
 async def test_async_auth_reuses_selected_credential_without_closing_it(
     mai_input, monkeypatch
 ) -> None:
@@ -383,7 +396,7 @@ async def test_runtime_error_emits_speech_error_and_closes_input(mai_input, even
     await asyncio.wait_for(bundle.provider._task, 1)
     error = bundle.errors.await_args.args[0]
     assert "unsupported_region" in error
-    assert "Azure Speech was not substituted" in error
+    assert "No other transcription model was substituted" in error
     bundle.errors.assert_awaited_once_with(error)
     assert bundle.queue.empty()
     assert bundle.http.closed and bundle.socket.closed
@@ -588,7 +601,7 @@ async def cascade_input(mai_input, monkeypatch):
 
     async def make(
         *,
-        provider="mai-transcribe",
+        provider=None,
         transport=TransportType.BROWSER,
         scenario=None,
         scoped_agents=None,
@@ -604,7 +617,10 @@ async def cascade_input(mai_input, monkeypatch):
             memo.set_corememory("active_agent", active_agent)
         agent = UnifiedAgent(
             name="Start",
-            speech=SpeechConfig(transcription_model=provider, candidate_languages=["en-US"]),
+            speech=SpeechConfig(
+                candidate_languages=["en-US"],
+                **({"transcription_model": provider} if provider is not None else {}),
+            ),
         )
         app_state = SimpleNamespace(
             redis=object(),
@@ -697,7 +713,7 @@ async def cascade_input(mai_input, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_default_cascade_still_uses_and_releases_only_azure_pools(cascade_input) -> None:
+async def test_explicit_azure_cascade_uses_and_releases_only_azure_pools(cascade_input) -> None:
     bundle = await cascade_input(provider="azure-speech")
     await bundle.handler.start()
     await bundle.handler._handle_browser_audio(b"\x00\x00" * 100)
@@ -722,6 +738,9 @@ async def test_unified_cascade_routes_real_mai_input_without_acquiring_stt(
 ) -> None:
     bundle = await cascade_input(transport=transport)
     await bundle.handler.start()
+    assert bundle.socket.sent[0]["session"]["input_audio_transcription"]["model"] == (
+        "mai-transcribe-2"
+    )
     audio = b"\x01\x00" * 100
     if transport == TransportType.BROWSER:
         await bundle.handler._handle_browser_audio(audio)
@@ -815,7 +834,7 @@ async def test_persisted_active_agent_not_last_created_agent_selects_provider(
 async def test_mai_startup_failure_is_not_announced_ready_and_releases_tts(cascade_input) -> None:
     bundle = await cascade_input()
     bundle.socket.ack_overrides = {"input_audio_transcription": {"model": "azure-speech"}}
-    with pytest.raises(mai.MAITranscriptionError, match="not substituted"):
+    with pytest.raises(mai.MAITranscriptionError, match="No other transcription model"):
         await bundle.handler.start()
     labels = [call.kwargs["event_label"] for call in cascade.send_session_envelope.await_args_list]
     assert labels == []
@@ -908,7 +927,7 @@ async def test_startup_failure_uses_real_shared_error_envelope(cascade_input, mo
     assert envelope["payload"]["code"] == "MAITranscriptionUnavailable"
     assert envelope["payload"]["source"] == "stt"
     assert envelope["payload"]["fatal"] is True
-    assert "Azure Speech was not substituted" in envelope["payload"]["message"]
+    assert "no other model was substituted" in envelope["payload"]["message"]
     bundle.websocket.close.assert_awaited_once_with(
         WS_CLOSE_CODE_VOICE_ERROR, "MAI transcription unavailable"
     )

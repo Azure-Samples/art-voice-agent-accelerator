@@ -1,3 +1,16 @@
+variable "container_images" {
+  description = "Optional initial images for frontend, backend, and cardapi when creating/replacing apps. Subsequent image deployments remain managed by azd."
+  type        = map(string)
+  default     = {}
+  validation {
+    condition = alltrue([
+      for name, image in var.container_images :
+      contains(["frontend", "backend", "cardapi"], name) && length(trimspace(image)) > 0
+    ])
+    error_message = "container_images supports only frontend, backend, and cardapi with nonempty image references."
+  }
+}
+
 # ============================================================================
 # CONTAINER REGISTRY
 # ============================================================================
@@ -53,6 +66,23 @@ resource "azurerm_container_app_environment" "main" {
 
   log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
 
+  public_network_access = var.enable_front_door ? "Disabled" : "Enabled"
+
+  dynamic "workload_profile" {
+    for_each = var.container_app_workload_profiles_enabled ? [1] : []
+    content {
+      name                  = "Consumption"
+      workload_profile_type = "Consumption"
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = !var.enable_front_door || var.container_app_workload_profiles_enabled
+      error_message = "Front Door requires container_app_workload_profiles_enabled=true. Review the environment replacement plan before migrating a legacy deployment."
+    }
+  }
+
   tags = local.tags
 }
 
@@ -79,6 +109,7 @@ resource "azurerm_container_app" "frontend" {
   container_app_environment_id = azurerm_container_app_environment.main.id
   resource_group_name          = azurerm_resource_group.main.name
   revision_mode                = "Single"
+  workload_profile_name        = var.container_app_workload_profiles_enabled ? "Consumption" : null
 
   // Image is managed outside of terraform (i.e azd deploy)
   // EasyAuth configs are managed outside of terraform
@@ -123,7 +154,7 @@ resource "azurerm_container_app" "frontend" {
 
     container {
       name   = "main"
-      image  = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
+      image  = lookup(var.container_images, "frontend", "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest")
       cpu    = 0.5
       memory = local.normalized_frontend_memory
 
@@ -167,6 +198,16 @@ resource "azurerm_container_app" "backend" {
   container_app_environment_id = azurerm_container_app_environment.main.id
   resource_group_name          = azurerm_resource_group.main.name
   revision_mode                = "Single"
+  workload_profile_name        = var.container_app_workload_profiles_enabled ? "Consumption" : null
+
+  dynamic "secret" {
+    for_each = var.enable_front_door ? [1] : []
+    content {
+      name                = "event-grid-webhook-secret"
+      identity            = azurerm_user_assigned_identity.backend.id
+      key_vault_secret_id = azurerm_key_vault_secret.event_grid_webhook[0].versionless_id
+    }
+  }
 
   identity {
     type         = "SystemAssigned, UserAssigned"
@@ -193,7 +234,7 @@ resource "azurerm_container_app" "backend" {
 
     container {
       name   = "main"
-      image  = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
+      image  = lookup(var.container_images, "backend", "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest")
       cpu    = var.container_cpu_cores
       memory = local.normalized_backend_memory
 
@@ -239,6 +280,30 @@ resource "azurerm_container_app" "backend" {
         name  = "PYTHONUNBUFFERED"
         value = "1"
       }
+
+      env {
+        name  = "ENABLE_FRONT_DOOR"
+        value = tostring(var.enable_front_door)
+      }
+
+      dynamic "env" {
+        for_each = var.enable_front_door ? {
+          ACS_AUDIENCE        = azapi_resource.acs.output.properties.immutableResourceId
+          ACS_ARM_RESOURCE_ID = azapi_resource.acs.id
+        } : {}
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
+      dynamic "env" {
+        for_each = var.enable_front_door ? [1] : []
+        content {
+          name        = "EVENT_GRID_WEBHOOK_SECRET"
+          secret_name = "event-grid-webhook-secret"
+        }
+      }
     }
   }
 
@@ -247,11 +312,10 @@ resource "azurerm_container_app" "backend" {
   })
 
   // Image is managed outside of terraform (i.e azd deploy)
-  // Note: env vars are now managed via Azure App Configuration (apps read at runtime)
+  // Terraform owns bootstrap/security env vars; runtime settings come from App Configuration.
   lifecycle {
     ignore_changes = [
-      template[0].container[0].image,
-      template[0].container[0].env
+      template[0].container[0].image
     ]
   }
   depends_on = [
@@ -302,8 +366,8 @@ resource "azapi_update_resource" "backend_sticky_sessions" {
           # frontend Container App fail their preflight with "No
           # 'Access-Control-Allow-Origin' header is present".
           corsPolicy = {
-            allowedOrigins   = ["https://${azurerm_container_app.frontend.ingress[0].fqdn}"]
-            allowedMethods   = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+            allowedOrigins = ["https://${local.frontend_public_hostname}"]
+            allowedMethods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
             # Includes the Application Insights JS SDK correlation headers
             # (Request-Id, Request-Context, traceparent, tracestate) so browser
             # distributed-tracing calls are not rejected at the ingress preflight.
@@ -369,17 +433,17 @@ output "BACKEND_CONTAINER_APP_FQDN" {
 }
 
 output "FRONTEND_CONTAINER_APP_URL" {
-  description = "Frontend Container App URL"
-  value       = "https://${azurerm_container_app.frontend.ingress[0].fqdn}"
+  description = "Frontend public URL (Front Door when enabled)"
+  value       = "https://${local.frontend_public_hostname}"
 }
 
 output "BACKEND_CONTAINER_APP_URL" {
-  description = "Backend Container App URL"
-  value       = "https://${azurerm_container_app.backend.ingress[0].fqdn}"
+  description = "Backend public URL (Front Door when enabled)"
+  value       = "https://${local.backend_public_hostname}"
 }
 
 
 output "BACKEND_API_URL" {
   description = "Backend API URL"
-  value       = "https://${azurerm_container_app.backend.ingress[0].fqdn}"
+  value       = "https://${local.backend_public_hostname}"
 }

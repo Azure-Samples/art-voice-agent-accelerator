@@ -18,8 +18,9 @@ import ToolCatalogPicker from './ToolCatalogPicker.jsx';
 import PromptEditorDialog from './PromptEditorDialog.jsx';
 import VoiceSelector from './VoiceSelector.jsx';
 import {
-  MAI_TRANSCRIPTION_MODEL, maiConfigurationError, maiVoiceRank, normalizeTranscriptionModel,
-  useManagedMaiPipeline, voiceLivePipeline,
+  DEFAULT_TRANSCRIPTION_MODEL, MAI_TRANSCRIPTION_MODEL, effectiveTranscriptionModel,
+  isMaiTranscriptionModel, maiConfigurationError, maiVoiceRank, normalizeTranscriptionModel,
+  transcriptionHelp, transcriptionModelLabel, useManagedMaiPipeline, voiceLivePipeline,
 } from '../utils/maiSpeech.js';
 
 const sectionStyle = {
@@ -84,12 +85,14 @@ const QuickTuneAgentEditor = memo(function QuickTuneAgentEditor({
   ), [assignmentAgents, config.name, config.tools]);
   const transcription = normalizeTranscriptionModel(voiceLive
     ? config.session?.input_audio_transcription_settings?.model
-    : config.speech?.transcription_model || 'azure-speech');
+    : config.speech?.transcription_model) || (voiceLive ? '' : DEFAULT_TRANSCRIPTION_MODEL);
   const transcriptionOptions = [...new Set([
-    ...(voiceLive ? TRANSCRIPTION_MODELS : [MAI_TRANSCRIPTION_MODEL, 'azure-speech']), transcription,
+    ...(voiceLive ? TRANSCRIPTION_MODELS : [DEFAULT_TRANSCRIPTION_MODEL, MAI_TRANSCRIPTION_MODEL, 'azure-speech']), transcription,
   ])].filter(Boolean);
-  const maiInput = transcription === MAI_TRANSCRIPTION_MODEL;
-  const maiSupported = voiceMetadata?.runtime_transcription_models?.[mode]?.includes(MAI_TRANSCRIPTION_MODEL);
+  const effectiveModel = effectiveTranscriptionModel(config, mode);
+  const maiInput = isMaiTranscriptionModel(effectiveModel);
+  const supportedModels = voiceMetadata?.runtime_transcription_models?.[mode] || [];
+  const maiSupported = supportedModels.includes(effectiveModel);
   const maiError = maiConfigurationError(config, mode, voiceMetadata ?? null);
   const pipeline = voiceLivePipeline(config);
   const azureOnlyOptions = config.session?.input_audio_transcription_settings || {};
@@ -213,20 +216,17 @@ const QuickTuneAgentEditor = memo(function QuickTuneAgentEditor({
                   ? set('voice', { ...config.voice, name, type: 'azure-standard', endpoint_id: null })
                   : nested('voice', 'name', name)} />
               <TextField select size="small" label="Input transcription" value={transcription}
-                slotProps={{ select: authoringSelectProps }} sx={{ gridColumn: '1 / -1' }}
+                slotProps={{ select: { ...authoringSelectProps, displayEmpty: true }, inputLabel: { shrink: true } }}
+                sx={{ gridColumn: '1 / -1' }}
                 onChange={(event) => voiceLive
                   ? nested('session', 'input_audio_transcription_settings',
-                    event.target.value ? { ...azureOnlyOptions, model: event.target.value } : null)
+                    { ...azureOnlyOptions, model: event.target.value })
                   : nested('speech', 'transcription_model', event.target.value)}
-                helperText={maiInput
-                  ? voiceLive ? 'MAI Transcribe (managed preview). This is the service alias, not a version-pinned fast transcription model.'
-                    : 'MAI uses a speech-only VoiceLive connection. Your Custom Speech LLM and TTS remain unchanged.'
-                  : voiceLive ? 'Transcription choices depend on the selected VoiceLive pipeline.'
-                    : 'Azure Speech uses the existing pooled streaming recognizer.'}>
+                helperText={transcriptionHelp(config, mode)}>
                 {transcriptionOptions.map((model) => (
-                  <MenuItem key={model} value={model} disabled={model === MAI_TRANSCRIPTION_MODEL && !maiSupported}>
-                    {model === MAI_TRANSCRIPTION_MODEL ? `MAI Transcribe (preview)${maiSupported ? '' : ' - backend update required'}`
-                      : model === 'azure-speech' ? 'Azure Speech' : model}
+                  <MenuItem key={model} value={model} disabled={isMaiTranscriptionModel(model) && !supportedModels.includes(model)}>
+                    {transcriptionModelLabel(model)}
+                    {isMaiTranscriptionModel(model) && !supportedModels.includes(model) ? ' - backend update required' : ''}
                   </MenuItem>
                 ))}
                 {voiceLive && <MenuItem value="">Use configured default</MenuItem>}

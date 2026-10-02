@@ -64,7 +64,7 @@ prompt() {
 
 # Check dependencies
 check_dependencies() {
-    local deps=("az" "azd")
+    local deps=("az" "azd" "jq")
     for cmd in "${deps[@]}"; do
         if ! command -v "$cmd" &> /dev/null; then
             log_error "Missing required command: $cmd"
@@ -127,6 +127,88 @@ generate_names() {
     echo "tfstate${short_env}${suffix} tfstate rg-tfstate-${short_env}-${suffix}"
 }
 
+# Repair an existing state account only when the deployer explicitly opts in.
+# Merge the policy-supported exclusion tag before changing network access.
+ensure_state_network_access() {
+    local account="$1" resource_group="$2"
+    local nsp_profile="${TF_STATE_NSP_PROFILE_ID:-$(get_azd_env TF_STATE_NSP_PROFILE_ID)}"
+    if [[ -n "$nsp_profile" ]]; then
+        local subscription container state_key access_script
+        subscription="${AZURE_SUBSCRIPTION_ID:-$(get_azd_env AZURE_SUBSCRIPTION_ID)}"
+        container=$(get_azd_env RS_CONTAINER_NAME)
+        state_key=$(get_azd_env RS_STATE_KEY)
+        access_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/terraform-state-access.py"
+        log_info "Validating enforced NSP state access; no public-access exemption will be applied."
+        python3 "$access_script" validate --subscription "$subscription" \
+            --resource-group "$resource_group" --account "$account" \
+            --container "$container" --blob "$state_key" --nsp-profile-id "$nsp_profile"
+        return $?
+    fi
+    local enabled="${TF_STATE_ALLOW_PUBLIC_ACCESS:-$(get_azd_env TF_STATE_ALLOW_PUBLIC_ACCESS)}"
+    case "${enabled:-false}" in
+        false) return 0 ;;
+        true) ;;
+        *)
+            log_error "TF_STATE_ALLOW_PUBLIC_ACCESS must be true or false."
+            return 1
+            ;;
+    esac
+
+    local tag_name="${TF_STATE_EXCLUSION_TAG_NAME:-$(get_azd_env TF_STATE_EXCLUSION_TAG_NAME)}"
+    local tag_value="${TF_STATE_EXCLUSION_TAG_VALUE:-$(get_azd_env TF_STATE_EXCLUSION_TAG_VALUE)}"
+    tag_name="${tag_name:-SecurityControl}"
+    tag_value="${tag_value:-Ignore}"
+    local ip="${TF_STATE_ALLOWED_IP:-$(get_azd_env TF_STATE_ALLOWED_IP)}"
+    if [[ -z "$ip" ]]; then
+        if ! ip=$(get_public_ip); then
+            log_error "Cannot discover the deployer's public IP. Set TF_STATE_ALLOWED_IP to the Azure-facing IPv4 address."
+            return 1
+        fi
+    fi
+    if ! jq -en --arg ip "$ip" '
+        ($ip | split(".")) as $parts |
+        ($parts | length) == 4 and
+        all($parts[]; test("^[0-9]{1,3}$") and (tonumber >= 0 and tonumber <= 255))
+    ' >/dev/null; then
+        log_error "TF_STATE_ALLOWED_IP must be one IPv4 address, not a range or wildcard."
+        return 1
+    fi
+
+    local storage_id
+    storage_id=$(az storage account show --name "$account" --resource-group "$resource_group" --query id -o tsv) || return 1
+    if [[ -z "$storage_id" ]]; then
+        log_error "Could not resolve state account '$account'; no network changes made."
+        return 1
+    fi
+    local current_mode
+    current_mode=$(az storage account show --name "$account" --resource-group "$resource_group" \
+        --query publicNetworkAccess -o tsv) || return 1
+    if [[ "$current_mode" == "SecuredByPerimeter" ]]; then
+        log_error "TF_STATE_NSP_PROFILE_ID is required for this account; refusing to downgrade perimeter security."
+        return 1
+    fi
+
+    log_info "Applying policy exclusion ${tag_name}=${tag_value} to state account '$account' only."
+    az tag update --resource-id "$storage_id" --operation Merge \
+        --tags "${tag_name}=${tag_value}" --output none || return 1
+    # Set the deny-by-default firewall before enabling the public endpoint.
+    az storage account update --name "$account" --resource-group "$resource_group" \
+        --default-action Deny --output none || return 1
+    az storage account network-rule add --account-name "$account" \
+        --resource-group "$resource_group" --ip-address "$ip" --output none || return 1
+    az storage account update --name "$account" --resource-group "$resource_group" \
+        --public-network-access Enabled --allow-blob-public-access false --output none || return 1
+
+    local network
+    network=$(az storage account show --name "$account" --resource-group "$resource_group" \
+        --query '{publicNetworkAccess:publicNetworkAccess,defaultAction:networkRuleSet.defaultAction}' -o json) || return 1
+    if ! jq -e '.publicNetworkAccess == "Enabled" and .defaultAction == "Deny"' <<< "$network" >/dev/null; then
+        log_error "State access remains restricted by policy. Confirm the approved exclusion tag or use a private endpoint; refusing to weaken the firewall."
+        return 1
+    fi
+    log_success "State endpoint enabled with an IP allowlist; Entra authentication remains required."
+}
+
 # Create storage resources
 create_storage() {
     local storage_account="$1"
@@ -175,6 +257,8 @@ create_storage() {
         if [[ $waited -ge $max_wait ]]; then
             log_warning "Storage account may not be fully ready after ${max_wait}s, proceeding anyway"
         fi
+
+        ensure_state_network_access "$storage_account" "$resource_group" || return 1
             
         # Enable versioning and change feed (best-effort)
         # Some Azure CLI versions/extensions may hit InvalidApiVersionParameter; do not fail setup.
@@ -367,6 +451,11 @@ main() {
     local env_name="${AZURE_ENV_NAME:-$(get_azd_env "AZURE_ENV_NAME")}"
     local location="${AZURE_LOCATION:-$(get_azd_env "AZURE_LOCATION")}"
     local sub_id=$(az account show --query id -o tsv)
+    local expected_sub="${AZURE_SUBSCRIPTION_ID:-$(get_azd_env AZURE_SUBSCRIPTION_ID)}"
+    if [[ -n "$expected_sub" && "$expected_sub" != "$sub_id" ]]; then
+        log_error "Azure CLI subscription '$sub_id' does not match this azd environment ('$expected_sub'). No state resources were changed."
+        return 1
+    fi
     
     if [[ -z "$env_name" ]]; then
         log_error "AZURE_ENV_NAME is not set in the azd environment."
@@ -386,9 +475,10 @@ main() {
     local resource_group=$(get_azd_env "RS_RESOURCE_GROUP")
     local state_key=$(get_azd_env "RS_STATE_KEY")
     
-    # If all 4 remote state config values are set, skip setup entirely
+    # Reused accounts can have policy/network drift even when config is complete.
     if [[ -n "$storage_account" ]] && [[ -n "$container" ]] && [[ -n "$resource_group" ]] && [[ -n "$state_key" ]]; then
-        log_success "Remote state already configured - skipping setup"
+        ensure_state_network_access "$storage_account" "$resource_group" || return 1
+        log_success "Remote state already configured - reusing existing account"
         log_info "  Storage Account: $storage_account"
         log_info "  Container: $container" 
         log_info "  Resource Group: $resource_group"
@@ -398,6 +488,7 @@ main() {
     
     # Partial or no config - need to set up
     if [[ -n "$storage_account" ]] && [[ -n "$container" ]] && [[ -n "$resource_group" ]] && storage_exists "$storage_account" "$resource_group"; then
+        ensure_state_network_access "$storage_account" "$resource_group" || return 1
         log_success "Using existing remote state configuration"
         log_info "Storage Account: $storage_account"
         log_info "Container: $container" 
@@ -476,6 +567,8 @@ main() {
                 log_info "   Resource Group:  $resource_group"
                 log_info "   Storage Account: $storage_account"
                 log_info "   Container:       $container"
+
+                ensure_state_network_access "$storage_account" "$resource_group" || return 1
                 
                 # For existing resources, just set the variables and let Terraform validate
                 # Don't try to create anything - the user says these already exist
@@ -536,8 +629,7 @@ main() {
     footer
 }
 
-# Handle script interruption
-trap 'log_error "Script interrupted"; exit 130' INT
-
-# Run main function
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    trap 'log_error "Script interrupted"; exit 130' INT
+    main "$@"
+fi

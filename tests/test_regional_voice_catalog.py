@@ -140,8 +140,9 @@ async def test_routing_capabilities_do_not_claim_regional_mai_availability(
     assert response.status_code == 200
     data = response.json()
     assert data["runtime_transcription_models"] == {
-        "cascade": ["azure-speech", "mai-transcribe"],
+        "cascade": ["mai-transcribe-2", "azure-speech", "mai-transcribe"],
         "voicelive": [
+            "mai-transcribe-2",
             "mai-transcribe",
             "azure-speech",
             "gpt-4o-transcribe",

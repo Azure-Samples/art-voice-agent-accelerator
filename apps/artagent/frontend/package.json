@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0 --port 8080",
     "start": "serve -s dist -l tcp://0.0.0.0:8080 --single",
-    "test:unit": "node --test src/utils/turnMessages.test.js src/utils/conversationBubbles.test.js src/utils/envelopeDedupe.test.js src/utils/foundryRegions.test.js src/utils/sessionContract.test.js src/utils/scenarioGraph.test.js src/components/ChatBubble.render.test.js src/components/SessionConfigCard.render.test.js",
+    "test:unit": "node --test src/utils/turnMessages.test.js src/utils/conversationBubbles.test.js src/utils/envelopeDedupe.test.js src/utils/foundryRegions.test.js src/utils/maiSpeech.test.js src/utils/sessionContract.test.js src/utils/scenarioGraph.test.js src/utils/communicationProviders.test.js src/components/ChatBubble.render.test.js src/components/SessionConfigCard.render.test.js",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed"
   },

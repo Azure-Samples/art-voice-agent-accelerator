@@ -248,6 +248,8 @@ class ACSLifecycleHandler:
         browser_session_id: str = None,  # NEW: Browser session ID for UI coordination
         stream_mode: StreamMode | None = None,
         record_call: bool | None = None,
+        *,
+        telephony_provider: str = "acs",
     ) -> dict[str, Any]:
         """
         Initiate an outbound call with orchestrator support.
@@ -285,6 +287,7 @@ class ACSLifecycleHandler:
                 "api.version": "v1",
                 "stream.mode": str(effective_stream_mode),
                 "call.recording_enabled": recording_enabled,
+                "call.telephony_provider": telephony_provider,
             },
         ) as span:
             try:
@@ -292,7 +295,13 @@ class ACSLifecycleHandler:
 
                 start_time = time.perf_counter()
                 result = await acs_caller.initiate_call(
-                    target_number, stream_mode=effective_stream_mode
+                    target_number,
+                    stream_mode=effective_stream_mode,
+                    **(
+                        {"telephony_provider": telephony_provider}
+                        if telephony_provider != "acs"
+                        else {}
+                    ),
                 )
                 latency = time.perf_counter() - start_time
 
@@ -374,6 +383,7 @@ class ACSLifecycleHandler:
                         "browser_session_id": browser_session_id,  # Include in event data
                         "streaming_mode": str(effective_stream_mode),
                         "recording_enabled": recording_enabled,
+                        "telephony_provider": telephony_provider,
                     },
                     redis_mgr,
                 )
@@ -388,6 +398,7 @@ class ACSLifecycleHandler:
                     "initiated_at": datetime.utcnow().isoformat() + "Z",
                     "streaming_mode": str(effective_stream_mode),
                     "recording_enabled": recording_enabled,
+                    "telephony_provider": telephony_provider,
                 }
 
             except (HttpResponseError, RuntimeError) as exc:

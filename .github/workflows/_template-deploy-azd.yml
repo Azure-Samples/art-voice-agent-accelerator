@@ -184,6 +184,10 @@ jobs:
       RS_RESOURCE_GROUP: ${{ inputs.rs_resource_group || vars.rs_resource_group }}
       RS_STORAGE_ACCOUNT: ${{ inputs.rs_storage_account || vars.rs_storage_account }}
       RS_CONTAINER_NAME: ${{ inputs.rs_container_name || vars.rs_container_name }}
+      TF_STATE_MANAGE_RUNNER_IP: ${{ vars.TF_STATE_MANAGE_RUNNER_IP || 'false' }}
+      TF_STATE_RUNNER_IP: ${{ vars.TF_STATE_RUNNER_IP }}
+      TF_STATE_NSP_PROFILE_ID: ${{ vars.TF_STATE_NSP_PROFILE_ID }}
+      TF_VAR_front_door_allowed_service_tags: ${{ secrets.FRONT_DOOR_ALLOWED_SERVICE_TAGS || '[]' }}
     
     steps:
       - name: 🛒 Checkout
@@ -210,6 +214,7 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.9.0
+          terraform_wrapper: false
 
       - name: 🔐 AZD Login
         run: |
@@ -235,6 +240,12 @@ jobs:
           # Set location from tfvars
           TFVARS_FILE="infra/terraform/params/main.tfvars.${AZURE_ENV_NAME}.json"
           [ -f "$TFVARS_FILE" ] && azd env set AZURE_LOCATION "$(jq -r '.location // "eastus2"' "$TFVARS_FILE")"
+
+      - name: 🔓 Open Terraform State Access
+        run: |
+          python devops/scripts/azd/helpers/terraform-state-access.py open \
+            --blob "${AZURE_ENV_NAME}.tfstate" \
+            --lease-file "${RUNNER_TEMP}/terraform-state-access.json"
 
       - name: 🪝 Run Preprovision Hook
         run: |
@@ -332,11 +343,17 @@ jobs:
           echo "| Replace | ${{ steps.summary.outputs.replaces }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Delete | ${{ steps.summary.outputs.deletes }} |" >> $GITHUB_STEP_SUMMARY
 
+      - name: 🔒 Close Terraform State Access
+        if: always()
+        run: |
+          python devops/scripts/azd/helpers/terraform-state-access.py close \
+            --lease-file "${RUNNER_TEMP}/terraform-state-access.json"
+
   # ============================================================================
   # JOB: EXECUTE - Run AZD Commands (provision/deploy/up/down)
   # ============================================================================
   execute:
-    name: ${{ inputs.action == 'provision' && '🏗️ Provision' || inputs.action == 'deploy' && '📦 Deploy' || inputs.action == 'up' && '🚀 Up' || '💥 Down' }}
+    name: ${{ inputs.action == 'validate-state' && '🔎 Validate State Access' || inputs.action == 'provision' && '🏗️ Provision' || inputs.action == 'deploy' && '📦 Deploy' || inputs.action == 'up' && '🚀 Up' || '💥 Down' }}
     runs-on: ubuntu-latest
     needs: setup
     if: github.event_name != 'pull_request' && needs.setup.outputs.auth_success == 'true'
@@ -366,6 +383,10 @@ jobs:
       RS_RESOURCE_GROUP: ${{ inputs.rs_resource_group || vars.rs_resource_group }}
       RS_STORAGE_ACCOUNT: ${{ inputs.rs_storage_account || vars.rs_storage_account }}
       RS_CONTAINER_NAME: ${{ inputs.rs_container_name || vars.rs_container_name }}
+      TF_STATE_MANAGE_RUNNER_IP: ${{ vars.TF_STATE_MANAGE_RUNNER_IP || 'false' }}
+      TF_STATE_RUNNER_IP: ${{ vars.TF_STATE_RUNNER_IP }}
+      TF_STATE_NSP_PROFILE_ID: ${{ vars.TF_STATE_NSP_PROFILE_ID }}
+      TF_VAR_front_door_allowed_service_tags: ${{ secrets.FRONT_DOOR_ALLOWED_SERVICE_TAGS || '[]' }}
       DB_INITIALIZED: ${{ inputs.db_initialized || vars.db_initialized }}
       # Use existing App Config from environment variables if available
       EXISTING_APPCONFIG_ENDPOINT: ${{ needs.setup.outputs.appconfig_endpoint_existing }}
@@ -402,6 +423,7 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.9.0
+          terraform_wrapper: false
 
       - name: 🔐 AZD Login
         run: |
@@ -422,6 +444,7 @@ jobs:
           azd env set RS_RESOURCE_GROUP "$RS_RESOURCE_GROUP"
           azd env set RS_STORAGE_ACCOUNT "$RS_STORAGE_ACCOUNT"
           azd env set RS_CONTAINER_NAME "$RS_CONTAINER_NAME"
+          azd env set RS_STATE_KEY "${AZURE_ENV_NAME}.tfstate"
           azd env set DB_INITIALIZED "${DB_INITIALIZED:-true}"
           
           # Set location from tfvars
@@ -493,8 +516,43 @@ jobs:
           }
           EOF
 
+      - name: 🔓 Open Terraform State Access
+        run: |
+          python devops/scripts/azd/helpers/terraform-state-access.py open \
+            --blob "${AZURE_ENV_NAME}.tfstate" \
+            --lease-file "${RUNNER_TEMP}/terraform-state-access.json"
+
+      - name: 🔎 Validate State Access with AZD
+        if: inputs.action == 'validate-state'
+        run: |
+          set -euo pipefail
+          umask 077
+          python devops/scripts/azd/helpers/terraform-state-access.py validate \
+            --blob "${AZURE_ENV_NAME}.tfstate"
+          # azd keeps an environment-specific Terraform module/provider cache.
+          export TF_DATA_DIR="$GITHUB_WORKSPACE/.azure/$AZURE_ENV_NAME/infra/terraform/.terraform"
+          mkdir -p "$TF_DATA_DIR"
+          if ! terraform -chdir=infra/terraform init -input=false -no-color \
+              > "$RUNNER_TEMP/state-init.log" 2>&1; then
+            echo "::error::Terraform backend initialization failed; no deployment was attempted."
+            exit 1
+          fi
+          if ! azd env refresh "$AZURE_ENV_NAME" --no-prompt \
+              > "$RUNNER_TEMP/state-refresh.log" 2>&1; then
+            echo "::error::azd could not read the existing state; no deployment was attempted."
+            exit 1
+          fi
+          echo "Entra-authenticated state access and azd environment refresh succeeded." >> "$GITHUB_STEP_SUMMARY"
+          echo "No Terraform plan/apply, image deployment, or public-network override was run." >> "$GITHUB_STEP_SUMMARY"
+        env:
+          ARM_CLIENT_ID: ${{ env.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC: ${{ env.USE_OIDC }}
+          ARM_CLIENT_SECRET: ${{ env.USE_OIDC == 'false' && env.AZURE_CLIENT_SECRET || '' }}
+
       - name: 📥 Load AZD Environment Values
-        if: inputs.action != 'down'
+        if: inputs.action != 'down' && inputs.action != 'validate-state'
         run: |
           # Pull any previously saved values (including AZURE_RESOURCE_GROUP) from the azd environment
           if azd env get-values > /tmp/azd-values.env 2>/dev/null; then
@@ -534,7 +592,7 @@ jobs:
       # has been deployed yet (resource group absent).
       # ----------------------------------------------------------------------
       - name: 🌐 Make Resources Public (pre-deploy)
-        if: inputs.action == 'up' || inputs.action == 'deploy'
+        if: (inputs.action == 'up' || inputs.action == 'deploy') && vars.ALLOW_LEGACY_PUBLIC_NETWORKING == 'true'
         run: |
           set -euo pipefail
 
@@ -544,6 +602,12 @@ jobs:
             # shellcheck disable=SC1091
             source /tmp/azd-values.env
             set +a
+          fi
+          if [ -n "${TF_STATE_NSP_PROFILE_ID:-}" ] ||
+             [ "${FRONT_DOOR_ENABLED:-false}" = "true" ] ||
+             [ "${ENABLE_FRONT_DOOR:-false}" = "true" ]; then
+            echo "::error::Legacy public-network overrides cannot be used with NSP or Front Door."
+            exit 1
           fi
 
           RG="${AZURE_RESOURCE_GROUP:-}"
@@ -626,11 +690,19 @@ jobs:
           echo "🌐 Ensuring backend Container Apps CORS allows the deployed frontend..."
           azd env get-values > /tmp/azd-values.env
           source /tmp/azd-values.env
+          FRONTEND_ORIGIN="${FRONTEND_PUBLIC_FQDN:-}"
+          if [ -z "$FRONTEND_ORIGIN" ]; then
+            if [ "${FRONT_DOOR_ENABLED:-false}" = "true" ]; then
+              echo "::error::Front Door requires FRONTEND_PUBLIC_FQDN; refusing an origin-host fallback."
+              exit 1
+            fi
+            FRONTEND_ORIGIN="${FRONTEND_CONTAINER_APP_FQDN}"
+          fi
 
           bash devops/scripts/azd/helpers/update-backend-cors.sh \
             -g "${AZURE_RESOURCE_GROUP}" \
             -b "${BACKEND_CONTAINER_APP_NAME}" \
-            -f "${FRONTEND_CONTAINER_APP_FQDN}"
+            -f "$FRONTEND_ORIGIN"
         env:
           ARM_CLIENT_ID: ${{ env.AZURE_CLIENT_ID }}
           ARM_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
@@ -742,6 +814,12 @@ jobs:
             echo "ℹ️ APPLICATIONINSIGHTS_CONNECTION_STRING not present in azd env; skipping."
           fi
 
+      - name: 🔒 Close Terraform State Access
+        if: always()
+        run: |
+          python devops/scripts/azd/helpers/terraform-state-access.py close \
+            --lease-file "${RUNNER_TEMP}/terraform-state-access.json"
+
       - name: �🚪 Logout
         if: always()
         run: az logout || true
@@ -756,7 +834,7 @@ jobs:
       contents: read
       actions: write
     needs: [setup, execute]
-    if: always() && github.event_name != 'pull_request' && needs.execute.result == 'success'
+    if: always() && github.event_name != 'pull_request' && needs.execute.result == 'success' && inputs.action != 'validate-state'
     environment: ${{ inputs.environment }}
     
     steps:

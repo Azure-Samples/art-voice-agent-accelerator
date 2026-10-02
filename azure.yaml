@@ -57,3 +57,9 @@ hooks:
     run: devops/scripts/azd/postdown.sh
     interactive: true
     continueOnError: true
+
+  postdeploy:
+    shell: sh
+    run: devops/scripts/azd/postdeploy.sh
+    interactive: false
+    continueOnError: false

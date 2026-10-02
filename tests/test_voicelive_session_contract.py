@@ -238,7 +238,7 @@ async def test_handoff_transcription_uses_bound_connection_not_target_configurat
 
     if allowed:
         await voicelive_session.apply_voicelive_session(agent, conn, **kwargs)
-        assert conn.last_update.input_audio_transcription.model == "mai-transcribe"
+        assert conn.last_update.input_audio_transcription.model == "mai-transcribe-2"
         assert agent.session["input_audio_transcription_settings"]["model"] == "mai-transcribe-2"
     else:
         with pytest.raises(ValueError, match="mai-transcribe"):

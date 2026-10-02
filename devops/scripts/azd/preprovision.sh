@@ -67,6 +67,17 @@ get_azd_env_value() {
     fi
 }
 
+get_azd_boolean_override() {
+    local value
+    if value=$(azd env get-value "$1" 2>/dev/null); then
+        if [[ -z "$value" ]]; then
+            fail "$1 must be true or false, not empty."
+            return 1
+        fi
+        printf '%s' "$value"
+    fi
+}
+
 get_deployer_identity() {
     local name=""
     
@@ -330,6 +341,36 @@ generate_tfvars_json() {
         base=$(jq -s '.[0] * .[1]' <(printf '%s' "$base") "$candidate")
         log "   merged params: $(basename "$candidate")"
     done
+
+    # Explicit shell/azd values override params; absence preserves checked-in values.
+    local front_door workload_profiles
+    front_door="${ENABLE_FRONT_DOOR-$(get_azd_boolean_override ENABLE_FRONT_DOOR)}" || return 1
+    workload_profiles="${CONTAINER_APP_WORKLOAD_PROFILES_ENABLED-$(get_azd_boolean_override CONTAINER_APP_WORKLOAD_PROFILES_ENABLED)}" || return 1
+    if [[ "${ENABLE_FRONT_DOOR+x}" && -z "$front_door" ]] ||
+       [[ "${CONTAINER_APP_WORKLOAD_PROFILES_ENABLED+x}" && -z "$workload_profiles" ]]; then
+        fail "ENABLE_FRONT_DOOR and CONTAINER_APP_WORKLOAD_PROFILES_ENABLED must be true or false, not empty."
+        return 1
+    fi
+    if ! base=$(jq --arg afd "$front_door" --arg profiles "$workload_profiles" '
+        def boolean($name):
+            ascii_downcase |
+            if . == "true" then true elif . == "false" then false
+            else error($name + " must be true or false") end;
+        (if $afd != "" then .enable_front_door = ($afd | boolean("ENABLE_FRONT_DOOR")) else . end) |
+        (if $profiles != "" then
+            .container_app_workload_profiles_enabled = ($profiles | boolean("CONTAINER_APP_WORKLOAD_PROFILES_ENABLED"))
+         else . end) |
+        if (has("enable_front_door") and (.enable_front_door | type) != "boolean") or
+           (has("container_app_workload_profiles_enabled") and (.container_app_workload_profiles_enabled | type) != "boolean")
+        then error("Front Door and workload profile params must be JSON booleans") else . end |
+        if .enable_front_door == true and .container_app_workload_profiles_enabled != true
+        then error("ENABLE_FRONT_DOOR requires CONTAINER_APP_WORKLOAD_PROFILES_ENABLED=true") else . end
+    ' <<< "$base"); then
+        fail "Invalid Front Door configuration; no tfvars were written."
+        return 1
+    fi
+    ENABLE_FRONT_DOOR=$(jq -r '.enable_front_door // false' <<< "$base")
+    export ENABLE_FRONT_DOOR
     
     # Build JSON using jq for proper escaping
     local json_content
@@ -385,6 +426,10 @@ provider_terraform() {
     # Generate main.tfvars.json from current azd environment
     # This ensures tfvars stays in sync when switching azd environments
     generate_tfvars_json
+
+    if [[ "$ENABLE_FRONT_DOOR" == "true" ]]; then
+        check_frontdoor_resource_providers
+    fi
     
     # Run remote state initialization (only if not using local state)
     local local_state="${LOCAL_STATE:-}"
@@ -507,4 +552,6 @@ main() {
     phase_success "Pre-provisioning complete!"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

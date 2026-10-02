@@ -136,17 +136,18 @@ sequenceDiagram
             <figcaption class="az-diagram-caption">Numbered arrows show the per-turn flow: transcribe → reason → synthesize.</figcaption>
           </div>
 
-<pre><code>Audio In → <span class="tok-fn">Azure Speech STT</span> → Transcript → <span class="tok-fn">Azure OpenAI</span> → Text → <span class="tok-fn">Azure Speech TTS</span> → Audio Out</code></pre>
+<pre><code>Audio In → <span class="tok-fn">MAI Transcribe 2.0</span> → Transcript → <span class="tok-fn">Azure OpenAI</span> → Text → <span class="tok-fn">Azure Speech TTS</span> → Audio Out</code></pre>
           <table>
             <thead><tr><th>Component</th><th>Options</th></tr></thead>
             <tbody>
-              <tr><td><strong>STT</strong></td><td>Azure Speech, Whisper, Custom Speech models</td></tr>
+              <tr><td><strong>STT</strong></td><td>MAI Transcribe 2.0 by default; Azure Speech remains an explicit override.</td></tr>
               <tr><td><strong>LLM</strong></td><td>Any Azure OpenAI model, or bring your own</td></tr>
               <tr><td><strong>TTS</strong></td><td>400+ Azure neural voices, custom styles &amp; prosody</td></tr>
               <tr><td><strong>VAD</strong></td><td>Custom silence thresholds, barge-in control</td></tr>
             </tbody>
           </table>
-          <p>Best for: on-prem/hybrid, strict compliance, per-component debugging, model flexibility.</p>
+          <p>MAI input uses a speech-only VoiceLive connection; your Cascade LLM and TTS stay unchanged. The literal <code>mai-transcribe-2</code> identifier is not documented for VoiceLive, so confirm endpoint support before deployment. The runtime does not substitute the generic MAI alias or Azure Speech.</p>
+          <p>Best for: on-prem/hybrid with an explicit Azure Speech configuration, strict compliance, per-component debugging, model flexibility.</p>
         </div>
         <div id="tab-voicelive" class="tab-panel">
           <p>Azure-hosted pipeline handles audio in one hop. Lowest latency, managed operations.</p>
@@ -161,6 +162,7 @@ sequenceDiagram
             <tbody>
               <tr><td><strong>Latency</strong></td><td>~200ms end-to-end</td></tr>
               <tr><td><strong>VAD</strong></td><td>Server-side automatic turn detection + noise reduction</td></tr>
+              <tr><td><strong>Input transcription</strong></td><td>Text-based BYOM defaults to <code>mai-transcribe-2</code>, subject to endpoint support. Explicit providers and native realtime defaults stay unchanged.</td></tr>
               <tr><td><strong>Tools</strong></td><td>Native function calling via Realtime API</td></tr>
               <tr><td><strong>Voices</strong></td><td>HD voices like <code>en-US-Ava:DragonHDLatestNeural</code></td></tr>
             </tbody>
@@ -183,7 +185,7 @@ sequenceDiagram
           <tr><td><strong>Components</strong></td><td>Swap STT, LLM, TTS independently</td><td>One managed pipeline — no swapping</td></tr>
           <tr><td><strong>LLM surface</strong></td><td>Chat Completions <em>or</em> Responses API (<code>_process_llm</code>)</td><td>Realtime API only (<code>gpt-realtime</code>)</td></tr>
           <tr><td><strong>VAD / barge-in</strong></td><td>Client-side thresholds + <code>ThreadBridge</code> cancellation</td><td>Server-side automatic — not tunable</td></tr>
-          <tr><td><strong>STT models</strong></td><td>Custom Speech + phrase lists</td><td>Built-in only</td></tr>
+          <tr><td><strong>STT models</strong></td><td>MAI 2.0 by default; Custom Speech + phrase lists require an Azure Speech override.</td><td>MAI 2.0 by default for text BYOM; native realtime transcription stays separate.</td></tr>
           <tr><td><strong>Voices</strong></td><td>400+ neural voices, per-agent styles</td><td>HD voices only (e.g. <code>DragonHDLatest</code>)</td></tr>
           <tr><td><strong>Deployment</strong></td><td>On-prem / hybrid endpoints supported</td><td>Azure cloud only</td></tr>
           <tr><td><strong>Turn model</strong></td><td>Synchronous per-turn (<code>process_user_input</code>)</td><td>Event-driven (<code>ServerEventType.*</code>)</td></tr>

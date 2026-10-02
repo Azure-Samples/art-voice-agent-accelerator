@@ -1,0 +1,87 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "storageAccountName": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 24
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]"
+    },
+    "vpnAddressPrefixes": {
+      "type": "array",
+      "minLength": 1,
+      "metadata": {
+        "description": "Approved public VPN egress CIDRs. Never use 0.0.0.0/0."
+      }
+    }
+  },
+  "variables": {
+    "perimeterName": "[concat('nsp-', parameters('storageAccountName'))]",
+    "profileName": "deployers",
+    "profileId": "[resourceId('Microsoft.Network/networkSecurityPerimeters/profiles', variables('perimeterName'), variables('profileName'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Network/networkSecurityPerimeters",
+      "apiVersion": "2025-07-01",
+      "name": "[variables('perimeterName')]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "purpose": "terraform-state-network"
+      },
+      "properties": {}
+    },
+    {
+      "type": "Microsoft.Network/networkSecurityPerimeters/profiles",
+      "apiVersion": "2025-07-01",
+      "name": "[concat(variables('perimeterName'), '/', variables('profileName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkSecurityPerimeters', variables('perimeterName'))]"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "Microsoft.Network/networkSecurityPerimeters/profiles/accessRules",
+      "apiVersion": "2025-07-01",
+      "name": "[concat(variables('perimeterName'), '/', variables('profileName'), '/vpn-egress')]",
+      "dependsOn": [
+        "[variables('profileId')]"
+      ],
+      "properties": {
+        "direction": "Inbound",
+        "addressPrefixes": "[parameters('vpnAddressPrefixes')]"
+      }
+    },
+    {
+      "type": "Microsoft.Network/networkSecurityPerimeters/resourceAssociations",
+      "apiVersion": "2025-07-01",
+      "name": "[concat(variables('perimeterName'), '/terraform-state')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkSecurityPerimeters/profiles/accessRules', variables('perimeterName'), variables('profileName'), 'vpn-egress')]"
+      ],
+      "properties": {
+        "accessMode": "Enforced",
+        "profile": {
+          "id": "[variables('profileId')]"
+        },
+        "privateLinkResource": {
+          "id": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "profileId": {
+      "type": "string",
+      "value": "[variables('profileId')]"
+    },
+    "perimeterId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Network/networkSecurityPerimeters', variables('perimeterName'))]"
+    }
+  }
+}

@@ -1,7 +1,10 @@
 import asyncio
+import inspect
 from datetime import datetime, timedelta
 from typing import Literal
+from uuid import UUID
 
+from azure.communication import callautomation
 from azure.communication.callautomation import (
     AudioFormat,
     AzureBlobContainerRecordingStorage,
@@ -32,6 +35,14 @@ tracer = trace.get_tracer(__name__)
 ACSAuthMode = Literal["auto", "connection_string", "entra"]
 _CONNECTION_STRING_AUTH_ALIASES = {"connection_string", "connection-string", "key", "access_key"}
 _ENTRA_AUTH_ALIASES = {"entra", "entra_id", "aad", "managed_identity", "default_credential"}
+
+
+def teams_phone_supported() -> bool:
+    """Older SDKs must not silently discard a Teams source supplied via kwargs."""
+    return (
+        hasattr(callautomation, "MicrosoftTeamsAppIdentifier")
+        and "teams_app_source" in inspect.signature(CallAutomationClient.create_call).parameters
+    )
 
 
 def _normalize_acs_auth_mode(auth_mode: str | None) -> ACSAuthMode:
@@ -114,18 +125,28 @@ class AcsCaller:
         speech_recognition_model_endpoint_id: str = None,
         recording_configuration: dict = None,
         recording_storage_container_url: str = None,
+        *,
+        teams_resource_account_id: str | None = None,
     ):
         # Required
         if not (acs_connection_string or acs_endpoint):
             raise ValueError("Provide either acs_connection_string or acs_endpoint")
 
-        if not source_number:
+        if teams_resource_account_id:
+            account_id = UUID(teams_resource_account_id)
+            if account_id.int == 0:
+                raise ValueError("Teams resource account ID must be a nonzero UUID")
+            if not teams_phone_supported():
+                raise ValueError("Installed Call Automation SDK does not support teams_app_source")
+            teams_resource_account_id = str(account_id)
+        if not source_number and not teams_resource_account_id:
             raise ValueError(
                 "No source_number provided. You must purchase and configure an Azure Communication Services phone number. "
                 "Set the number in your environment as ACS_SOURCE_PHONE_NUMBER. "
                 "See: https://learn.microsoft.com/en-us/azure/communication-services/quickstarts/telephony/get-phone-number?tabs=windows&pivots=platform-azcli"
             )
         self.source_number = source_number
+        self.teams_resource_account_id = teams_resource_account_id
         self.callback_url = callback_url
         self.websocket_url = websocket_url
         self.cognitive_services_endpoint = cognitive_services_endpoint
@@ -222,7 +243,7 @@ class AcsCaller:
         if not websocket_url:
             logger.warning("No websocket_url provided for transcription transport")
 
-        if not self.source_number:
+        if not self.source_number and not self.teams_resource_account_id:
             logger.warning("ACS source_number is not set")
 
         if not self.callback_url:
@@ -240,15 +261,33 @@ class AcsCaller:
             )
 
     async def initiate_call(
-        self, target_number: str, stream_mode: StreamMode = StreamMode.MEDIA
+        self,
+        target_number: str,
+        stream_mode: StreamMode = StreamMode.MEDIA,
+        *,
+        telephony_provider: Literal["acs", "teams"] = "acs",
     ) -> dict:
         """Start a new call with live transcription over websocket."""
         call = self.client
-        src = PhoneNumberIdentifier(self.source_number)
+        source_options: dict[str, callautomation.CommunicationIdentifier]
+        if telephony_provider == "teams":
+            if not self.teams_resource_account_id or not teams_phone_supported():
+                raise ValueError("Teams Phone is not configured with a supported Call Automation SDK")
+            source_options = {
+                "teams_app_source": callautomation.MicrosoftTeamsAppIdentifier(
+                    self.teams_resource_account_id
+                )
+            }
+        elif telephony_provider == "acs":
+            if not self.source_number:
+                raise ValueError("ACS_SOURCE_PHONE_NUMBER is required for standalone ACS calls")
+            source_options = {"source_caller_id_number": PhoneNumberIdentifier(self.source_number)}
+        else:
+            raise ValueError(f"Unsupported telephony provider: {telephony_provider}")
         dest = PhoneNumberIdentifier(target_number)
 
         try:
-            logger.info(f"Initiating call from {self.source_number} to {target_number}")
+            logger.info("Initiating %s call to %s", telephony_provider, target_number)
             logger.info(f"🔗 ACS Callback URL: {self.callback_url}")
             logger.info(f"🔗 ACS WebSocket URL: {self.media_streaming_options.transport_url if self.media_streaming_options else 'N/A'}")
             logger.debug(f"Stream mode: {stream_mode}")
@@ -288,13 +327,14 @@ class AcsCaller:
                     "net.peer.name": endpoint_host,
                 },
             ):
-                result = call.create_call(
+                result = await asyncio.to_thread(
+                    call.create_call,
                     target_participant=dest,
-                    source_caller_id_number=src,
                     callback_url=self.callback_url,
                     cognitive_services_endpoint=cognitive_services_endpoint,
                     transcription=transcription,
                     media_streaming=media_streaming,
+                    **source_options,
                 )
 
             logger.info("Call created: %s", result.call_connection_id)

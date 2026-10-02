@@ -28,6 +28,77 @@ backend/
 | `/api/v1/calls/*` | Call management |
 | `/health` | Health check |
 
+## Communication providers: ACS and Teams Phone
+
+ACS remains the default for existing deployments. The phone UI can select
+**ACS (standalone)** or **Teams Phone (via ACS/TPE)** for the next outbound call.
+This is independent of the Cascade/VoiceLive engine selection. It does not
+change inbound routing, switch an active call, or provision Teams resources.
+Email and SMS remain server-configured ACS services; external-provider choices
+are visibly unavailable, not simulated implementations. Teams Phone is not an
+email or programmable SMS delivery provider.
+
+`GET /api/v1/calls/providers` reports non-secret configuration status. A
+`configured` option means local prerequisites are present, not that tenant
+permissions, licensing, carrier routing, delivery or connectivity have been
+confirmed. Unavailable selections are rejected by the backend before creating a
+call. Teams failure never falls back to ACS automatically.
+
+### Optional Teams Phone setup
+
+An administrator must first provision Teams Phone extensibility: associate the
+Teams resource account with **the same ACS resource used by this backend**,
+assign its Resource Account license and service number, configure PSTN
+connectivity (for example Teams Direct Routing with a certified SBC), and grant
+server-side calling access. This is Teams Direct Routing, not ACS Direct Routing.
+See Microsoft's [TPE overview](https://learn.microsoft.com/en-us/azure/communication-services/concepts/interop/tpe/teams-phone-extensibility-overview)
+and [server-initiated calling prerequisites](https://learn.microsoft.com/en-us/azure/communication-services/quickstarts/tpe/teams-phone-extensibility-server-outbound-call).
+
+Then configure the backend and restart it:
+
+```dotenv
+TEAMS_PHONE_ENABLED=true
+TEAMS_PHONE_RESOURCE_ACCOUNT_ID=<Teams-resource-account-Entra-object-ID>
+```
+
+The corresponding App Configuration keys are `azure/teams-phone/enabled` and
+`azure/teams-phone/resource-account-id`. The flag defaults to false. These values
+stay on the server; the browser cannot supply an arbitrary resource account.
+Dependencies require Call Automation Python SDK 1.5.0 or later, exposing
+`create_call(..., teams_app_source=...)` (the lockfile includes 1.5.0). Older
+already-installed SDKs disable Teams explicitly
+without disabling an otherwise configured standalone ACS path.
+
+Keep the existing ACS authentication, public `BASE_URL`, incoming Event Grid
+subscription, callback authentication, and media WebSocket configuration.
+TPE uses those same Call Automation callbacks and media protocol, so both voice
+engines and call termination continue through the existing ACS transport.
+No second ACS client, transport masquerading as Teams, or number purchase is
+needed for Teams-only operation. `ACS_SOURCE_PHONE_NUMBER` remains required for
+standalone ACS outbound calls but is optional when Teams is configured.
+
+```json
+{
+  "target_number": "+15551234567",
+  "telephony_provider": "teams",
+  "streaming_mode": "media"
+}
+```
+
+Send this to `POST /api/v1/calls/initiate`. Omitted `telephony_provider` preserves
+ACS behavior. The response, outbound call context and lifecycle event include the
+selected provider. The SDK uses `MicrosoftTeamsAppIdentifier` for Teams calls,
+never the standalone ACS caller ID. Incoming calls are routed by the tenant and
+the called number, not by a browser's selection; both use `/api/v1/calls/answer`.
+Only one Teams resource account per backend deployment is supported by this
+configuration.
+
+This addition does not implement new SIP destinations, repair demo transfer/MFA
+tools, or claim certification. Production Teams voice-agent support and the
+selected SDK/media combination must be confirmed for the deployment. Disabling
+the Teams flag and restarting removes it from selectable providers without
+removing ACS configuration or migrating resources.
+
 ## Core Folders
 
 ### `registries/` - Agent, Tool, Scenario System
@@ -56,7 +127,7 @@ voice/
 ```
 
 Two orchestration paths:
-- **SpeechCascade**: Custom pipeline (Azure Speech STT → AOAI → Azure Speech TTS)
+- **SpeechCascade**: Custom pipeline (MAI Transcribe 2.0 → AOAI → Azure Speech TTS)
 - **VoiceLive**: Managed API (Azure OpenAI Realtime with built-in voice)
 
 ### `api/v1/` - HTTP + WebSocket APIs
@@ -264,13 +335,30 @@ and [Voice Live voice/model support](https://learn.microsoft.com/azure/ai-servic
 
 ### MAI transcription and voice configuration
 
-The managed live transcription identifier is `mai-transcribe`. Older stored
-`mai-transcribe-1.5` and `mai-transcribe-2` labels normalize to that service alias;
-they do not pin the fast-transcription model version.
+Cascade and text-based VoiceLive BYOM now request MAI Transcribe 2.0 by default
+using the literal identifier `mai-transcribe-2`. It is preserved through
+authoring, persistence, and SDK requests; it is **not** rewritten to the generic
+`mai-transcribe` alias. Explicit Azure Speech and other provider choices remain
+unchanged. The generic MAI alias is still selectable, and legacy
+`mai-transcribe-1.5` settings retain their previous normalization to that alias.
+
+**Availability:** `mai-transcribe-2` is an explicitly requested, undocumented
+VoiceLive model identifier. The public
+[VoiceLive reference](https://learn.microsoft.com/azure/ai-services/speech-service/voice-live-how-to#mai-transcribe-preview)
+documents only `mai-transcribe`; the versioned
+[MAI-Transcribe-2 documentation](https://learn.microsoft.com/azure/ai-services/speech-service/mai-transcribe)
+describes Fast Transcription, not this live API. The runtime does not substitute
+the alias or Azure Speech if the requested model is unavailable. Confirm support
+on your VoiceLive endpoint before deployment; this default requires access to
+that model.
 
 In VoiceLive, use `session.input_audio_transcription_settings.model` with a managed
 text model or an explicit `byom-azure-openai-chat-completion` /
-`byom-foundry-anthropic-messages` profile. Native realtime models and
+`byom-foundry-anthropic-messages` profile. An omitted provider in either text BYOM
+profile selects `mai-transcribe-2`. The shared YAML and editor default, `model:
+auto`, selects MAI 2.0 for those profiles and retains Azure Speech otherwise.
+Setting `model: azure-speech` explicitly opts out; an explicit provider always
+wins over the default. Native realtime models and
 `byom-azure-openai-realtime` are rejected for MAI input. Validation also runs during
 handoffs against the actual connection model/profile. MAI connections use API
 `2026-04-10`; ordinary existing connections retain their version behavior.
@@ -278,12 +366,15 @@ Custom speech maps and phrase lists must be removed explicitly rather than being
 silently dropped. There is no undocumented `custom-cascade` profile sent on the
 wire; a managed text model already creates a speech/chat/speech pipeline.
 
-In the application's Custom Speech/Cascade mode, set
-`speech.transcription_model: mai-transcribe`. The async input provider creates a
+In the application's Custom Speech/Cascade mode,
+`speech.transcription_model` defaults to `mai-transcribe-2`; set it to
+`azure-speech` to opt back into the pooled Speech SDK recognizer. Definitions
+saved without this field also pick up the new default. The async input provider creates a
 session-owned VoiceLive connection using the managed `gpt-4.1` text host and
 `create_response: false`. It does not request model responses or synthesize audio:
 the normal Cascade LLM and pooled Speech TTS remain in charge. It waits for a
-matching `session.updated` acknowledgement before accepting PCM, applies bounded
+matching `session.updated` acknowledgement (including the exact model identifier)
+before accepting PCM, applies bounded
 audio backpressure, preserves final-transcript ordering, and closes on provider
 failure instead of substituting another recognizer. This connection never enters
 or releases the Speech SDK pool.
@@ -325,3 +416,79 @@ Current versioned prompt-agent guidance:
 and [function calling](https://learn.microsoft.com/azure/foundry/agents/how-to/tools/function-calling).
 Azure AI Projects 1.x is not the versioned prompt-agent SDK; use the documented
 2.x SDK or REST contract when implementing this provider.
+
+### Front Door telephony authentication (opt-in)
+
+`ENABLE_FRONT_DOOR=false` is the default and preserves existing ingress behavior.
+Set it to `true` **together with** the private-origin Front Door Premium/WAF
+deployment; this backend flag does not create a firewall or restrict ordinary
+user routes to a VPN. Those restrictions and origin lockdown remain infrastructure
+requirements.
+
+The backend fails during application setup if any required setting is absent or
+invalid:
+
+| Environment variable | Required value when enabled |
+|---|---|
+| `ENABLE_FRONT_DOOR` | `true` to require the telephony authentication gate. |
+| `ACS_AUDIENCE` | The ACS **immutable resource UUID** (not the ARM ID, endpoint, tenant ID, or application client ID). |
+| `ACS_ARM_RESOURCE_ID` | Full ARM resource ID of that same ACS resource, `/subscriptions/.../resourceGroups/.../providers/Microsoft.Communication/communicationServices/...`. |
+| `EVENT_GRID_WEBHOOK_SECRET` | Random high-entropy shared secret, 32–4096 printable non-space ASCII characters. Generate at least 32 random bytes, encode for use in a header, store in Key Vault, and supply through an ACA secret reference. |
+
+These deployment security values are environment settings, not App Configuration
+feature flags. Changing them requires a new backend revision/restart. Do not
+commit or log the webhook secret.
+
+Only these exact telephony routes are public exceptions to VPN user access:
+
+| Route | Authentication before handler execution |
+|---|---|
+| `POST /api/v1/calls/callbacks` | ACS bearer JWT in `Authorization`. |
+| `WebSocket /api/v1/media/stream` | ACS bearer JWT in the upgrade's `Authorization` header, checked **before accepting** or creating a voice session. |
+| `POST /api/v1/calls/answer` | `X-EventGrid-Webhook-Secret` header, constant-time comparison, then Event Grid event/topic validation. |
+
+The ACS verifier pins `RS256`, the issuer
+`https://acscallautomation.communication.azure.com`, and the JWKS endpoint
+`https://acscallautomation.communication.azure.com/calling/keys`. It requires
+`exp`, `iss`, and `aud`, verifies the signature, expiry and configured audience,
+and ignores token-supplied key URLs. Keys are retrieved asynchronously with a
+five-second total deadline and bounded response size, cached for one hour, and
+refreshed on an unknown key ID. Unknown-key refreshes and failed downloads are
+throttled for 30 seconds. Expired cached keys are not used on refresh failure.
+Missing/invalid credentials or unavailable signing keys fail closed (HTTP 401;
+WebSocket close before acceptance produces HTTP 403 in Uvicorn). The documented
+five-minute callback JWT and **24-hour media JWT** are both supported: the
+verifier checks `exp`, not a hard-coded five-minute token lifetime.
+
+Configure the incoming-call Event Grid subscription with `EventGridSchema`,
+event type `Microsoft.Communication.IncomingCall`, and a **static, secret**
+delivery attribute named `X-EventGrid-Webhook-Secret`, from subscription creation
+onward. The same header is required for subscription validation. No query-string
+secret or anonymous validation fallback is supported. The authenticated payload
+must be a non-empty event array whose every `topic` matches `ACS_ARM_RESOURCE_ID`
+(case-insensitive ARM comparison); other event types, conflicting CloudEvents
+`source`/`type` fields, malformed incoming contexts, and mixed validation batches
+are rejected before the handler runs. A single authenticated
+`Microsoft.EventGrid.SubscriptionValidationEvent` with a non-empty
+`data.validationCode` returns `{"validationResponse": "..."}` directly from the
+gate, **without requiring ACS startup or a call session**. Body reads are limited
+to 1 MiB and five seconds. This change is shared by Cascade and VoiceLive; it
+does not change either orchestrator or outbound ACS authentication.
+
+With `ENABLE_AUTH_VALIDATION=true`, the telephony ASGI gate runs **outside**
+the existing Entra HTTP middleware. Only an internal marker on a successfully
+authenticated **exact** telephony route bypasses Entra; headers/query parameters
+cannot set that marker. Legacy callback/media prefix exemptions are removed in
+this mode, so suffix routes and ordinary HTTP APIs still require Entra.
+Existing health exemptions remain unchanged. When Front Door is disabled,
+legacy Entra behavior remains unchanged. If ACA EasyAuth is also configured,
+its external policy must permit these exact machine-authenticated routes to
+reach this gate; do not broadly exclude `/api/v1/calls/*`. Front Door must
+forward the authorization and secret headers, and its anonymous health probe
+must target the existing health endpoint, not these telephony routes.
+
+References:
+[ACS webhook and media JWT validation](https://learn.microsoft.com/azure/communication-services/how-tos/call-automation/secure-webhook-endpoint),
+[Event Grid static delivery headers](https://learn.microsoft.com/azure/event-grid/delivery-properties)
+(including webhook validation),
+and [Event Grid subscription validation](https://learn.microsoft.com/azure/event-grid/end-point-validation-event-grid-events-schema).

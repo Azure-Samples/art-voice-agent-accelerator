@@ -101,6 +101,7 @@ OPTIONS:
     -i, --identity-client-id Frontend user-assigned managed identity client ID (or set FRONTEND_UAI_CLIENT_ID)
     -n, --app-name          Entra ID app registration name (default: <container-app>-easyauth)
     -c, --cloud             Azure cloud environment (default: AzureCloud)
+    --public-url           Public HTTPS base URL behind Front Door (or EASYAUTH_PUBLIC_URL)
     -h, --help              Show this help message
 
 EXAMPLES:
@@ -129,6 +130,7 @@ parse_args() {
     IDENTITY_CLIENT_ID="${FRONTEND_UAI_CLIENT_ID:-}"
     APP_REG_NAME=""
     CLOUD_ENV="AzureCloud"
+    PUBLIC_URL="${EASYAUTH_PUBLIC_URL:-}"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -152,6 +154,10 @@ parse_args() {
                 CLOUD_ENV="$2"
                 shift 2
                 ;;
+            --public-url)
+                PUBLIC_URL="$2"
+                shift 2
+                ;;
             -h|--help)
                 usage
                 ;;
@@ -165,6 +171,10 @@ parse_args() {
     [[ -z "$RESOURCE_GROUP" ]] && fail "Resource group is required (-g or AZURE_RESOURCE_GROUP)"
     [[ -z "$CONTAINER_APP" ]] && fail "Container app name is required (-a or FRONTEND_CONTAINER_APP_NAME)"
     [[ -z "$IDENTITY_CLIENT_ID" ]] && fail "Identity client ID is required (-i or FRONTEND_UAI_CLIENT_ID)"
+    if [[ -n "$PUBLIC_URL" && ! "$PUBLIC_URL" =~ ^https://[a-zA-Z0-9.-]+(:[0-9]+)?/?$ ]]; then
+        fail "--public-url must be an HTTPS base URL without path, query or credentials"
+    fi
+    PUBLIC_URL="${PUBLIC_URL%/}"
 
     # Default app registration name
     [[ -z "$APP_REG_NAME" ]] && APP_REG_NAME="${CONTAINER_APP}-easyauth"
@@ -205,13 +215,12 @@ create_app_registration() {
     local tenant_id fqdn app_endpoint callback_url app_id existing_app
 
     tenant_id=$(get_tenant_id)
-    fqdn=$(get_container_app_fqdn)
-    
-    if [[ -z "$fqdn" ]]; then
-        fail "Could not get Container App FQDN. Ensure the app exists and has ingress configured."
+    app_endpoint="$PUBLIC_URL"
+    if [[ -z "$app_endpoint" ]]; then
+        fqdn=$(get_container_app_fqdn)
+        [[ -n "$fqdn" ]] || fail "Could not get Container App FQDN. Ensure ingress is configured."
+        app_endpoint="https://${fqdn}"
     fi
-
-    app_endpoint="https://${fqdn}"
     callback_url="${app_endpoint}/.auth/login/aad/callback"
 
     log "Tenant ID: $tenant_id"
@@ -327,7 +336,7 @@ configure_federated_credential() {
         
         az ad app federated-credential update \
             --id "$APP_ID" \
-            --federated-credential-id "$fic_name" \
+            --federated-credential-id "$existing_fic" \
             --parameters "{
                 \"name\": \"$fic_name\",
                 \"issuer\": \"$ISSUER\",
@@ -480,6 +489,13 @@ enable_container_app_auth() {
 EOF
 )
 
+    if [[ -n "$PUBLIC_URL" ]]; then
+        auth_config=$(jq '
+            .properties.httpSettings.forwardProxy.convention = "Standard" |
+            .properties.globalValidation.excludedPaths = ["/health.txt"]
+        ' <<< "$auth_config")
+    fi
+
     # Use Azure REST API to configure auth
     az rest \
         --method PUT \
@@ -559,4 +575,6 @@ main() {
     show_summary
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

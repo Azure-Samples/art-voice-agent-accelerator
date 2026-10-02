@@ -279,6 +279,8 @@ async def test_connect_drops_conflicting_byom_query_before_connect(
     fake_orchestrator = _FakeLiveOrchestrator()
 
     class _Agent:
+        session = {}
+
         def get_model_for_mode(self, mode: str) -> ModelConfig:
             assert mode == "voicelive"
             return ModelConfig(deployment_id=deployment_id)
@@ -321,12 +323,15 @@ async def test_connect_drops_conflicting_byom_query_before_connect(
     await handler.stop()
 
     assert captured.get("query") is None
+    assert "api_version" not in captured
     assert "byom_profile_model_conflict" in caplog.text
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("transcription", [None, "mai-transcribe-2", "azure-speech"])
 async def test_connect_passes_byom_query_and_shared_credential_helper(
     monkeypatch: pytest.MonkeyPatch,
+    transcription: str | None,
 ) -> None:
     from apps.artagent.backend.voice.genesys import handler as genesys_handler
     from apps.artagent.backend.voice.voicelive import handler as voicelive_handler
@@ -339,6 +344,8 @@ async def test_connect_passes_byom_query_and_shared_credential_helper(
     credential = object()
 
     class _Agent:
+        session = {"input_audio_transcription_settings": {"model": transcription}}
+
         def get_model_for_mode(self, mode: str) -> ModelConfig:
             assert mode == "voicelive"
             return ModelConfig(deployment_id="o3-mini")
@@ -384,9 +391,8 @@ async def test_connect_passes_byom_query_and_shared_credential_helper(
         return fake_cm
 
     monkeypatch.setattr(genesys_handler, "connect", _fake_connect)
-    monkeypatch.setattr(
-        genesys_handler, "LiveOrchestrator", lambda *args, **kwargs: fake_orchestrator
-    )
+    orchestrator_factory = Mock(return_value=fake_orchestrator)
+    monkeypatch.setattr(genesys_handler, "LiveOrchestrator", orchestrator_factory)
     monkeypatch.setattr(genesys_handler, "register_voicelive_orchestrator", Mock())
     monkeypatch.setattr(genesys_handler, "unregister_voicelive_orchestrator", Mock())
 
@@ -395,6 +401,12 @@ async def test_connect_passes_byom_query_and_shared_credential_helper(
 
     assert captured["credential"] is credential
     assert captured["model"] == "o3-mini"
+    assert captured.get("api_version") == (
+        None if transcription == "azure-speech" else "2026-04-10"
+    )
+    assert orchestrator_factory.call_args.kwargs["byom_profile"] == (
+        "byom-azure-openai-chat-completion"
+    )
     assert captured["query"] == {
         "profile": "byom-azure-openai-chat-completion",
         "foundry-resource-override": "resource-1",
@@ -458,6 +470,8 @@ async def test_partial_connect_failure_closes_connection(
             self.start = AsyncMock(side_effect=RuntimeError("start failed"))
 
     class _Agent:
+        session = {}
+
         def get_model_for_mode(self, _mode: str) -> ModelConfig:
             return ModelConfig(deployment_id="gpt-realtime")
 

@@ -44,18 +44,30 @@ from opentelemetry import trace
 
 from apps.artagent.backend.api.v1.router import v1_router
 from apps.artagent.backend.config import (
+    ACS_ARM_RESOURCE_ID,
+    ACS_AUDIENCE,
     ALLOWED_ORIGINS,
     DEBUG_MODE,
     DOCS_URL,
     ENABLE_AUTH_VALIDATION,
     ENABLE_DOCS,
+    ENABLE_FRONT_DOOR,
     ENTRA_EXEMPT_PATHS,
     ENVIRONMENT,
+    EVENT_GRID_WEBHOOK_SECRET,
     OPENAPI_URL,
     REDOC_URL,
     SECURE_DOCS_URL,
 )
 from apps.artagent.backend.src.utils.auth import validate_entraid_token
+from apps.artagent.backend.src.utils.telephony_auth import (
+    ACS_CALLBACK_PATH,
+    ACS_MEDIA_PATH,
+    EVENT_GRID_PATH,
+    TelephonyAuthMiddleware,
+    is_authenticated_telephony_request,
+    validate_front_door_auth_config,
+)
 from lifecycle.dashboard import build_startup_dashboard
 from lifecycle.manager import LifecycleManager
 from lifecycle.steps import (
@@ -184,6 +196,10 @@ def create_app() -> FastAPI:
 
 def setup_middleware_and_routes(app: FastAPI) -> None:
     """Configure CORS, authentication, and routes."""
+    if ENABLE_FRONT_DOOR:
+        validate_front_door_auth_config(
+            ACS_AUDIENCE, ACS_ARM_RESOURCE_ID, EVENT_GRID_WEBHOOK_SECRET
+        )
     # CORS
     app.add_middleware(
         CORSMiddleware,
@@ -196,17 +212,35 @@ def setup_middleware_and_routes(app: FastAPI) -> None:
 
     # Authentication middleware
     if ENABLE_AUTH_VALIDATION:
+        exempt_paths = [
+            path
+            for path in ENTRA_EXEMPT_PATHS
+            if not ENABLE_FRONT_DOOR
+            or path not in {ACS_CALLBACK_PATH, ACS_MEDIA_PATH, EVENT_GRID_PATH}
+        ]
 
         @app.middleware("http")
         async def auth_middleware(request: Request, call_next):
             path = request.url.path
-            if any(path.startswith(p) for p in ENTRA_EXEMPT_PATHS):
+            if ENABLE_FRONT_DOOR and is_authenticated_telephony_request(request.scope):
+                return await call_next(request)
+            if any(path.startswith(p) for p in exempt_paths):
                 return await call_next(request)
             try:
                 await validate_entraid_token(request)
             except HTTPException as e:
                 return JSONResponse(content={"error": e.detail}, status_code=e.status_code)
             return await call_next(request)
+
+    # Last registered runs first, including before the HTTP-only Entra middleware.
+    if ENABLE_FRONT_DOOR:
+        app.add_middleware(
+            TelephonyAuthMiddleware,
+            enabled=True,
+            audience=ACS_AUDIENCE,
+            resource_id=ACS_ARM_RESOURCE_ID,
+            webhook_secret=EVENT_GRID_WEBHOOK_SECRET,
+        )
 
     # Routes
     app.include_router(v1_router)

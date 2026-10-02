@@ -5,12 +5,14 @@ on:
     branches: [main, staging]
     paths:
       - 'devops/scripts/azd/**'
+      - 'infra/terraform/**'
       - 'azure.yaml'
       - '.github/workflows/test-azd-hooks.yml'
   pull_request:
     branches: [main, staging]
     paths:
       - 'devops/scripts/azd/**'
+      - 'infra/terraform/**'
       - 'azure.yaml'
       - '.github/workflows/test-azd-hooks.yml'
   workflow_dispatch:
@@ -34,6 +36,26 @@ permissions:
   pull-requests: read
 
 jobs:
+  frontdoor-iac:
+    name: Front Door private ingress
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+    env:
+      TF_DATA_DIR: ${{ runner.temp }}/frontdoor-terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.12.2
+      - name: Initialize without Azure state access
+        run: terraform init -backend=false
+      - name: Validate infrastructure
+        run: terraform validate
+      - name: Exercise corporate WAF and private-origin plans offline
+        run: terraform test -filter=tests/frontdoor.tftest.hcl
+
   # ============================================================================
   # JOB: Lint Shell Scripts
   # ============================================================================

@@ -348,7 +348,7 @@ requires-dist = [
     { name = "azure-appconfiguration", specifier = ">=1.7.0" },
     { name = "azure-appconfiguration-provider", specifier = ">=1.0.0" },
     { name = "azure-cognitiveservices-speech", specifier = ">=1.45.0" },
-    { name = "azure-communication-callautomation", specifier = ">=1.4.0" },
+    { name = "azure-communication-callautomation", specifier = ">=1.5.0" },
     { name = "azure-communication-email" },
     { name = "azure-communication-identity", specifier = ">=1.5.0" },
     { name = "azure-communication-sms" },

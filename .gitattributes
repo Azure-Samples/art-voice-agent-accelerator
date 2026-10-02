@@ -1,2 +1,5 @@
 # Use bd merge for beads JSONL files
 .beads/issues.jsonl merge=beads
+
+# Compiled GitHub Agentic Workflows; edit the corresponding Markdown source.
+.github/workflows/*.lock.yml linguist-generated=true

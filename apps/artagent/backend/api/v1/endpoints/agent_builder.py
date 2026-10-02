@@ -77,8 +77,11 @@ from apps.artagent.backend.api.v1.schemas.agent_builder import (
 )
 from apps.artagent.backend.api.v1.schemas.voices import VoiceCatalogResponse, VoiceInfo
 from apps.artagent.backend.registries.agentstore.base import (
+    DEFAULT_TRANSCRIPTION_MODEL,
+    MAI_TRANSCRIPTION_MODELS,
     HandoffConfig,
     ModelConfig,
+    SpeechConfig,
     UnifiedAgent,
     VoiceLiveBYOMConfig,
     byom_profile_model_conflict,
@@ -918,8 +921,9 @@ async def list_available_voices(
         locales=locales,
         locale_count=len(locales),
         runtime_transcription_models={
-            "cascade": ["azure-speech", "mai-transcribe"],
+            "cascade": [DEFAULT_TRANSCRIPTION_MODEL, "azure-speech", "mai-transcribe"],
             "voicelive": [
+                DEFAULT_TRANSCRIPTION_MODEL,
                 "mai-transcribe",
                 "azure-speech",
                 "gpt-4o-transcribe",
@@ -1532,6 +1536,7 @@ async def get_default_config() -> dict[str, Any]:
                     "rate": "+0%",
                 },
             ),
+            "speech": SpeechConfig.from_dict(defaults.get("speech", {})).to_dict(),
             "session": defaults.get("session", {}),
             "template_vars": defaults.get(
                 "template_vars",
@@ -1817,7 +1822,7 @@ def build_session_agent(
             or (
                 config.session
                 and (config.session.input_audio_transcription_settings or {}).get("model")
-                == "mai-transcribe"
+                in MAI_TRANSCRIPTION_MODELS
             )
         )
         voicelive_model = _model_from_schema(

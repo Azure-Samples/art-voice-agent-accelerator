@@ -77,6 +77,9 @@ class CallEventHandlers:
                     context.memo_manager.update_context("call_initiated_via", "api")
                     context.memo_manager.update_context("api_version", api_version)
                     context.memo_manager.update_context("call_direction", "outbound")
+                    context.memo_manager.update_context(
+                        "telephony_provider", event_data.get("telephony_provider", "acs")
+                    )
                     if target_number:
                         context.memo_manager.update_context("target_number", target_number)
                     if context.redis_mgr:

@@ -63,6 +63,7 @@ from .constants import (  # API Paths; Voice; Messages; Audio; Languages
     TTS_END,
 )
 from .settings import (  # Azure Communication Services; Security; Azure Identity; Azure OpenAI; Azure Speech; Azure Storage & Cosmos; Azure AI Foundry; Voice & TTS (per-agent voice is defined in agent.yaml); Feature Flags; Documentation; Monitoring; Connection Management; Pool Settings; Session Management; Speech Recognition; Warm Pool Settings; Validation
+    ACS_ARM_RESOURCE_ID,
     ACS_AUDIENCE,
     ACS_AUTH_MODE,
     ACS_CONNECTION_STRING,
@@ -110,6 +111,7 @@ from .settings import (  # Azure Communication Services; Security; Azure Identit
     ENABLE_AUTH_VALIDATION,
     ENABLE_CONNECTION_LIMITS,
     ENABLE_DOCS,
+    ENABLE_FRONT_DOOR,
     ENABLE_PERFORMANCE_LOGGING,
     ENABLE_SESSION_PERSISTENCE,
     ENABLE_TRACING,
@@ -118,6 +120,7 @@ from .settings import (  # Azure Communication Services; Security; Azure Identit
     ENTRA_ISSUER,
     ENTRA_JWKS_URL,
     ENVIRONMENT,
+    EVENT_GRID_WEBHOOK_SECRET,
     GREETING_VOICE_TTS,  # Deprecated alias for DEFAULT_TTS_VOICE
     HEARTBEAT_INTERVAL_SECONDS,
     MAX_CONCURRENT_SESSIONS,
@@ -224,6 +227,8 @@ __all__ = [
     "bootstrap_appconfig",
     "initialize_appconfig",
     # Most-used settings (alphabetical)
+    "ACS_ARM_RESOURCE_ID",
+    "ACS_AUDIENCE",
     "ACS_CONNECTION_STRING",
     "ACS_ENDPOINT",
     "ACS_SOURCE_PHONE_NUMBER",
@@ -237,7 +242,9 @@ __all__ = [
     "DEBUG_MODE",
     "ENABLE_AUTH_VALIDATION",
     "ENABLE_DOCS",
+    "ENABLE_FRONT_DOOR",
     "ENVIRONMENT",
+    "EVENT_GRID_WEBHOOK_SECRET",
     "GREETING_VOICE_TTS",
     "MAX_WEBSOCKET_CONNECTIONS",
     "POOL_SIZE_TTS",

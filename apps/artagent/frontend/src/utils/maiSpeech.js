@@ -1,7 +1,7 @@
 import { MANAGED_VOICELIVE_MODELS, classifyModelArch } from './foundryModels.js';
 
 export const MAI_TRANSCRIPTION_MODEL = 'mai-transcribe';
-const MAI_ALIASES = new Set(['mai-transcribe', 'mai-transcribe-1.5', 'mai-transcribe-2']);
+export const DEFAULT_TRANSCRIPTION_MODEL = 'mai-transcribe-2';
 const CHAT_PROFILES = new Set(['byom-azure-openai-chat-completion', 'byom-foundry-anthropic-messages']);
 
 export const MAI_VOICE_PRESETS = [
@@ -15,7 +15,46 @@ export const MAI_VOICE_PRESETS = [
 }));
 
 export function normalizeTranscriptionModel(model) {
-  return MAI_ALIASES.has(String(model || '').trim().toLowerCase()) ? MAI_TRANSCRIPTION_MODEL : model || '';
+  const value = String(model || '').trim().toLowerCase();
+  if (value === 'mai-transcribe-1.5') return MAI_TRANSCRIPTION_MODEL;
+  if ([MAI_TRANSCRIPTION_MODEL, DEFAULT_TRANSCRIPTION_MODEL].includes(value)) {
+    return value;
+  }
+  return model || '';
+}
+
+export function isMaiTranscriptionModel(model) {
+  return [MAI_TRANSCRIPTION_MODEL, DEFAULT_TRANSCRIPTION_MODEL].includes(normalizeTranscriptionModel(model));
+}
+
+export function effectiveTranscriptionModel(config, mode) {
+  const model = normalizeTranscriptionModel(mode === 'voicelive'
+    ? config.session?.input_audio_transcription_settings?.model : config.speech?.transcription_model);
+  if (mode !== 'voicelive') return model || DEFAULT_TRANSCRIPTION_MODEL;
+  if ((!model || model === 'auto') && CHAT_PROFILES.has(config.byom?.mode)) {
+    return DEFAULT_TRANSCRIPTION_MODEL;
+  }
+  return model === 'auto' ? 'azure-speech' : model;
+}
+
+export function transcriptionModelLabel(model) {
+  if (model === DEFAULT_TRANSCRIPTION_MODEL) return 'MAI Transcribe 2.0';
+  if (model === MAI_TRANSCRIPTION_MODEL) return 'MAI Transcribe (generic alias)';
+  if (model === 'azure-speech') return 'Azure Speech';
+  if (model === 'auto') return 'Auto (follow profile)';
+  return model || 'VoiceLive service default';
+}
+
+export function transcriptionHelp(config, mode) {
+  const model = effectiveTranscriptionModel(config, mode);
+  const effective = `Effective input: ${transcriptionModelLabel(model)}.`;
+  const availability = model === DEFAULT_TRANSCRIPTION_MODEL
+    ? ' Explicit mai-transcribe-2; service/version availability is unconfirmed.'
+    : model === MAI_TRANSCRIPTION_MODEL ? ' The generic service alias does not pin version 2.0.' : '';
+  const pipeline = mode === 'voicelive'
+    ? ' Auto follows the BYOM profile; native realtime audio is unchanged.'
+    : ' Your Custom Speech LLM and TTS remain unchanged.';
+  return effective + availability + pipeline;
 }
 
 export function maiVoiceRank(name) {
@@ -42,11 +81,10 @@ export function voiceLivePipeline(config) {
 
 export function maiConfigurationError(config, mode, voiceMetadata) {
   if (!config) return '';
-  const model = normalizeTranscriptionModel(mode === 'voicelive'
-    ? config.session?.input_audio_transcription_settings?.model : config.speech?.transcription_model);
-  if (model !== MAI_TRANSCRIPTION_MODEL) return '';
+  const model = effectiveTranscriptionModel(config, mode);
+  if (!isMaiTranscriptionModel(model)) return '';
   if (voiceMetadata !== undefined
-    && !voiceMetadata?.runtime_transcription_models?.[mode]?.includes(MAI_TRANSCRIPTION_MODEL)) {
+    && !voiceMetadata?.runtime_transcription_models?.[mode]?.includes(model)) {
     return 'The connected backend does not yet advertise MAI input support for this mode. Update the API and refresh the catalog before applying.';
   }
   if (mode === 'voicelive') {

@@ -45,6 +45,10 @@ voice:
   style: chat
   rate: "+0%"
 
+# Cascade input provider. Set azure-speech explicitly to use the pooled Speech SDK.
+speech:
+  transcription_model: mai-transcribe-2
+
 # Handoff configuration
 handoff:
   # No default trigger - each agent defines its own
@@ -57,7 +61,8 @@ session:
   output_audio_format: PCM16
   
   input_audio_transcription_settings:
-    model: azure-speech
+    # MAI 2.0 for text BYOM; Azure Speech otherwise. Explicit agent choices win.
+    model: auto
     language: en-US
   
   turn_detection:

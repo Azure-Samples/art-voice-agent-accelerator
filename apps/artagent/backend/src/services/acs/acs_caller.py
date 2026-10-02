@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import os
 
+from apps.artagent.backend.config.settings import get_communication_provider_settings
 from apps.artagent.backend.src.services.acs.acs_helpers import construct_websocket_url
 from config import (
     ACS_AUTH_MODE,
     ACS_CALL_CALLBACK_PATH,
     ACS_WEBSOCKET_PATH,
 )
-from src.acs.acs_helper import AcsCaller
+from src.acs.acs_helper import AcsCaller, teams_phone_supported
 from utils.ml_logging import get_logger
 
 logger = get_logger("services.acs_caller")
@@ -68,12 +69,23 @@ def initialize_acs_caller_instance() -> AcsCaller | None:
     base_url = cfg["BASE_URL"]
     speech_endpoint = cfg["AZURE_SPEECH_ENDPOINT"]
     storage_url = cfg["AZURE_STORAGE_CONTAINER_URL"]
+    providers = get_communication_provider_settings()
+    teams_account_id = None
+    if providers.teams_enabled:
+        if providers.teams_missing_settings:
+            logger.warning(
+                "Teams Phone disabled: %s", ", ".join(providers.teams_missing_settings)
+            )
+        elif not teams_phone_supported():
+            logger.warning("Teams Phone disabled: upgrade Call Automation SDK for teams_app_source")
+        else:
+            teams_account_id = providers.teams_resource_account_id
 
     # Check if required ACS configuration is present
-    if not all([acs_phone, base_url]):
+    if not base_url or not (acs_phone or teams_account_id):
         logger.warning(
             "⚠️  ACS TELEPHONY DISABLED: Missing required environment variables "
-            "(ACS_SOURCE_PHONE_NUMBER or BASE_URL). "
+            "(BASE_URL and either ACS_SOURCE_PHONE_NUMBER or configured Teams Phone). "
             "📞 Dial-in and dial-out calling will not work. "
             "🔌 WebSocket conversation endpoint remains available for direct connections."
         )
@@ -95,6 +107,7 @@ def initialize_acs_caller_instance() -> AcsCaller | None:
             websocket_url=ws_url,
             cognitive_services_endpoint=speech_endpoint,
             recording_storage_container_url=storage_url,
+            teams_resource_account_id=teams_account_id,
         )
         logger.debug("AcsCaller initialised")
     except Exception as exc:  # pylint: disable=broad-except

@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 import numpy as np
 from apps.artagent.backend.registries.agentstore.base import (
-    MAI_TRANSCRIPTION_MODEL,
+    MAI_TRANSCRIPTION_MODELS,
     MAI_VOICELIVE_API_VERSION,
     byom_profile_model_conflict,
     is_managed_voicelive_model,
@@ -1411,7 +1411,7 @@ class VoiceLiveSDKHandler:
                 )
                 api_version = (
                     MAI_VOICELIVE_API_VERSION
-                    if transcription.get("model") == MAI_TRANSCRIPTION_MODEL
+                    if transcription.get("model") in MAI_TRANSCRIPTION_MODELS
                     else None
                 )
 
@@ -2935,7 +2935,7 @@ async def _prepare_voicelive_call_warmup(
         byom_profile=(byom_query or {}).get("profile"),
     )
     api_version = (
-        MAI_VOICELIVE_API_VERSION if transcription.get("model") == MAI_TRANSCRIPTION_MODEL else None
+        MAI_VOICELIVE_API_VERSION if transcription.get("model") in MAI_TRANSCRIPTION_MODELS else None
     )
     credential = await VoiceLiveSDKHandler._build_credential(settings)
     connection_cm = connect(

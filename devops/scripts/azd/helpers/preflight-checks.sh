@@ -244,6 +244,17 @@ configure_subscription() {
         fail "Run: az login"
         return 1
     fi
+
+    local expected_sub="${AZURE_SUBSCRIPTION_ID:-}"
+    if [[ -z "$expected_sub" ]]; then
+        expected_sub=$(azd env get-value AZURE_SUBSCRIPTION_ID 2>/dev/null || true)
+    fi
+    expected_sub="${expected_sub:-${ARM_SUBSCRIPTION_ID:-}}"
+    if [[ -n "$expected_sub" && "$expected_sub" != "$current_sub" ]]; then
+        fail "Azure CLI subscription '$current_sub' does not match this azd environment ('$expected_sub')."
+        fail "Select the intended subscription in an isolated Azure CLI context before provisioning; environment targets were not changed."
+        return 1
+    fi
     
     local sub_name
     sub_name=$(az account show --query name -o tsv 2>/dev/null)
@@ -259,10 +270,8 @@ configure_subscription() {
         azd env set ARM_SUBSCRIPTION_ID "$current_sub" 2>/dev/null || true
         info "Set ARM_SUBSCRIPTION_ID to current subscription"
     elif [[ "$current_arm_sub" != "$current_sub" ]]; then
-        warn "ARM_SUBSCRIPTION_ID ($current_arm_sub) differs from current az subscription ($current_sub)"
-        warn "Updating ARM_SUBSCRIPTION_ID to match current subscription"
-        export ARM_SUBSCRIPTION_ID="$current_sub"
-        azd env set ARM_SUBSCRIPTION_ID "$current_sub" 2>/dev/null || true
+        fail "ARM_SUBSCRIPTION_ID ($current_arm_sub) differs from the selected subscription ($current_sub)."
+        return 1
     else
         log "  ✓ ARM_SUBSCRIPTION_ID already set correctly"
     fi
@@ -277,6 +286,26 @@ configure_subscription() {
 # ============================================================================
 # Resource Provider Registration
 # ============================================================================
+
+check_frontdoor_resource_providers() {
+    local provider state attempt
+    for provider in Microsoft.Cdn Microsoft.Network Microsoft.EventGrid; do
+        state=$(az provider show --namespace "$provider" --query registrationState -o tsv) || return 1
+        if [[ "$state" != "Registered" ]]; then
+            info "Registering opt-in Front Door provider: $provider"
+            az provider register --namespace "$provider" --output none || return 1
+            for ((attempt=0; attempt<60; attempt++)); do
+                state=$(az provider show --namespace "$provider" --query registrationState -o tsv) || return 1
+                [[ "$state" == "Registered" ]] && break
+                sleep 5
+            done
+        fi
+        if [[ "$state" != "Registered" ]]; then
+            fail "$provider registration is still $state. Register this provider and rerun azd provision."
+            return 1
+        fi
+    done
+}
 
 check_resource_providers() {
     log "Checking Azure resource provider registration..."

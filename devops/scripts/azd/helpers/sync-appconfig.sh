@@ -304,3 +304,6 @@ else
 fi
 echo "╰─────────────────────────────────────────────────────────────"
 echo ""
+if [[ ${#errors[@]} -gt 0 && "${FRONT_DOOR_ENABLED:-false}" == "true" ]]; then
+    exit 1
+fi

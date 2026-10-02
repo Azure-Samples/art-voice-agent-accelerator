@@ -44,7 +44,7 @@ dependencies = [
     "azure-identity>=1.20.0",
     "azure-storage-blob>=12.19.0",
     "azure-cognitiveservices-speech>=1.45.0",
-    "azure-communication-callautomation>=1.4.0",
+    "azure-communication-callautomation>=1.5.0",
     "azure-communication-sms",
     "azure-communication-email",
     "azure-communication-identity>=1.5.0",
@@ -346,4 +346,3 @@ dev = [
     "ipywidgets>=8.1.8",
     "pandas>=2.3.3",
 ]
-

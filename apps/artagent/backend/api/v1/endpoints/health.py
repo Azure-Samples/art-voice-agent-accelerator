@@ -1074,6 +1074,19 @@ async def _check_speech_configuration_fast(stt_pool, tts_pool) -> ServiceCheck:
 async def _check_acs_caller_fast(acs_caller) -> ServiceCheck:
     """Fast ACS caller check with comprehensive phone number and config validation."""
     start = time.time()
+    from apps.artagent.backend.src.services.communication_providers import communication_providers
+
+    teams = next(
+        option for option in communication_providers(acs_caller).telephony.options
+        if option.id == "teams"
+    )
+    if teams.available:
+        return ServiceCheck(
+            component="acs_caller",
+            status="healthy",
+            check_time_ms=round((time.time() - start) * 1000, 2),
+            details="Call Automation configured for Teams Phone; tenant routing is not verified.",
+        )
 
     # Read config dynamically to get values set by App Configuration bootstrap
     cfg = _get_config_dynamic()

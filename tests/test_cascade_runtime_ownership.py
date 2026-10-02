@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from apps.artagent.backend.registries.agentstore.base import SpeechConfig, UnifiedAgent
 from apps.artagent.backend.voice.handler import VoiceHandler, VoiceHandlerConfig
 from apps.artagent.backend.voice.shared.context import TransportType, VoiceSessionContext
 from apps.artagent.backend.voice.speech_cascade.handler import (
@@ -111,7 +112,11 @@ def app_state(tts=None, stt=None):
         tts_pool=LeasePool(tts or Synth()),
         stt_pool=LeasePool(stt or Recognizer()),
         speech_executor=None,
-        unified_agents={},
+        unified_agents={
+            "Concierge": UnifiedAgent(
+                name="Concierge", speech=SpeechConfig(transcription_model="azure-speech")
+            )
+        },
         start_agent="Concierge",
         auth_agent=None,
     )

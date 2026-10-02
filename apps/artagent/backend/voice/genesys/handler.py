@@ -29,7 +29,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from apps.artagent.backend.registries.agentstore.base import (
+    MAI_TRANSCRIPTION_MODELS,
+    MAI_VOICELIVE_API_VERSION,
     byom_profile_model_conflict,
+    validate_voicelive_transcription,
 )
 from apps.artagent.backend.registries.agentstore.loader import (
     discover_agents,
@@ -568,6 +571,21 @@ class GenesysVoiceLiveHandler:
                 )
                 byom_query = None
 
+        transcription = validate_voicelive_transcription(
+            (
+                (start_agent_obj.session or {}).get("input_audio_transcription_settings")
+                if start_agent_obj
+                else None
+            ),
+            model_name=connection_model,
+            byom_profile=(byom_query or {}).get("profile"),
+        )
+        api_version = (
+            MAI_VOICELIVE_API_VERSION
+            if transcription.get("model") in MAI_TRANSCRIPTION_MODELS
+            else None
+        )
+
         if byom_query:
             logger.info(
                 "[Genesys] Using BYOM profile | agent=%s model=%s profile=%s%s session=%s",
@@ -592,6 +610,7 @@ class GenesysVoiceLiveHandler:
                 model=connection_model,
                 connection_options=connection_options,
                 **({"query": byom_query} if byom_query else {}),
+                **({"api_version": api_version} if api_version else {}),
             )
             self._connection = await self._connection_cm.__aenter__()
             connect_ms = (time.perf_counter() - t0) * 1000
@@ -616,6 +635,7 @@ class GenesysVoiceLiveHandler:
                 call_connection_id=self._protocol.conversation_id or self.session_id,
                 transport="genesys",
                 model_name=connection_model,
+                byom_profile=(byom_query or {}).get("profile"),
                 memo_manager=memo_manager,
                 orchestrator_config=orchestrator_config,
             )

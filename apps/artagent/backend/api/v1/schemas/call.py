@@ -19,6 +19,10 @@ class CallInitiateRequest(BaseModel):
         json_schema_extra={"example": "+1234567890"},
         pattern=r"^\+[1-9]\d{1,14}$",
     )
+    telephony_provider: Literal["acs", "teams"] = Field(
+        default="acs",
+        description="Outbound identity: standalone ACS or server-configured Teams Phone via TPE.",
+    )
     caller_id: str | None = Field(
         None,
         description="Caller ID to display (optional, uses system default if not provided)",
@@ -74,6 +78,7 @@ class CallInitiateResponse(BaseModel):
         description="Unique call identifier",
         json_schema_extra={"example": "call_abc12345"},
     )
+    telephony_provider: Literal["acs", "teams"] = "acs"
     status: str = Field(
         ...,
         description="Current call status",
@@ -117,6 +122,28 @@ class CallInitiateResponse(BaseModel):
             }
         }
     )
+
+
+class CommunicationProviderOption(BaseModel):
+    """Non-secret configuration status; not a connectivity or licensing assertion."""
+
+    id: str
+    label: str
+    available: bool
+    status: Literal["configured", "not_configured", "unavailable"]
+    detail: str
+    missing_settings: list[str] = Field(default_factory=list)
+
+
+class CommunicationServiceOptions(BaseModel):
+    default: Literal["acs"] = "acs"
+    options: list[CommunicationProviderOption]
+
+
+class CommunicationProvidersResponse(BaseModel):
+    telephony: CommunicationServiceOptions
+    email: CommunicationServiceOptions
+    sms: CommunicationServiceOptions
 
 
 class CallStatusResponse(BaseModel):

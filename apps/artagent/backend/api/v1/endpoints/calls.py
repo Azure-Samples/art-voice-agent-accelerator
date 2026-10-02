@@ -15,7 +15,9 @@ from apps.artagent.backend.api.v1.schemas.call import (
     CallListResponse,
     CallStatusResponse,
     CallTerminateRequest,
+    CommunicationProvidersResponse,
 )
+from apps.artagent.backend.src.services.communication_providers import communication_providers
 from apps.artagent.backend.src.utils.tracing import (
     trace_acs_dependency,
     trace_acs_operation,
@@ -116,6 +118,17 @@ def create_call_event(event_type: str, call_id: str, data: dict) -> CloudEvent:
     )
 
 
+@router.get(
+    "/providers",
+    response_model=CommunicationProvidersResponse,
+    summary="List Communication Providers",
+    tags=["Call Management"],
+)
+async def get_communication_providers(request: Request) -> CommunicationProvidersResponse:
+    """Return non-secret configuration status, without provisioning or live service probes."""
+    return communication_providers(getattr(request.app.state, "acs_caller", None))
+
+
 @router.post(
     "/initiate",
     response_model=CallInitiateResponse,
@@ -173,7 +186,7 @@ async def initiate_call(
     http_request: Request,
 ) -> CallInitiateResponse:
     """
-    Initiate an outbound call through Azure Communication Services.
+    Initiate an outbound call through standalone ACS or Teams Phone extensibility.
 
     Creates a new outbound call to the specified phone number using ACS call
     automation. Validates phone number format, generates unique call tracking
@@ -199,6 +212,17 @@ async def initiate_call(
         >>> response = await initiate_call(request, http_request)
         >>> print(response.call_id)
     """
+    providers = communication_providers(getattr(http_request.app.state, "acs_caller", None))
+    selected = next(
+        option for option in providers.telephony.options if option.id == request.telephony_provider
+    )
+    if not selected.available:
+        logger.warning("Call rejected: provider %s is not configured", request.telephony_provider)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"{selected.label} is unavailable: {', '.join(selected.missing_settings)}.",
+        )
+
     with trace_acs_operation(
         tracer, logger, "initiate_call", session_id=None, call_connection_id=None
     ) as op:
@@ -270,6 +294,7 @@ async def initiate_call(
                     browser_session_id=browser_session_id,  # 🎯 Pass browser session for coordination
                     stream_mode=effective_stream_mode,
                     record_call=record_call_override,
+                    telephony_provider=request.telephony_provider,
                 )
                 if result.get("status") == "success":
                     call_id = result.get("callId")
@@ -283,6 +308,7 @@ async def initiate_call(
                                 "target_number": request.target_number,
                                 "browser_session_id": browser_session_id,
                                 "streaming_mode": str(effective_stream_mode),
+                                "telephony_provider": request.telephony_provider,
                             }
                             await http_request.app.state.conn_manager.set_call_context(
                                 call_id, base_context
@@ -323,6 +349,7 @@ async def initiate_call(
                             "status": "initiating",
                             "streaming_mode": str(effective_stream_mode),
                             "recording_enabled": recording_enabled,
+                            "telephony_provider": request.telephony_provider,
                         },
                     )
 
@@ -335,6 +362,7 @@ async def initiate_call(
 
                     return CallInitiateResponse(
                         call_id=call_id,
+                        telephony_provider=request.telephony_provider,
                         status="initiating",
                         target_number=request.target_number,
                         message=result.get("message", "call initiated successfully"),
@@ -346,6 +374,7 @@ async def initiate_call(
                             "acs_result": result,
                             "streaming_mode": str(effective_stream_mode),
                             "recording_enabled": recording_enabled,
+                            "telephony_provider": request.telephony_provider,
                         },
                     )
 

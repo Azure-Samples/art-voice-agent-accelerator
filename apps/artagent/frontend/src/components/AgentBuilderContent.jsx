@@ -88,6 +88,12 @@ import logger from '../utils/logger.js';
 import { fetchFoundryModels, fetchVoiceLiveModels, deriveModelOptions, MANAGED_VOICELIVE_OPTIONS, isManagedVoiceLiveModel } from '../utils/foundryModels.js';
 import { OrchestrationDiagramModal } from './OrchestrationDiagram.jsx';
 import VoiceLiveGenerationControls from './VoiceLiveGenerationControls.jsx';
+import { TRANSCRIPTION_MODELS, editableAgent } from '../utils/quickTune.js';
+import {
+  DEFAULT_TRANSCRIPTION_MODEL, MAI_TRANSCRIPTION_MODEL, isMaiTranscriptionModel,
+  maiConfigurationError, normalizeTranscriptionModel, transcriptionHelp,
+  transcriptionModelLabel, voiceLivePipeline,
+} from '../utils/maiSpeech.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STYLES
@@ -366,13 +372,6 @@ const TEMPLATE_VARIABLES = [
     icon: <BuildIcon fontSize="small" />,
     source: 'Agent Config',
   },
-];
-
-const TRANSCRIPTION_MODELS = [
-  { value: 'azure-speech', label: 'Azure Speech' },
-  { value: 'mai-transcribe-1.5', label: 'MAI-Transcribe 1.5' },
-  { value: 'gpt-4o-transcribe', label: 'GPT-4o Transcribe' },
-  { value: 'whisper-1', label: 'Whisper-1' },
 ];
 
 const TRANSCRIPTION_LANGUAGES = [
@@ -1225,7 +1224,7 @@ export default function AgentBuilderContent({
       prefix_padding_ms: 240,
       tool_choice: 'auto',
       input_audio_transcription_settings: {
-        model: 'azure-speech',
+        model: 'auto',
         language: 'en-US',
       },
     },
@@ -1233,6 +1232,21 @@ export default function AgentBuilderContent({
       institution_name: 'Contoso Financial',
       agent_name: 'Assistant',
     },
+  });
+  const cascadeTranscription = normalizeTranscriptionModel(config.speech?.transcription_model) || DEFAULT_TRANSCRIPTION_MODEL;
+  const voiceLiveTranscription = normalizeTranscriptionModel(config.session?.input_audio_transcription_settings?.model);
+  const transcriptionError = maiConfigurationError(config, audioSubTab, voicesRegionVerified);
+  const transcriptionOptions = (mode, selected) => [...new Set([
+    ...(mode === 'voicelive' ? TRANSCRIPTION_MODELS : [DEFAULT_TRANSCRIPTION_MODEL, MAI_TRANSCRIPTION_MODEL, 'azure-speech']),
+    selected,
+  ])].filter(Boolean).map((model) => {
+    const unsupported = isMaiTranscriptionModel(model)
+      && !voicesRegionVerified?.runtime_transcription_models?.[mode]?.includes(model);
+    return (
+      <option key={model} value={model} disabled={unsupported}>
+        {transcriptionModelLabel(model)}{unsupported ? ' - backend update required' : ''}
+      </option>
+    );
   });
   const [draftGreeting, setDraftGreeting] = useState('');
   const [draftReturnGreeting, setDraftReturnGreeting] = useState('');
@@ -1386,6 +1400,7 @@ export default function AgentBuilderContent({
           source: data.source || 'static-catalog',
           hdFromCatalog: Boolean(data.hd_from_catalog),
           notes: data.notes || [],
+          runtime_transcription_models: data.runtime_transcription_models,
         });
       }
     } catch (err) {
@@ -1431,7 +1446,8 @@ export default function AgentBuilderContent({
     if (!sessionId || !editMode) return;
     try {
       const response = await fetch(
-        `${API_BASE_URL}/api/v1/agent-builder/session/${sessionId}`
+        `${API_BASE_URL}/api/v1/agent-builder/session/${encodeURIComponent(sessionId)}`
+          + (initialEditAgentName ? `?agent_name=${encodeURIComponent(initialEditAgentName)}` : '')
       );
       if (response.ok) {
         const data = await response.json();
@@ -1458,7 +1474,7 @@ export default function AgentBuilderContent({
                 mode: data.config.byom?.mode || '',
               },
               voice: data.config.voice || prev.voice,
-              speech: data.config.speech || prev.speech,
+              speech: data.config.speech || {},
               session: {
                 ...prev.session,
                 ...incomingSession,
@@ -1470,10 +1486,7 @@ export default function AgentBuilderContent({
                   td.silence_duration_ms ?? incomingSession.silence_duration_ms ?? prev.session?.silence_duration_ms,
                 prefix_padding_ms:
                   td.prefix_padding_ms ?? incomingSession.prefix_padding_ms ?? prev.session?.prefix_padding_ms,
-                input_audio_transcription_settings: {
-                  ...(prev.session?.input_audio_transcription_settings || {}),
-                  ...(incomingSession.input_audio_transcription_settings || {}),
-                },
+                input_audio_transcription_settings: incomingSession.input_audio_transcription_settings ?? null,
               },
             };
           });
@@ -1483,7 +1496,7 @@ export default function AgentBuilderContent({
     } catch (err) {
       logger.debug('No existing config for session');
     }
-  }, [sessionId, editMode]);
+  }, [sessionId, editMode, initialEditAgentName]);
 
   // MCP Server Management functions
   const fetchMcpServers = useCallback(async () => {
@@ -1865,6 +1878,7 @@ export default function AgentBuilderContent({
 
   const applyTemplateFromCache = useCallback((template) => {
     if (!template) return;
+    const { speech, session } = editableAgent(template);
     setConfig((prev) => ({
       ...prev,
       name: template.name || prev.name,
@@ -1883,6 +1897,8 @@ export default function AgentBuilderContent({
         mode: template.byom?.mode || '',
       },
       voice: template.voice || prev.voice,
+      speech,
+      session,
     }));
     setSuccess(`Applied agent: ${template.name}`);
     setTimeout(() => setSuccess(null), 3000);
@@ -1917,7 +1933,8 @@ export default function AgentBuilderContent({
       );
       if (response.ok) {
         const data = await response.json();
-        const template = data.template;
+        const template = data.config || data.template;
+        const { speech, session } = editableAgent(template);
         setConfig((prev) => ({
           ...prev,
           name: template.name || prev.name,
@@ -1928,7 +1945,10 @@ export default function AgentBuilderContent({
           tools: template.tools || [],
           cascade_model: template.cascade_model || prev.cascade_model,
           voicelive_model: template.voicelive_model || prev.voicelive_model,
+          byom: template.byom || null,
           voice: template.voice || prev.voice,
+          speech,
+          session,
         }));
         setSuccess(`Applied template: ${template.name}`);
         setTimeout(() => setSuccess(null), 3000);
@@ -2002,6 +2022,11 @@ export default function AgentBuilderContent({
   const handleSave = async () => {
     setSaving(true);
     setError(null);
+    if (transcriptionError) {
+      setError(transcriptionError);
+      setSaving(false);
+      return;
+    }
 
     // Guardrail: a non-managed Voice Live model (o3-mini, o1, custom/fine-tuned,
     // etc.) can ONLY run via a BYOM profile. Saving it with BYOM off persists an
@@ -2130,11 +2155,11 @@ export default function AgentBuilderContent({
           silence_duration_ms: 700,
           prefix_padding_ms: 240,
           tool_choice: 'auto',
-          input_audio_transcription_settings:
-            defaults?.session?.input_audio_transcription_settings || {
-              model: 'azure-speech',
-              language: 'en-US',
-            },
+          input_audio_transcription_settings: {
+            language: 'en-US',
+            ...defaults?.session?.input_audio_transcription_settings,
+            model: 'auto',
+          },
         },
         template_vars: defaults?.template_vars || config.template_vars,
       });
@@ -3604,6 +3629,19 @@ export default function AgentBuilderContent({
                         Applies to Cascade mode only.
                       </Typography>
                       <TextField
+                        select
+                        label="Input transcription"
+                        value={cascadeTranscription}
+                        onChange={(e) => handleNestedConfigChange('speech', 'transcription_model', e.target.value)}
+                        fullWidth
+                        size="small"
+                        SelectProps={{ native: true }}
+                        helperText={transcriptionHelp(config, 'cascade')}
+                      >
+                        {transcriptionOptions('cascade', cascadeTranscription)}
+                      </TextField>
+                      {transcriptionError && <Alert severity="warning">{transcriptionError}</Alert>}
+                      <TextField
                         label="VAD Silence Timeout (ms)"
                         type="number"
                         value={config.speech?.vad_silence_timeout_ms ?? 800}
@@ -3746,7 +3784,7 @@ export default function AgentBuilderContent({
                             <Alert severity="info" icon={<RecordVoiceOverIcon fontSize="small" />} sx={{ borderRadius: 2 }}>
                               <AlertTitle sx={{ fontWeight: 700 }}>Cascaded pipeline · STT → LLM → TTS</AlertTitle>
                               <Typography variant="body2">
-                                Azure Speech transcribes the caller, the <strong>text</strong> is sent to this model, and Azure
+                                The selected input provider transcribes the caller, the <strong>text</strong> is sent to this model, and Azure
                                 TTS speaks the reply. The <strong>Transcription Model</strong> (configured below under VoiceLive
                                 Input Transcription) is the <strong>authoritative input</strong> the LLM reasons over — so you get
                                 granular STT control and the transcript faithfully reflects what the model understood.
@@ -3878,16 +3916,19 @@ export default function AgentBuilderContent({
                           📝 VoiceLive Input Transcription
                         </Typography>
                         {(() => {
-                          const arch = classifyVoiceLiveArch(config.voicelive_model?.deployment_id);
+                          const pipeline = voiceLivePipeline(config);
+                          const native = pipeline === 'native';
                           return (
                             <Typography
                               variant="caption"
-                              color={arch === 'native' ? 'warning.main' : 'text.secondary'}
+                              color={native ? 'warning.main' : 'text.secondary'}
                               sx={{ display: 'block', mb: 1.5 }}
                             >
-                              {arch === 'cascaded'
-                                ? 'Authoritative input — with the selected cascaded model (gpt-4o/4.1/5), this STT output IS the text the LLM reasons over.'
-                                : 'Advisory only — the selected native realtime model hears raw audio, so this transcript is for logging/UI and does NOT drive the model.'}
+                              {native
+                                ? 'Advisory only — the selected native realtime model hears raw audio, so this transcript is for logging/UI and does NOT drive the model.'
+                                : ['managed-chat', 'byom-chat'].includes(pipeline)
+                                  ? 'Authoritative input — this STT output is the text the selected text model reasons over.'
+                                  : 'Choose a model and matching profile to determine the input pipeline.'}
                             </Typography>
                           );
                         })()}
@@ -3895,16 +3936,14 @@ export default function AgentBuilderContent({
                           <TextField
                             select
                             label="Transcription Model"
-                            value={config.session?.input_audio_transcription_settings?.model || 'azure-speech'}
+                            value={voiceLiveTranscription}
                             onChange={(e) => handleSessionTranscriptionChange('model', e.target.value)}
                             fullWidth
                             SelectProps={{ native: true }}
+                            helperText={transcriptionHelp(config, 'voicelive')}
                           >
-                            {TRANSCRIPTION_MODELS.map((model) => (
-                              <option key={model.value} value={model.value}>
-                                {model.label}
-                              </option>
-                            ))}
+                            {transcriptionOptions('voicelive', voiceLiveTranscription)}
+                            <option value="">Use configured default</option>
                           </TextField>
                           <TextField
                             select
@@ -3921,6 +3960,7 @@ export default function AgentBuilderContent({
                             ))}
                           </TextField>
                         </Stack>
+                        {transcriptionError && <Alert severity="warning" sx={{ mt: 2 }}>{transcriptionError}</Alert>}
                       </Box>
                     </Stack>
                     </Stack>
@@ -4224,7 +4264,7 @@ export default function AgentBuilderContent({
           variant="contained"
           onClick={handleSave}
           startIcon={saving ? <CircularProgress size={18} color="inherit" /> : <SaveIcon />}
-          disabled={saving || !config.name.trim() || config.prompt.length < 10}
+          disabled={saving || !config.name.trim() || config.prompt.length < 10 || Boolean(transcriptionError)}
           sx={{
             background: isEditMode
               ? 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)'

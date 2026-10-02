@@ -133,7 +133,7 @@ test.describe('Quick Tune authoring workspace', () => {
     const panel = await openTune(page);
     await panel.getByRole('button', { name: 'Custom Speech', exact: true }).click();
     await panel.getByRole('button', { name: 'Fine controls', exact: true }).click();
-    await expect(panel.getByRole('checkbox', { name: 'Semantic speech segmentation' })).toBeVisible();
+    await expect(panel.getByRole('checkbox', { name: 'Semantic turn detection' })).toBeVisible();
     await expect(panel.getByRole('combobox', { name: 'Input transcription' })).toBeVisible();
     const result = await page.evaluate(async (raw) => {
       const { editableAgent, liveSettingsPatch, affectsActiveMode } = await import('/src/utils/quickTune.js');

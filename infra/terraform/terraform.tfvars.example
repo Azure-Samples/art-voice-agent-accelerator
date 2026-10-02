@@ -6,6 +6,18 @@ environment_name = "dev"
 name            = "rtaudioagent"
 location        = "eastus"
 
+# Optional corporate/VPN ingress. Premium Front Door and Private Link add cost.
+# Both must be true to enable. Moving a legacy environment to workload profiles
+# REPLACES that environment and its apps: use a fresh azd environment or plan a cutover.
+# Keep workload profiles enabled even if Front Door is subsequently disabled.
+enable_front_door                       = false
+container_app_workload_profiles_enabled = false
+# Supply an approved allowlist privately before enabling Front Door.
+# An empty list cannot be used to deploy the enabled Front Door module.
+front_door_allowed_service_tags         = []
+# Prefer the app region. Set only if a different supported Private Link region is needed.
+# front_door_private_link_location = "eastus"
+
 # Principal configuration (replace with your user ID)
 # Get your principal ID with: az ad signed-in-user show --query id -o tsv
 principal_id   = "your-user-principal-id-here"

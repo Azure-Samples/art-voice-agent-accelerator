@@ -10,6 +10,7 @@ on:
         default: 'dev'
         type: choice
         options:
+          - mosdev
           - dev
           - staging
           - prod
@@ -19,6 +20,7 @@ on:
         default: 'up'
         type: choice
         options:
+          - validate-state # Read existing state through the configured network boundary
           - provision  # Infrastructure only
           - deploy     # Application only
           - up         # Both infrastructure and application

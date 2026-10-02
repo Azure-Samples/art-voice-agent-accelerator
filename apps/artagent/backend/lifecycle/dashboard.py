@@ -29,9 +29,6 @@ def build_startup_dashboard(
     - Deferred tasks running in background
     """
     from apps.artagent.backend.config import (
-        ACS_CONNECTION_STRING,
-        ACS_ENDPOINT,
-        ACS_SOURCE_PHONE_NUMBER,
         BASE_URL,
         DEBUG_MODE,
         DOCS_URL,
@@ -45,12 +42,16 @@ def build_startup_dashboard(
     base_url = BASE_URL or f"http://localhost:{os.getenv('PORT', '8080')}"
     total_time = sum(d for _, d in startup_results)
 
-    # ACS status
-    acs_ready = all([ACS_ENDPOINT, ACS_CONNECTION_STRING, ACS_SOURCE_PHONE_NUMBER])
-    acs_status = ACS_SOURCE_PHONE_NUMBER if acs_ready else "not configured"
+    from apps.artagent.backend.src.services.communication_providers import communication_providers
+
+    acs_caller = getattr(app.state, "acs_caller", None)
+    configured_providers = [
+        option.label for option in communication_providers(acs_caller).telephony.options
+        if option.available
+    ]
+    acs_status = ", ".join(configured_providers) or "not configured"
 
     # ACS telephony endpoints (only present when the caller was initialized)
-    acs_caller = getattr(app.state, "acs_caller", None)
     acs_callback_url = getattr(acs_caller, "callback_url", None)
     acs_websocket_url = getattr(acs_caller, "websocket_url", None)
     acs_recording_url = getattr(acs_caller, "recording_callback_url", None)

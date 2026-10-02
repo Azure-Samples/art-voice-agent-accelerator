@@ -17,7 +17,9 @@ Usage:
 
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from uuid import UUID
 
 # Add root directory to path for imports
 root_dir = Path(__file__).parent.parent.parent.parent
@@ -185,6 +187,58 @@ ACS_STREAMING_MODE: StreamMode = StreamMode(os.getenv("ACS_STREAMING_MODE", "med
 ACS_JWKS_URL = "https://acscallautomation.communication.azure.com/calling/keys"
 ACS_ISSUER = "https://acscallautomation.communication.azure.com"
 ACS_AUDIENCE = os.getenv("ACS_AUDIENCE", "")  # ACS Immutable Resource ID
+ACS_ARM_RESOURCE_ID: str = os.getenv("ACS_ARM_RESOURCE_ID", "")
+EVENT_GRID_WEBHOOK_SECRET: str = os.getenv("EVENT_GRID_WEBHOOK_SECRET", "")
+
+
+@dataclass(frozen=True)
+class CommunicationProviderSettings:
+    """Runtime provider configuration, without credentials or connection strings."""
+
+    teams_enabled: bool
+    teams_resource_account_id: str
+    email_missing_settings: tuple[str, ...]
+    sms_missing_settings: tuple[str, ...]
+
+    @property
+    def teams_missing_settings(self) -> list[str]:
+        missing = []
+        if not self.teams_enabled:
+            missing.append("TEAMS_PHONE_ENABLED")
+        try:
+            account_id = UUID(self.teams_resource_account_id)
+            if account_id.int == 0:
+                raise ValueError("Empty resource account ID")
+        except ValueError:
+            missing.append("TEAMS_PHONE_RESOURCE_ACCOUNT_ID (nonzero UUID)")
+        return missing
+
+
+def get_communication_provider_settings() -> CommunicationProviderSettings:
+    """Read after App Configuration bootstrap; discovery never creates SDK clients."""
+    email_missing = []
+    if not os.getenv("AZURE_EMAIL_SENDER_ADDRESS", "").strip():
+        email_missing.append("AZURE_EMAIL_SENDER_ADDRESS")
+    if not any(
+        os.getenv(key, "").strip()
+        for key in (
+            "AZURE_COMMUNICATION_EMAIL_CONNECTION_STRING",
+            "ACS_CONNECTION_STRING",
+            "ACS_ENDPOINT",
+        )
+    ):
+        email_missing.append("ACS email credentials or ACS_ENDPOINT")
+    sms_missing = [
+        key
+        for key in ("AZURE_COMMUNICATION_SMS_CONNECTION_STRING", "AZURE_SMS_FROM_PHONE_NUMBER")
+        if not os.getenv(key, "").strip()
+    ]
+    return CommunicationProviderSettings(
+        teams_enabled=_env_bool("TEAMS_PHONE_ENABLED"),
+        teams_resource_account_id=os.getenv("TEAMS_PHONE_RESOURCE_ACCOUNT_ID", "").strip(),
+        email_missing_settings=tuple(email_missing),
+        sms_missing_settings=tuple(sms_missing),
+    )
 
 
 # ==============================================================================
@@ -375,6 +429,7 @@ WARM_POOL_MAX_RETRIES: int = _env_int("WARM_POOL_MAX_RETRIES", 2)
 
 DTMF_VALIDATION_ENABLED: bool = _env_bool("DTMF_VALIDATION_ENABLED", False)
 ENABLE_AUTH_VALIDATION: bool = _env_bool("ENABLE_AUTH_VALIDATION", False)
+ENABLE_FRONT_DOOR: bool = _env_bool("ENABLE_FRONT_DOOR", False)
 ENABLE_ACS_CALL_RECORDING: bool = _env_bool("ENABLE_ACS_CALL_RECORDING", False)
 
 # Environment

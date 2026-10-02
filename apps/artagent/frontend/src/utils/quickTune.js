@@ -1,4 +1,5 @@
 import { API_BASE_URL } from '../config/constants.js';
+import { DEFAULT_TRANSCRIPTION_MODEL, MAI_TRANSCRIPTION_MODEL } from './maiSpeech.js';
 
 export const agentKey = (name) => String(name || '').trim().toLowerCase();
 
@@ -25,7 +26,8 @@ export const BYOM_OPTIONS = [
 ];
 
 export const TRANSCRIPTION_MODELS = [
-  'mai-transcribe', 'azure-speech', 'gpt-4o-transcribe', 'gpt-4o-mini-transcribe', 'whisper-1',
+  DEFAULT_TRANSCRIPTION_MODEL, MAI_TRANSCRIPTION_MODEL, 'azure-speech',
+  'gpt-4o-transcribe', 'gpt-4o-mini-transcribe', 'whisper-1', 'auto',
 ];
 
 export function parsePercent(value) {

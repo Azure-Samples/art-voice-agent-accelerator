@@ -15,9 +15,8 @@ npm run dev  # http://localhost:5173
 frontend/
 ├── src/
 │   ├── main.jsx              # React entry point
-│   ├── App.jsx               # App wrapper
 │   └── components/
-│       └── RealTimeVoiceApp.jsx  # Complete voice app
+│       └── App.jsx           # Complete voice app, including outbound phone calls
 ├── package.json
 ├── entrypoint.sh             # Container startup (App Config integration)
 └── .env                      # Local development configuration
@@ -78,6 +77,57 @@ The `entrypoint.sh` script:
 - Message bubbles with timestamps
 - Backend health status
 - Help system modal
+
+## Phone, email, and SMS providers
+
+Open **Place call** to inspect three independent communication services:
+
+- **Telephony provider** starts on **ACS (standalone)** for every page load.
+  **Teams Phone (via ACS/TPE)** is an explicit opt-in for the next outbound call,
+  enabled only when the backend reports its configuration available. Both use
+  the existing ACS transport, dashboard relay, status, and termination paths.
+- **Email provider** remains **ACS Email** and **SMS provider** remains **ACS SMS**.
+  Their status is server-configured; the selectors do not update server settings.
+  External email/SMS alternatives are visible but disabled, not implemented, and
+  not wired. Teams Phone is **not** an email or SMS service.
+- **Voice engine** (Custom Speech/Cascade or VoiceLive) is independent of the
+  telephony choice.
+
+The UI reads `GET /api/v1/calls/providers` using the same configured backend URL
+as the rest of the application. These statuses describe configuration only, not
+live connectivity, licensing, permissions, or successful provisioning. A missing
+or invalid catalog, discovery failure, or unavailable selected provider blocks
+outbound calls and exposes **Retry providers** / **Refresh providers**.
+Unavailable alternatives also show their reason and unmet requirements while
+ACS is selected. For example, an enabled Teams configuration is still unavailable
+when the installed Call Automation SDK lacks explicit `teams_app_source` support;
+the UI never infers availability from the enabled flag or resource account.
+Teams requires Call Automation SDK 1.5.0+ with that capability in the running
+backend interpreter; a newer lockfile alone does not upgrade an older runtime.
+Email/SMS server detail messages remain visible: configuration does not validate
+delivery or turn demo-only tools into live integrations.
+Older backends without discovery must be updated; the UI deliberately does not
+assume ACS is configured or silently fall back from Teams to ACS.
+
+The actual `POST /api/v1/calls/initiate` includes
+`telephony_provider: "acs" | "teams"` alongside the existing target, engine, and
+browser-session context. Provider selection is component-local, survives status
+refreshes and calls, and is never saved to local storage. It is locked while a
+request is in flight, while the phone is ringing, and during a connected call.
+Repeated clicks cannot start a second call. **Initiating**, **waiting for
+connection**, and **Connected** are distinct states; a successful POST alone
+does not mean connected. Hangup uses the shared termination API.
+
+This UI does not create Teams admin resources, change inbound routing or
+deployment-wide defaults, or request/display credentials or resource-account
+identifiers. Configure those prerequisites on the server.
+
+Targeted tests (mocked APIs; no live telephony or backend required):
+
+```bash
+node --test src/utils/communicationProviders.test.js
+npm run test:e2e -- e2e/communication-providers.spec.js
+```
 
 ## Quick Tune: agents and scenarios
 
@@ -151,9 +201,33 @@ MAI does not change the selected voice or claim availability in an unsupported
 region. Choosing a discovered MAI voice uses the `azure-standard` voice type.
 
 **Input transcription** is a primary control in both **Custom Speech** and
-**VoiceLive**, with **MAI Transcribe (preview)** listed first. It uses the documented
-managed service alias `mai-transcribe`; this isn't a version-pinned
-`MAI-Transcribe-1.5` or `MAI-Transcribe-2` fast-transcription request.
+**VoiceLive**, with **MAI Transcribe 2.0** listed first. This choice preserves the
+explicit wire identifier `mai-transcribe-2`; it is never rewritten to
+`mai-transcribe`. The separate **MAI Transcribe (generic alias)** option uses
+`mai-transcribe` and does **not** pin version 2.0. Legacy `mai-transcribe-1.5`
+selections display as the generic alias for compatibility.
+
+An omitted Custom Speech `speech.transcription_model` now defaults to
+`mai-transcribe-2`. Advanced Builder exposes the same provider selector, including
+an explicit **Azure Speech** override. Existing explicit providers are retained.
+
+For VoiceLive, **Auto (follow profile)** resolves to `mai-transcribe-2` for
+`byom-azure-openai-chat-completion` and `byom-foundry-anthropic-messages`, and to
+`azure-speech` for other profiles. New/reset Advanced Builder sessions use
+`model: auto` so a later BYOM profile change is not pinned to an implicit Azure
+setting. Missing, null, or empty model settings also default to explicit 2.0 for
+those two BYOM profiles; other profiles retain their existing service default.
+Native realtime and BYOM realtime audio pipelines are unchanged. Explicit Azure,
+generic MAI, and other model choices do not follow profile changes. The helper
+text shows the effective input, and clearing a selection retains language,
+custom speech, and phrase-list settings rather than silently resetting them.
+
+**Availability remains unconfirmed:** the connected backend's
+`runtime_transcription_models` advertises implementation support, not a successful
+service probe, entitlement, or regional availability. The explicit 2.0 identifier
+is not confirmed by the linked public VoiceLive documentation. Confirm support
+on your configured endpoint before deployment; the generic alias is not evidence
+that version 2.0 is available.
 
 For **VoiceLive**, **Model source** makes the pipeline explicit. MAI input requires
 a managed text model or a BYOM chat/Messages profile; native realtime audio and
@@ -167,7 +241,8 @@ Azure-only phrase lists and custom speech models are not silently discarded when
 selecting MAI. Incompatible configuration blocks the affected mode's Save/Apply
 until the user removes those options or chooses Azure Speech. New MAI input
 selection is disabled on older backends that do not advertise the required
-runtime support.
+runtime support for that exact identifier. Validation also checks inferred
+defaults: an omitted Cascade provider cannot bypass the diarization guard.
 
 For **Custom Speech**, MAI input uses a separate speech-only VoiceLive connection
 with automatic model responses disabled. The selected Cascade LLM and pooled
@@ -181,6 +256,13 @@ switching back to Azure Speech. Input-provider changes require a new connection.
 References: [MAI voices](https://learn.microsoft.com/azure/ai-services/speech-service/mai-voices),
 [VoiceLive MAI transcription](https://learn.microsoft.com/azure/ai-services/speech-service/voice-live-how-to#mai-transcribe-preview),
 and [BYOM profiles](https://learn.microsoft.com/azure/ai-services/speech-service/how-to-bring-your-own-model).
+
+Targeted provider/default tests:
+
+```bash
+node --test src/utils/maiSpeech.test.js
+npm run test:e2e -- e2e/mai-speech.spec.js
+```
 
 ### Edit an existing scenario
 

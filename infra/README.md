@@ -67,24 +67,246 @@ The following Azure resources are automatically deployed when you run `azd up`:
 
 ### 🔐 Production Private Networking
 
-For production deployments, all services should be placed behind private endpoints within a Virtual Network (VNet). The recommended architecture includes:
+The active `azure.yaml` deploys Terraform Container Apps. It does **not** deploy
+Application Gateway. The gateway templates in `infra/bicep/deprecated/` are
+legacy examples, not an additional hop in the Terraform deployment.
 
 ```
-Internet → Application Gateway (WAF) → Container Apps (VNet integrated)
-                                        ↓
-                          Private Endpoints (all Azure services)
+Corporate/VPN clients -> Front Door Premium + WAF -> Private Link -> Container Apps
+ACS / Event Grid      -> exact authenticated routes --^
 ```
 
-**Key Benefits:**
-- **Security**: No public internet exposure for data and AI services
-- **Compliance**: Meet regulatory requirements for data isolation
-- **Performance**: Lower latency through Azure backbone network
-- **Cost**: Reduced data egress charges
+The optional configuration below closes public access to the **Container Apps
+environment**. It does not make the separate AI, database, storage, Key Vault,
+or App Configuration endpoints private. Those require separate network design.
 
 **Implementation Guide:**
 - [Production Deployment Guide](../docs/deployment/production.md#network-perimeter)
 - [Azure Well-Architected Framework - Networking](https://learn.microsoft.com/en-us/azure/well-architected/networking/)
 - [Hub-and-Spoke Network Topology](https://learn.microsoft.com/en-us/azure/architecture/networking/architecture/hub-spoke)
+
+### Opt-in corporate/VPN access with Front Door Premium
+
+`enable_front_door` defaults to `false`; existing deployments do not acquire a
+Front Door profile or change their public URLs until explicitly enabled.
+Premium Front Door, WAF, Private Link, and their traffic/logging incur additional
+charges. No Application Gateway, customer VNet, NSG, or static VPN CIDR list is
+needed for this direct Private Link integration.
+
+For a **new** deployment:
+
+```bash
+# Replace this placeholder with service tags approved for your environment.
+# Keep the actual allowlist in private deployment configuration.
+export TF_VAR_front_door_allowed_service_tags='["<approved-service-tag>"]'
+azd env set ENABLE_FRONT_DOOR true
+azd env set CONTAINER_APP_WORKLOAD_PROFILES_ENABLED true
+azd up
+```
+
+Alternatively, set `enable_front_door` and
+`container_app_workload_profiles_enabled` to `true` in
+`infra/terraform/params/main.tfvars.<environment>.json`. The preprovision hook
+merges that file; explicit azd flag values override it. Do not edit generated
+`main.tfvars.json`. Advanced parameters in the same params file:
+
+```json
+{
+  "enable_front_door": true,
+  "container_app_workload_profiles_enabled": true,
+  "front_door_private_link_location": "eastus2"
+}
+```
+
+The egress allowlist has no default. Set `TF_VAR_front_door_allowed_service_tags`
+privately for local deployment, or configure the GitHub environment secret
+`FRONT_DOOR_ALLOWED_SERVICE_TAGS` as a JSON array for CI. The workflow passes it
+to Terraform without logging it. Terraform treats this input as sensitive.
+An enabled Front Door module rejects an empty allowlist; omission never means
+allowing public traffic. Do not commit organization-specific network identifiers
+to parameter files. The placeholders above must be replaced, not deployed as-is.
+
+Omit `front_door_private_link_location` to use the application's region. Verify
+that it is an [AFD Private Link supported region](https://learn.microsoft.com/azure/frontdoor/private-link#region-availability).
+A different region adds inter-region routing and can increase voice latency.
+
+**Migration warning:** a legacy consumption-only Container Apps environment
+cannot gain workload profiles in place. Terraform replaces the environment and
+its apps when that setting changes. Use a new azd environment and planned
+cutover, or review the replacement plan and accept downtime before provisioning.
+Workload profiles still support Consumption billing; dedicated compute is not
+required. Keep `CONTAINER_APP_WORKLOAD_PROFILES_ENABLED=true` if you later disable
+Front Door, to avoid another environment replacement. Disabling Front Door
+restores public origin access and is not a security-preserving rollback.
+If a legacy Application Gateway exists outside this Terraform stack, migrate
+its DNS/callback consumers explicitly before retiring it; these hooks do not
+delete independently managed gateways.
+
+For an upfront workload-profile migration before activating Front Door, leave
+`enable_front_door=false` and set only the workload-profile flag. Supply
+`container_images` (keys `frontend`, `backend`, `cardapi`) with the currently
+deployed image references during the replacement. `ignore_changes` protects
+image updates on existing apps, **not newly created replacement apps**; without
+these overrides, Terraform uses its provisioning placeholder images. This also
+avoids unintentionally deploying unrelated uncommitted application changes.
+Update callback URLs and restore EasyAuth after the app FQDNs change, then
+activate Front Door only with the authenticated-ingress backend image deployed.
+
+**Enforcement and traffic paths:**
+
+- Separate frontend, backend, and CardAPI endpoints share one Premium profile.
+  Every endpoint has a Prevention-mode WAF policy covering `/*`. A negated
+  `SocketAddr` / `ServiceTagMatch` custom Block rule admits the configured
+  approved egress tags. The operator is defined by the public
+  [Front Door WAF ARM schema](https://learn.microsoft.com/azure/templates/microsoft.network/2025-10-01/frontdoorwebapplicationfirewallpolicies).
+  Confirm that the supplied service tags are supported for your environment;
+  this accelerator does not supply organization-specific tags or infer approval.
+- Origins use TLS with hostname validation and Private Link to the managed
+  environment. Environment `public_network_access = Disabled` blocks direct
+  `*.azurecontainerapps.io` bypasses. The postprovision hook approves only
+  private endpoint requests matching this deployment's unpredictable marker
+  and fails rather than opening a public fallback. Initial Front Door origin
+  provisioning can take more than ten minutes before the approval step.
+- Only backend `POST /api/v1/calls/answer`,
+  `POST /api/v1/calls/callbacks`, and `GET /api/v1/media/stream` are exempt from
+  the corporate network gate. They are **not** WAF Allow rules: managed
+  inspection still applies. Browser voice, administrative APIs, and all other
+  paths remain corporate-only.
+- The backend requires signed ACS JWTs on callbacks and media establishment.
+  Incoming-call Event Grid delivery uses a generated Key Vault-backed secret
+  header and validates the event's ACS resource topic. Missing or invalid
+  credentials fail closed, including WebSockets before acceptance. The
+  postdeploy hook creates the IncomingCall subscription only after the actual
+  app can authenticate and answer subscription validation, not against the
+  provisioning placeholder image. Existing competing subscriptions must be
+  reconciled before cutover to avoid double-answering calls.
+- Terraform owns backend bootstrap/security environment variables, including
+  `ENABLE_FRONT_DOOR`, `ACS_AUDIENCE`, `ACS_ARM_RESOURCE_ID`, and the
+  `EVENT_GRID_WEBHOOK_SECRET` secret reference. Put other runtime customization
+  in App Configuration rather than out-of-band edits to container env vars.
+- Public URL outputs, frontend runtime configuration, backend CORS, and
+  frontend EasyAuth redirects use Front Door. The `*_CONTAINER_APP_FQDN`
+  outputs still identify the private origins. CardAPI's internal URL remains
+  suitable for same-environment backend tool calls; `CARDAPI_PUBLIC_URL` is
+  corporate-only. External noncorporate tool callers, Genesys, and other
+  providers are not implicitly exempted by the ACS policy.
+
+**Latency and long calls:** do not stack Application Gateway behind Front Door.
+Front Door is still an extra network hop; no fixed latency improvement or
+penalty is promised. WAF examines the WebSocket handshake, not each audio frame.
+All routes have caching disabled so Upgrade headers reach the origins.
+Front Door documents a five-minute WebSocket idle timeout, a maximum
+two-hour connection lifetime, and 3,000 concurrent WebSockets per profile
+(contact Azure support for higher limits). Calls near two hours require a
+separate reconnect/resume design; this option does not add seamless ACS
+reconnection. HTTP origin response timeout is distinct from WebSocket lifetime.
+
+Front Door access, health-probe, and WAF logs go to the existing Log Analytics
+workspace. Before production cutover, compare WSS establishment time,
+conversational p50/p95 latency, jitter, and disconnects with the direct baseline.
+Also confirm corporate access succeeds, noncorporate browser/API traffic fails,
+direct origin access fails, legitimate phone calls work, and forged callbacks
+and media handshakes fail. Provisioning alone cannot establish these results.
+
+References: [ACA Private Link integration](https://learn.microsoft.com/azure/container-apps/how-to-integrate-with-azure-front-door),
+[Front Door WebSockets](https://learn.microsoft.com/azure/frontdoor/standard-premium/websocket),
+[WAF ARM match conditions](https://learn.microsoft.com/azure/templates/microsoft.network/2025-10-01/frontdoorwebapplicationfirewallpolicies#matchcondition),
+[ACS webhook/WebSocket authentication](https://learn.microsoft.com/azure/communication-services/how-tos/call-automation/secure-webhook-endpoint).
+
+### State account policy exclusion and network repair
+
+**Preferred for policy-managed environments: enforced NSP.** If governance
+automation removes temporary exemption tags, use the policy-supported
+`SecuredByPerimeter` mode rather than repeatedly reopening the public endpoint.
+The bootstrap template is independent of Terraform's own backend, so it can
+secure an existing state account without first accessing its state:
+
+```bash
+python3 devops/scripts/azd/helpers/configure-state-nsp.py \
+  --subscription "<subscription-id>" \
+  --resource-group "<state-resource-group>" \
+  --account "<state-account>" \
+  --vpn-cidr "<approved-public-vpn-cidr>"
+
+azd env set TF_STATE_NSP_PROFILE_ID "<profileId returned by bootstrap>"
+azd env set TF_STATE_ALLOW_PUBLIC_ACCESS false
+```
+
+Repeat `--vpn-cidr` for each approved IPAM public prefix. Do not substitute
+private `10.x` addresses or infer an entire subnet from one observed address.
+The template creates an inbound VPN rule and an **Enforced** association before
+the helper switches the account to `SecuredByPerimeter`. It does not create or
+move Terraform state, enable anonymous blob access, or use transition mode.
+
+With `TF_STATE_NSP_PROFILE_ID` set, preprovision validates the association and
+performs an Entra-authenticated state-blob check; it never applies the legacy
+exemption or downgrades the perimeter. Run the same check independently:
+
+```bash
+python3 devops/scripts/azd/helpers/terraform-state-access.py validate \
+  --subscription "<subscription-id>" --resource-group "<state-resource-group>" \
+  --account "<state-account>" --container tfstate --blob "<environment>.tfstate" \
+  --nsp-profile-id "<profileId>"
+azd provision --preview
+```
+
+For GitHub-hosted runners, configure the GitHub environment variables
+`TF_STATE_MANAGE_RUNNER_IP=true` and `TF_STATE_NSP_PROFILE_ID`. The deployment
+workflow opens a uniquely named, single-IP NSP rule before state access and
+removes only its owned rule in an `always()` cleanup step. Permanent VPN rules
+are not removed. See the [workflow guide](../.github/workflows/README.md) for
+permissions, existing-state prerequisites, and recovery after abrupt runner
+loss. A bootstrap success proves the configured posture, **not** connectivity:
+the blob check and the actual `azd`/pipeline operation must also succeed.
+
+NSP access logs require a destination in the same perimeter. Do not associate
+an existing application-wide Log Analytics workspace merely to diagnose state
+access: doing so can affect unrelated telemetry. Corporate VPN and GitHub runner
+traffic can have different egress addresses; validate the Storage-facing route
+rather than assuming an Internet IP-discovery service reports that address.
+
+**Legacy, explicitly approved public-firewall environments:** the following
+tag-based repair remains opt-in. It is not used in NSP mode.
+
+An existing remote-state configuration is not evidence that its storage account
+is still reachable. `preprovision.sh` calls `helpers/initialize-terraform.sh`,
+which can repair policy/network drift even when all `RS_*` settings already
+exist. This repair is **opt-in** and affects only the selected state account:
+
+```bash
+azd env set TF_STATE_ALLOW_PUBLIC_ACCESS true
+# Optional but recommended with split-tunnel VPNs: use the Azure-facing egress IP.
+azd env set TF_STATE_ALLOWED_IP "<deployer-public-ipv4>"
+azd hooks run preprovision
+```
+
+The helper merges `SecurityControl=Ignore` into the account's existing tags,
+sets the firewall default to `Deny`, adds the single deployment IP, then sets
+`publicNetworkAccess=Enabled`. Anonymous blob access remains disabled and the
+Terraform backend continues to use Entra authentication. Existing IP rules,
+private endpoints, and unrelated tags are preserved. Without an explicit IP,
+the helper uses its public-IP discovery routine; a split-tunnel VPN may require
+an explicit Azure-facing address instead.
+
+The inspected `StorageAccount_PublicNetwork_Modify` definition provides
+**`SecurityControl` (singular)** and **`Ignore`** as its exclusion defaults.
+This is an account-scoped policy-supported exclusion, not a change to the policy
+assignment. Use it only where your governance process permits that exclusion.
+For a different approved policy configuration, set
+`TF_STATE_EXCLUSION_TAG_NAME` / `TF_STATE_EXCLUSION_TAG_VALUE`; do not guess a
+plural tag or change governance policy to make the script pass.
+
+The tag and restricted public endpoint remain configured for subsequent
+deployments. Setting `TF_STATE_ALLOW_PUBLIC_ACCESS=false` stops future repairs;
+it does not remove the tag or close an already enabled endpoint. If the
+policy still forces public access off, the hook fails explicitly without
+falling back to an allow-all firewall. Use approved private connectivity in
+that case.
+
+Preflight and state repair also refuse to run against an Azure CLI subscription
+that differs from the selected azd environment. They do not silently retarget
+the environment when another terminal changes the shared CLI default. Use the
+intended subscription/tenant in a separate CLI context for concurrent deployments.
 
 ### 📊 Resource Naming Conventions
 

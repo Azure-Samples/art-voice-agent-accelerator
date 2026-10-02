@@ -42,7 +42,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from apps.artagent.backend.registries.agentstore.base import (
-    MAI_TRANSCRIPTION_MODEL,
+    DEFAULT_TRANSCRIPTION_MODEL,
+    MAI_TRANSCRIPTION_MODELS,
     SpeechConfig,
     normalize_transcription_model,
 )
@@ -343,14 +344,14 @@ class VoiceHandler:
             context.current_agent = active_agent
             speech = active_agent.speech if active_agent and active_agent.speech else SpeechConfig()
             transcription_model = normalize_transcription_model(speech.transcription_model)
-            if transcription_model not in ("azure-speech", MAI_TRANSCRIPTION_MODEL):
+            if transcription_model not in {"azure-speech", *MAI_TRANSCRIPTION_MODELS}:
                 raise ValueError(
                     f"Unsupported Cascade transcription model '{transcription_model}'."
                 )
             handler._barge_in_controller = BargeInController(
                 session_key, on_barge_in=handler._on_barge_in
             )
-            if transcription_model == MAI_TRANSCRIPTION_MODEL:
+            if transcription_model in MAI_TRANSCRIPTION_MODELS:
                 from apps.artagent.backend.voice.speech_cascade.mai_transcriber import (
                     MAITranscriber,
                 )
@@ -814,7 +815,9 @@ class VoiceHandler:
                     "message": "Custom cascade orchestration connected",
                     "streaming_type": "speech_cascade",
                     "transcription_model": (
-                        MAI_TRANSCRIPTION_MODEL if self._mai_transcriber else "azure-speech"
+                        self._mai_transcriber.transcription_model
+                        if self._mai_transcriber
+                        else "azure-speech"
                     ),
                 },
                 sender="System",
@@ -1667,7 +1670,7 @@ class VoiceHandler:
             if ws:
                 info = VoiceErrorInfo(
                     code="MAITranscriptionUnavailable",
-                    message="MAI transcription is unavailable; Azure Speech was not substituted.",
+                    message="MAI transcription is unavailable; no other model was substituted.",
                     details=message[:400],
                     remediation=(
                         "Check the Azure VoiceLive endpoint, authentication and regional MAI "
@@ -1675,7 +1678,13 @@ class VoiceHandler:
                     ),
                     source="stt",
                     fatal=True,
-                    metadata={"transcription_model": MAI_TRANSCRIPTION_MODEL},
+                    metadata={
+                        "transcription_model": (
+                            self._mai_transcriber.transcription_model
+                            if self._mai_transcriber
+                            else DEFAULT_TRANSCRIPTION_MODEL
+                        )
+                    },
                 )
                 await asyncio.wait_for(
                     emit_voice_error(

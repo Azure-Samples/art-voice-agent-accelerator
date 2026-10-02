@@ -219,13 +219,15 @@
         <tbody>
           <tr><td><strong>When the tuned agent is bound</strong></td><td>Resolved per turn — <code>route_turn()</code> re-checks the session agent every turn, so most edits apply without a reconnect.</td><td>Bound at connect time — model, BYOM, and transcription changes require the socket to reconnect.</td></tr>
           <tr><td><strong>Model field</strong></td><td><code>cascade_model.deployment_id</code></td><td><code>voicelive_model.deployment_id</code>, gated by <code>byom.mode</code></td></tr>
-          <tr><td><strong>Turn detection</strong></td><td><code>speech.vad_silence_timeout_ms</code>, <code>speech.use_semantic_segmentation</code> (Azure Speech STT, cannot change mid-stream)</td><td><code>session.turn_detection.*</code>, pushable live via <code>apply_live_session_settings()</code></td></tr>
+          <tr><td><strong>Input transcription</strong></td><td><code>speech.transcription_model</code> defaults to <code>mai-transcribe-2</code>; select <code>azure-speech</code> explicitly for the pooled Speech SDK.</td><td>Text-based BYOM defaults to <code>mai-transcribe-2</code>. Explicit provider choices win; native realtime defaults stay unchanged.</td></tr>
+          <tr><td><strong>Turn detection</strong></td><td><code>speech.vad_silence_timeout_ms</code>, <code>speech.use_semantic_segmentation</code> (input provider settings, cannot change mid-stream)</td><td><code>session.turn_detection.*</code>, pushable live via <code>apply_live_session_settings()</code></td></tr>
           <tr><td><strong>Handoff routing</strong></td><td><code>HandoffService</code>, built from the scenario resolved for the session</td><td>Same <code>HandoffService</code> contract, plus handoff instructions folded into <code>session.update</code></td></tr>
           <tr><td><strong>Scenario resolution</strong></td><td><code>resolve_orchestrator_config(session_id=...)</code> must be given the session's scenario name, or handoff routing silently falls back to declarative <code>scenariostore/*/orchestration.yaml</code> defaults</td><td>Same requirement — an earlier bug (<code>b8972f7</code>) dropped the session scenario on every VoiceLive reconnect until this was fixed</td></tr>
         </tbody>
       </table>
 
-      <p>The practical effect: on Cascade, most Quick Tune edits are visible on the caller's very next turn. On VoiceLive, anything beyond voice/VAD forces a short reconnect, because the model and BYOM profile are properties of the realtime socket itself, not something that can be renegotiated mid-session.</p>
+      <p><strong>MAI 2.0 availability:</strong> <code>mai-transcribe-2</code> is sent literally, never replaced with the generic MAI alias. This versioned identifier is not documented for VoiceLive; confirm that your endpoint accepts it before deployment. Unsupported requests fail rather than silently selecting another provider.</p>
+      <p>The practical effect: on Cascade, most Quick Tune edits are visible on the caller's very next turn, but changing transcription requires a reconnect. On VoiceLive, anything beyond voice/VAD forces a short reconnect, because the model and BYOM profile are properties of the realtime socket itself, not something that can be renegotiated mid-session.</p>
 
       <hr>
 

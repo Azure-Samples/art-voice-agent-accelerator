@@ -121,9 +121,11 @@ export const styles = {
     alignItems: "center",
     justifyContent: "center",
     gap: "16px",
+    // Wraps only when the shell is genuinely too narrow; the previous 520px cap
+    // forced the session tag and actions onto separate rows even with space left.
     flexWrap: "wrap",
     width: "100%",
-    maxWidth: "520px",
+    maxWidth: "100%",
     margin: "0 auto",
   },
 
@@ -146,6 +148,7 @@ export const styles = {
     alignItems: "center",
     gap: "10px",
     flexWrap: "wrap",
+    flexShrink: 0,
   },
   waveformSection: {
     position: "relative",

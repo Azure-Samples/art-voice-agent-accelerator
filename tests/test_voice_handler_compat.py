@@ -29,6 +29,7 @@ from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from apps.artagent.backend.registries.agentstore.base import SpeechConfig, UnifiedAgent
 
 # Import VoiceHandler and related items from voice module
 # Note: MediaHandler was previously an alias but has been removed
@@ -269,7 +270,7 @@ def create_mock_app_state(
     tts_timeout: bool = False,
     stt_timeout: bool = False,
 ) -> SimpleNamespace:
-    """Create mock app.state with pools."""
+    """Create mock app.state explicitly using the Azure Speech pool path."""
     tts_client = Mock()
     tts_client.stop_speaking = Mock()
     stt_client = Mock()
@@ -283,7 +284,11 @@ def create_mock_app_state(
             broadcast_session=AsyncMock(return_value=1),
             send_to_connection=AsyncMock(),
         ),
-        unified_agents={},
+        unified_agents={
+            "Concierge": UnifiedAgent(
+                name="Concierge", speech=SpeechConfig(transcription_model="azure-speech")
+            )
+        },
         start_agent="Concierge",
         auth_agent=None,
     )

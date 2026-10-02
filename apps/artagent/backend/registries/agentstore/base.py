@@ -191,28 +191,33 @@ VOICELIVE_BYOM_MODES = (
 )
 
 MAI_TRANSCRIPTION_MODEL = "mai-transcribe"
+DEFAULT_TRANSCRIPTION_MODEL = "mai-transcribe-2"
+MAI_TRANSCRIPTION_MODELS = frozenset({MAI_TRANSCRIPTION_MODEL, DEFAULT_TRANSCRIPTION_MODEL})
 MAI_VOICELIVE_API_VERSION = "2026-04-10"
 
 
 def normalize_transcription_model(model: str) -> str:
-    """Resolve old MAI family labels to the service-managed alias, not a version."""
+    """Normalize MAI names without replacing the explicitly requested 2.0 model."""
     if not isinstance(model, str):
         raise ValueError("transcription_model must be a string")
-    if model.strip().lower() in {"mai-transcribe", "mai-transcribe-1.5", "mai-transcribe-2"}:
+    normalized = model.strip().lower()
+    if normalized == DEFAULT_TRANSCRIPTION_MODEL:
+        return DEFAULT_TRANSCRIPTION_MODEL
+    if normalized in {"mai-transcribe", "mai-transcribe-1.5"}:
         return MAI_TRANSCRIPTION_MODEL
     return model
 
 
 def validate_mai_customization(model: str, settings: dict[str, Any]) -> None:
     """Reject retained Azure Speech customization rather than ignoring it for MAI."""
-    if normalize_transcription_model(model) != MAI_TRANSCRIPTION_MODEL:
+    if normalize_transcription_model(model) not in MAI_TRANSCRIPTION_MODELS:
         return
     incompatible = [
         key for key in ("custom_speech", "phrase_list") if settings.get(key) is not None
     ]
     if incompatible:
         raise ValueError(
-            f"mai-transcribe does not support {', '.join(incompatible)}. "
+            f"{model} does not support {', '.join(incompatible)}. "
             "Remove these Azure Speech options or select azure-speech."
         )
 
@@ -223,11 +228,13 @@ def validate_voicelive_transcription(
     model_name: str,
     byom_profile: str | None = None,
 ) -> dict[str, Any]:
-    """Return normalized input settings, rejecting MAI incompatibilities at runtime.
+    """Resolve input defaults and reject MAI incompatibilities at runtime.
 
     Validate against the connection's model/profile during handoffs, not the
     target agent's unused model choice. Do not use this cross-mode check when
     saving an agent: its VoiceLive configuration may be unused in Cascade.
+    Text BYOM defaults to MAI 2.0. Explicit ``auto`` retains Azure Speech for
+    other profiles; otherwise their omitted settings keep service behavior.
     """
     if byom_profile and byom_profile not in VOICELIVE_BYOM_MODES:
         raise ValueError(
@@ -237,18 +244,30 @@ def validate_voicelive_transcription(
     result = dict(settings or {})
     if isinstance(result.get("model"), str):
         result["model"] = normalize_transcription_model(result["model"])
-    if result.get("model") != MAI_TRANSCRIPTION_MODEL:
+    elif result.get("model") is not None:
+        raise ValueError("VoiceLive transcription model must be a string or null")
+    model = result.get("model")
+    if not model or model == "auto":
+        if byom_profile in (
+            "byom-azure-openai-chat-completion",
+            "byom-foundry-anthropic-messages",
+        ):
+            result["model"] = DEFAULT_TRANSCRIPTION_MODEL
+        elif model == "auto":
+            result["model"] = "azure-speech"
+    model = result.get("model")
+    if model not in MAI_TRANSCRIPTION_MODELS:
         return result
 
-    validate_mai_customization(MAI_TRANSCRIPTION_MODEL, result)
+    validate_mai_customization(model, result)
     if byom_profile == "byom-azure-openai-realtime":
         raise ValueError(
-            "mai-transcribe cannot use the byom-azure-openai-realtime profile. "
+            f"{model} cannot use the byom-azure-openai-realtime profile. "
             "Select a managed text model or an explicit BYOM chat/Anthropic profile."
         )
     if not byom_profile and model_name.strip().lower() not in _VOICELIVE_MANAGED_TEXT_MODELS:
         raise ValueError(
-            f"mai-transcribe requires a non-multimodal managed text model (for example gpt-4.1), "
+            f"{model} requires a non-multimodal managed text model (for example gpt-4.1), "
             f"not '{model_name}'. Native realtime/audio models are incompatible. "
             "For your own text deployment, explicitly select byom-azure-openai-chat-completion "
             "or byom-foundry-anthropic-messages; model names alone do not select BYOM."
@@ -450,18 +469,20 @@ class SpeechConfig:
     # Advanced features
     enable_diarization: bool = False  # Speaker diarization for multi-speaker scenarios
     speaker_count_hint: int = 2  # Hint for number of speakers in diarization
-    transcription_model: str = field(default="azure-speech", metadata={"omit_default": True})
+    transcription_model: str = DEFAULT_TRANSCRIPTION_MODEL
 
     def __post_init__(self) -> None:
         self.transcription_model = normalize_transcription_model(self.transcription_model)
-        if self.transcription_model not in {"azure-speech", MAI_TRANSCRIPTION_MODEL}:
-            raise ValueError("transcription_model must be azure-speech or mai-transcribe")
+        if self.transcription_model not in {"azure-speech", *MAI_TRANSCRIPTION_MODELS}:
+            raise ValueError(
+                "transcription_model must be azure-speech, mai-transcribe or mai-transcribe-2"
+            )
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SpeechConfig:
         """Create SpeechConfig from dict."""
         data = dict(data or {})
-        validate_mai_customization(data.get("transcription_model", "azure-speech"), data)
+        validate_mai_customization(data.get("transcription_model", cls.transcription_model), data)
         return decode_definition(cls, data)
 
     def to_dict(self) -> dict[str, Any]:

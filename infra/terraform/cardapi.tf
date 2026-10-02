@@ -110,6 +110,7 @@ resource "azurerm_container_app" "cardapi_mcp" {
   container_app_environment_id = azurerm_container_app_environment.main.id
   resource_group_name          = azurerm_resource_group.main.name
   revision_mode                = "Single"
+  workload_profile_name        = var.container_app_workload_profiles_enabled ? "Consumption" : null
 
   identity {
     type         = "SystemAssigned, UserAssigned"
@@ -136,7 +137,7 @@ resource "azurerm_container_app" "cardapi_mcp" {
 
     container {
       name   = "main"
-      image  = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
+      image  = lookup(var.container_images, "cardapi", "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest")
       cpu    = 0.25
       memory = "0.5Gi"
 
@@ -208,7 +209,9 @@ resource "azurerm_container_app" "cardapi_mcp" {
 
   lifecycle {
     ignore_changes = [
-      template[0].container[0].image
+      template[0].container[0].image,
+      # EasyAuth's managed-identity assertion secret is owned by the auth hook.
+      secret
     ]
   }
 }

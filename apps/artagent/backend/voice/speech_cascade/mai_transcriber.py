@@ -1,4 +1,4 @@
-"""Opt-in MAI input for Cascade; the local LLM and pooled Speech TTS stay in charge."""
+"""MAI input for Cascade; the local LLM and pooled Speech TTS stay in charge."""
 
 from __future__ import annotations
 
@@ -14,9 +14,10 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import aiohttp
 from apps.artagent.backend.registries.agentstore.base import (
-    MAI_TRANSCRIPTION_MODEL,
+    MAI_TRANSCRIPTION_MODELS,
     MAI_VOICELIVE_API_VERSION,
     SpeechConfig,
+    normalize_transcription_model,
 )
 from apps.artagent.backend.voice.shared.close import cancel_and_join
 from apps.artagent.backend.voice.shared.context import TransportType, VoiceSessionContext
@@ -84,13 +85,16 @@ class MAITranscriber:
         on_partial: Callable[[str, str, str | None, str, int], Awaitable[None]] | None = None,
         sample_rate: int | None = None,
     ) -> None:
+        self.transcription_model = normalize_transcription_model(speech.transcription_model)
+        if self.transcription_model not in MAI_TRANSCRIPTION_MODELS:
+            raise ValueError(f"Unsupported MAI transcription model '{self.transcription_model}'.")
         if context.transport not in (TransportType.BROWSER, TransportType.ACS):
             raise ValueError("MAI Cascade input supports only browser and ACS transports.")
         if speech.enable_diarization:
             raise ValueError("MAI Cascade input does not support speech.enable_diarization.")
         if load_default_phrases_from_env():
             raise ValueError(
-                "mai-transcribe does not support SPEECH_RECOGNIZER_DEFAULT_PHRASES. "
+                f"{self.transcription_model} does not support SPEECH_RECOGNIZER_DEFAULT_PHRASES. "
                 "Remove the Azure Speech phrase biases or select azure-speech."
             )
         self.context = context
@@ -124,7 +128,7 @@ class MAITranscriber:
         languages = list(
             dict.fromkeys(lang.split("-")[0] for lang in self._speech.candidate_languages)
         )
-        transcription = AudioInputTranscriptionOptions(model=MAI_TRANSCRIPTION_MODEL)
+        transcription = AudioInputTranscriptionOptions(model=self.transcription_model)
         if len(languages) == 1:
             transcription.language = languages[0]
         elif languages:
@@ -254,8 +258,9 @@ class MAITranscriber:
         ) as exc:
             detail = str(exc) or type(exc).__name__
             self._failure = MAITranscriptionError(
-                f"MAI transcription unavailable: {detail}. Check VoiceLive endpoint, region/model "
-                "availability and authentication. Azure Speech was not substituted."
+                f"MAI transcription unavailable ({self.transcription_model}): {detail}. "
+                "Check VoiceLive endpoint, region/model availability and authentication. "
+                "No other transcription model was substituted."
             )
             logger.error("[%s] %s", self.context.session_short, self._failure)
             _failures.add(1, self._attributes)
@@ -275,13 +280,13 @@ class MAITranscriber:
         if (
             not isinstance(transcription, Mapping)
             or not isinstance(vad, Mapping)
-            or transcription.get("model") != MAI_TRANSCRIPTION_MODEL
+            or transcription.get("model") != self.transcription_model
             or vad.get("create_response") is not False
             or session.get("input_audio_sampling_rate") != self.sample_rate
             or session.get("modalities") != ["text"]
         ):
             raise MAITranscriptionError(
-                "VoiceLive did not acknowledge mai-transcribe, create_response=False, "
+                f"VoiceLive did not acknowledge {self.transcription_model}, create_response=False, "
                 "text-only output and the requested PCM sampling rate."
             )
 

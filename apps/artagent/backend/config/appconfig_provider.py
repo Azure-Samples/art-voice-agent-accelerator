@@ -136,6 +136,8 @@ APPCONFIG_KEY_MAP: dict[str, str] = {
     "azure/acs/source-phone-number": "ACS_SOURCE_PHONE_NUMBER",
     "azure/acs/connection-string": "ACS_CONNECTION_STRING",
     "azure/acs/email-sender-address": "AZURE_EMAIL_SENDER_ADDRESS",
+    "azure/teams-phone/enabled": "TEAMS_PHONE_ENABLED",
+    "azure/teams-phone/resource-account-id": "TEAMS_PHONE_RESOURCE_ACCOUNT_ID",
     # Redis
     "azure/redis/hostname": "REDIS_HOST",
     "azure/redis/port": "REDIS_PORT",

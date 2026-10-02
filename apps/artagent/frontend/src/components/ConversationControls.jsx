@@ -15,6 +15,8 @@ import { styles } from '../styles/voiceAppStyles.js';
 const ConversationControls = React.memo(({
   recording,
   callActive,
+  callPending = false,
+  callInitiating = false,
   isCallDisabled,
   scenarioSwitching,
   onResetSession,
@@ -139,6 +141,7 @@ const ConversationControls = React.memo(({
           <IconButton
             disableRipple
             aria-label="Reset session"
+            disabled={callActive || callPending || callInitiating}
             sx={styles.resetButton(resetHovered)}
             onMouseEnter={(event) => {
               setShowResetTooltip(true);
@@ -238,7 +241,7 @@ const ConversationControls = React.memo(({
               ...styles.micButton(recording, micHovered),
               ...(scenarioSwitching && !recording ? { opacity: 0.45, pointerEvents: 'none' } : {}),
             }}
-            disabled={!!scenarioSwitching && !recording}
+            disabled={(!!scenarioSwitching && !recording) || callPending || callInitiating || callActive}
             ref={micButtonRef}
             onMouseEnter={(event) => {
               setShowMicTooltip(true);
@@ -285,12 +288,12 @@ const ConversationControls = React.memo(({
           <IconButton
             ref={phoneButtonRef}
             disableRipple
-            aria-label={callActive ? "Hang up call" : "Place call"}
-            sx={styles.phoneButton(callActive, phoneHovered, isCallDisabled)}
-            disabled={isCallDisabled && !callActive}
+            aria-label={callInitiating ? "Initiating call" : callActive || callPending ? "Hang up call" : "Place call"}
+            sx={styles.phoneButton(callActive || callPending, phoneHovered, isCallDisabled)}
+            disabled={callInitiating || (isCallDisabled && !callActive && !callPending)}
             onClick={onPhoneButtonClick}
           >
-            {callActive ? (
+            {callActive || callPending ? (
               <PhoneDisabledRoundedIcon fontSize="medium" sx={{ transform: 'rotate(135deg)', transition: 'transform 0.3s ease' }} />
             ) : (
               <PhoneRoundedIcon fontSize="medium" />
@@ -305,7 +308,7 @@ const ConversationControls = React.memo(({
                 ...(showPhoneTooltip ? styles.buttonTooltipVisible : {}),
               }}
             >
-              {callActive ? "End the conversation" : "Start a conversation"}
+              {callActive || callPending ? "Hang up call" : "Choose telephony provider and call"}
             </div>
           )}
         </div>
@@ -323,7 +326,7 @@ const ConversationControls = React.memo(({
             left: phoneDisabledPos.left,
           }}
         >
-          ⚠️ Outbound calling is disabled. Update backend .env with Azure Communication Services settings (ACS_CONNECTION_STRING, ACS_SOURCE_PHONE_NUMBER, ACS_ENDPOINT) to enable this feature.
+          {callInitiating ? 'Initiating call — please wait.' : 'Outbound calling is disabled. Check provider configuration in the phone panel.'}
         </div>
       )}
     </div>

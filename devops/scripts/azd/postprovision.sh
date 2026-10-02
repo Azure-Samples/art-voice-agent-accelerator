@@ -410,6 +410,10 @@ task_update_urls() {
     
     # Determine backend URL
     backend_url=$(azd_get "BACKEND_API_URL")
+    if [[ "${FRONT_DOOR_ENABLED:-false}" == "true" && -z "$backend_url" ]]; then
+        fail "BACKEND_API_URL is required with Front Door; refusing private-origin fallback."
+        return 1
+    fi
     [[ -z "$backend_url" ]] && backend_url=$(azd_get "BACKEND_CONTAINER_APP_URL")
     if [[ -z "$backend_url" ]]; then
         local fqdn
@@ -435,10 +439,11 @@ task_update_urls() {
     appconfig_set "$endpoint" "app/frontend/ws-url" "$ws_url" "$label" && ((count++)) || true
     
     if [[ $count -eq 3 ]]; then
-        trigger_config_refresh "$endpoint" "$label"
+        trigger_config_refresh "$endpoint" "$label" || return 1
         success "All URLs updated ($count/3)"
     else
         warn "Some updates failed ($count/3)"
+        return 1
     fi
     
     footer
@@ -455,11 +460,15 @@ task_update_backend_cors() {
     cors_script="$HELPERS_DIR/update-backend-cors.sh"
     resource_group=$(azd_get "AZURE_RESOURCE_GROUP")
     backend_app=$(azd_get "BACKEND_CONTAINER_APP_NAME")
-    frontend_fqdn=$(azd_get "FRONTEND_CONTAINER_APP_FQDN")
+    frontend_fqdn=$(azd_get "FRONTEND_PUBLIC_FQDN")
+    if [[ -z "$frontend_fqdn" && "${FRONT_DOOR_ENABLED:-false}" != "true" ]]; then
+        frontend_fqdn=$(azd_get "FRONTEND_CONTAINER_APP_FQDN")
+    fi
 
     if [[ ! -f "$cors_script" ]]; then
         warn "update-backend-cors.sh not found, skipping"
         footer
+        [[ "${FRONT_DOOR_ENABLED:-false}" == "true" ]] && return 1
         return 0
     fi
 
@@ -467,7 +476,7 @@ task_update_backend_cors() {
         warn "Missing required values for backend CORS update"
         [[ -z "$resource_group" ]] && warn "  - AZURE_RESOURCE_GROUP not set"
         [[ -z "$backend_app" ]] && warn "  - BACKEND_CONTAINER_APP_NAME not set"
-        [[ -z "$frontend_fqdn" ]] && warn "  - FRONTEND_CONTAINER_APP_FQDN not set"
+        [[ -z "$frontend_fqdn" ]] && warn "  - FRONTEND_PUBLIC_FQDN not set (origin fallback is allowed only without Front Door)"
         footer
         return 1
     fi
@@ -528,6 +537,7 @@ task_sync_appconfig() {
     if [[ ! -f "$sync_script" ]]; then
         warn "sync-appconfig.sh not found, skipping"
         footer
+        [[ "${FRONT_DOOR_ENABLED:-false}" == "true" ]] && return 1
         return 0
     fi
     
@@ -546,6 +556,7 @@ task_sync_appconfig() {
         success "Infrastructure keys synced"
     else
         warn "Some keys may have failed to sync"
+        return 1
     fi
     
     footer
@@ -637,10 +648,15 @@ task_enable_easyauth() {
     if [[ ! -f "$easyauth_script" ]]; then
         warn "enable-easyauth.sh not found, skipping"
         footer
+        [[ "${FRONT_DOOR_ENABLED:-false}" == "true" ]] && return 1
         return 0
     fi
     
-    local resource_group container_app uami_client_id
+    local resource_group container_app uami_client_id public_url=""
+    if [[ "${FRONT_DOOR_ENABLED:-false}" == "true" ]]; then
+        public_url=$(azd_get "FRONTEND_CONTAINER_APP_URL")
+        [[ -n "$public_url" ]] || { fail "FRONTEND_CONTAINER_APP_URL is required with Front Door."; return 1; }
+    fi
     resource_group=$(azd_get "AZURE_RESOURCE_GROUP")
     container_app=$(azd_get "FRONTEND_CONTAINER_APP_NAME")
     uami_client_id=$(azd_get "FRONTEND_UAI_CLIENT_ID")
@@ -674,13 +690,13 @@ task_enable_easyauth() {
             --query "[?name=='$fic_secret'].name | [0]" \
             -o tsv 2>/dev/null || echo "")
         
-        if [[ -n "$secret_present" ]]; then
+        if [[ -n "$secret_present" && "$(azd_get FRONTEND_EASYAUTH_PUBLIC_URL)" == "$public_url" ]]; then
             success "EasyAuth already configured (flag set and FIC secret present)"
             footer
             return 0
         fi
         
-        warn "EASYAUTH_ENABLED=true but FIC secret '$fic_secret' is missing — re-applying to self-heal"
+        warn "EasyAuth public URL changed or FIC secret is missing — re-applying to self-heal"
         easyauth_repair="true"
     fi
     
@@ -693,10 +709,12 @@ task_enable_easyauth() {
     # auto-skips when there is no interactive terminal.
     if [[ "$easyauth_repair" == "true" ]]; then
         log "Repairing EasyAuth configuration (drift detected)…"
-        if AZD_LOG_IN_BOX=true bash "$easyauth_script" -g "$resource_group" -a "$container_app" -i "$uami_client_id"; then
+        if AZD_LOG_IN_BOX=true bash "$easyauth_script" -g "$resource_group" -a "$container_app" -i "$uami_client_id" --public-url "$public_url"; then
             success "EasyAuth re-applied (FIC secret restored)"
+            azd_set "FRONTEND_EASYAUTH_PUBLIC_URL" "$public_url"
         else
             warn "Failed to repair EasyAuth configuration"
+            return 1
         fi
         footer
         return 0
@@ -705,10 +723,11 @@ task_enable_easyauth() {
     if is_ci; then
         # In CI mode, automatically enable EasyAuth if not already enabled
         log "Enabling EasyAuth (CI mode)…"
-        if AZD_LOG_IN_BOX=true bash "$easyauth_script" -g "$resource_group" -a "$container_app" -i "$uami_client_id"; then
+        if AZD_LOG_IN_BOX=true bash "$easyauth_script" -g "$resource_group" -a "$container_app" -i "$uami_client_id" --public-url "$public_url"; then
             success "EasyAuth enabled"
             # Set azd env variable to prevent re-running
             azd_set "EASYAUTH_ENABLED" "true"
+            azd_set "FRONTEND_EASYAUTH_PUBLIC_URL" "$public_url"
             # Output to GitHub Actions environment (if running in GitHub Actions)
             if [[ -n "${GITHUB_ENV:-}" ]]; then
                 echo "EASYAUTH_ENABLED=true" >> "$GITHUB_ENV"
@@ -716,6 +735,7 @@ task_enable_easyauth() {
             fi
         else
             warn "Failed to enable EasyAuth"
+            return 1
         fi
         footer
         return 0
@@ -749,15 +769,17 @@ task_enable_easyauth() {
         1)
             log ""
             log "Enabling EasyAuth..."
-            if AZD_LOG_IN_BOX=true bash "$easyauth_script" -g "$resource_group" -a "$container_app" -i "$uami_client_id"; then
+            if AZD_LOG_IN_BOX=true bash "$easyauth_script" -g "$resource_group" -a "$container_app" -i "$uami_client_id" --public-url "$public_url"; then
                 success "EasyAuth enabled successfully"
                 # Set azd env variable to prevent re-running
                 azd_set "EASYAUTH_ENABLED" "true"
+                azd_set "FRONTEND_EASYAUTH_PUBLIC_URL" "$public_url"
                 log ""
                 log "Your frontend now requires authentication."
                 log "Users will be redirected to Microsoft login."
             else
                 fail "Failed to enable EasyAuth"
+                return 1
             fi
             ;;
         *)
@@ -785,14 +807,20 @@ task_enable_easyauth_cardapi_mcp() {
     if [[ ! -f "$easyauth_script" ]]; then
         warn "enable-easyauth-cardapi-mcp.sh not found, skipping"
         footer
+        [[ "${FRONT_DOOR_ENABLED:-false}" == "true" ]] && return 1
         return 0
     fi
     
     # Check if EasyAuth was already enabled (via azd env)
-    local easyauth_configured
+    local easyauth_configured public_url="" easyauth_repair="false"
     easyauth_configured=$(azd_get "CARDAPI_MCP_EASYAUTH_ENABLED" "false")
+    if [[ "${FRONT_DOOR_ENABLED:-false}" == "true" ]]; then
+        public_url=$(azd_get "CARDAPI_PUBLIC_URL")
+    fi
     
-    if [[ "$easyauth_configured" == "true" ]]; then
+    if [[ "$easyauth_configured" == "true" &&
+          "$(azd_get CARDAPI_EASYAUTH_PUBLIC_URL)" == "$public_url" &&
+          "${FRONT_DOOR_ENABLED:-false}" != "true" ]]; then
         success "CardAPI MCP EasyAuth already configured (CARDAPI_MCP_EASYAUTH_ENABLED=true)"
         footer
         return 0
@@ -806,6 +834,25 @@ task_enable_easyauth_cardapi_mcp() {
     # with its app-only token, otherwise EasyAuth rejects it with 401.
     local backend_uai_client_id
     backend_uai_client_id=$(azd_get "BACKEND_UAI_CLIENT_ID")
+
+    if [[ -z "$container_app" && -z "$public_url" && "${FRONT_DOOR_ENABLED:-false}" == "true" ]]; then
+        info "Optional CardAPI MCP service is not deployed"
+        footer
+        return 0
+    fi
+
+    if [[ "$easyauth_configured" == "true" ]]; then
+        local secret_present
+        secret_present=$(az containerapp secret list --resource-group "$resource_group" \
+            --name "$container_app" --query "[?name=='override-use-mi-fic-assertion-client-id'].name | [0]" \
+            -o tsv 2>/dev/null || echo "")
+        if [[ -n "$secret_present" && "$(azd_get CARDAPI_EASYAUTH_PUBLIC_URL)" == "$public_url" ]]; then
+            success "CardAPI MCP EasyAuth already configured for this public URL"
+            footer
+            return 0
+        fi
+        easyauth_repair="true"
+    fi
     
     if [[ -z "$resource_group" || -z "$container_app" || -z "$uami_client_id" ]]; then
         warn "Missing required values for CardAPI MCP EasyAuth configuration"
@@ -816,13 +863,14 @@ task_enable_easyauth_cardapi_mcp() {
         return 1
     fi
     
-    if is_ci; then
+    if is_ci || [[ "$easyauth_repair" == "true" ]]; then
         # In CI mode, automatically enable EasyAuth if not already enabled
         log "Enabling CardAPI MCP EasyAuth (CI mode)…"
-        if AZD_LOG_IN_BOX=true bash "$easyauth_script" -g "$resource_group" -a "$container_app" -i "$uami_client_id" --allowed-client-ids "$backend_uai_client_id"; then
+        if AZD_LOG_IN_BOX=true bash "$easyauth_script" -g "$resource_group" -a "$container_app" -i "$uami_client_id" --allowed-client-ids "$backend_uai_client_id" --public-url "$public_url"; then
             success "CardAPI MCP EasyAuth enabled"
             # Set azd env variable to prevent re-running
             azd_set "CARDAPI_MCP_EASYAUTH_ENABLED" "true"
+            azd_set "CARDAPI_EASYAUTH_PUBLIC_URL" "$public_url"
             # Output to GitHub Actions environment (if running in GitHub Actions)
             if [[ -n "${GITHUB_ENV:-}" ]]; then
                 echo "CARDAPI_MCP_EASYAUTH_ENABLED=true" >> "$GITHUB_ENV"
@@ -830,6 +878,7 @@ task_enable_easyauth_cardapi_mcp() {
             fi
         else
             warn "Failed to enable CardAPI MCP EasyAuth"
+            return 1
         fi
         footer
         return 0
@@ -862,15 +911,17 @@ task_enable_easyauth_cardapi_mcp() {
         1)
             log ""
             log "Enabling CardAPI MCP EasyAuth..."
-            if AZD_LOG_IN_BOX=true bash "$easyauth_script" -g "$resource_group" -a "$container_app" -i "$uami_client_id" --allowed-client-ids "$backend_uai_client_id"; then
+            if AZD_LOG_IN_BOX=true bash "$easyauth_script" -g "$resource_group" -a "$container_app" -i "$uami_client_id" --allowed-client-ids "$backend_uai_client_id" --public-url "$public_url"; then
                 success "CardAPI MCP EasyAuth enabled successfully"
                 # Set azd env variable to prevent re-running
                 azd_set "CARDAPI_MCP_EASYAUTH_ENABLED" "true"
+                azd_set "CARDAPI_EASYAUTH_PUBLIC_URL" "$public_url"
                 log ""
                 log "The CardAPI MCP server now requires authentication."
                 log "Tools/users will be redirected to Microsoft login."
             else
                 fail "Failed to enable CardAPI MCP EasyAuth"
+                return 1
             fi
             ;;
         *)
@@ -884,6 +935,7 @@ task_enable_easyauth_cardapi_mcp() {
     esac
     
     footer
+
 }
 
 # ============================================================================
@@ -894,17 +946,38 @@ main() {
     header "🚀 Post-Provisioning"
     is_ci && info "CI/CD mode" || info "Interactive mode"
     footer
+
+    FRONT_DOOR_ENABLED=$(python3 "$HELPERS_DIR/frontdoor.py" enabled)
+    export FRONT_DOOR_ENABLED
+    if [[ "$FRONT_DOOR_ENABLED" == "true" ]]; then
+        python3 "$HELPERS_DIR/frontdoor.py" provision
+    fi
     
     #task_cosmos_init || true
     task_cardapi_provision || true
     task_phone_number || true
-    task_update_urls || true
-    task_update_backend_cors || true
-    task_sync_appconfig || true
+    if [[ "$FRONT_DOOR_ENABLED" == "true" ]]; then
+        task_update_urls
+        task_update_backend_cors
+    else
+        task_update_urls || true
+        task_update_backend_cors || true
+        task_sync_appconfig || true
+    fi
     task_generate_env_local || true
-    task_enable_easyauth || true
-    task_enable_easyauth_cardapi_mcp || true
+    if [[ "$FRONT_DOOR_ENABLED" == "true" ]]; then
+        task_enable_easyauth
+        task_enable_easyauth_cardapi_mcp
+        # Sync newly created EasyAuth app IDs, then override any manifest-origin URLs.
+        task_sync_appconfig
+        task_update_urls
+    else
+        task_enable_easyauth || true
+        task_enable_easyauth_cardapi_mcp || true
+    fi
     show_summary
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
