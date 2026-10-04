@@ -43,11 +43,18 @@ export async function quickTuneRequest(path, {
   signal, timeoutMs = 20000, allowNotFound = false, ...options
 } = {}) {
   const timeout = AbortSignal.timeout(timeoutMs);
-  const response = await fetch(`${API_BASE_URL}/api/v1/${path}`, {
-    ...options,
-    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-    headers: { 'Content-Type': 'application/json', ...options.headers },
-  });
+  let response;
+  try {
+    response = await fetch(`${API_BASE_URL}/api/v1/${path}`, {
+      ...options,
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      headers: { 'Content-Type': 'application/json', ...options.headers },
+    });
+  } catch (cause) {
+    if (cause?.name !== 'TypeError') throw cause;
+    // Gateway/WAF rejections omit CORS headers, so the browser only reports a network failure.
+    throw new Error('The request did not reach the server. It may have been blocked by a firewall or proxy, or the network is unavailable.', { cause });
+  }
   if (allowNotFound && response.status === 404) return null;
   if (!response.headers.get('content-type')?.includes('json')) {
     throw new Error(`The server returned an unexpected response (HTTP ${response.status}).`);

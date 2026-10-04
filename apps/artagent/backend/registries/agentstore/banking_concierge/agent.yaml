@@ -33,7 +33,7 @@ return_greeting: |
 voice:
   name: en-US-AlloyTurboMultilingualNeural # Fast, natural multilingual voice
   # Alternative voices:
-  # name: en-US-Harper:MAI-Voice-2             # Expressive multilingual MAI voice
+  # name: en-US-Harper:MAI-Voice-2.1-Flash     # Expressive, low-latency multilingual MAI voice
   # name: en-US-AvaMultilingualNeural        # Warm, professional
   # name: en-US-EmmaMultilingualNeural       # Clear, trustworthy
   # name: en-US-BrianMultilingualNeural      # Professional male
@@ -118,7 +118,7 @@ speech:
     
   # Text-to-Speech (Azure Speech SDK)
   synthesis:
-    voice_name: en-US-Harper:MAI-Voice-2  # Inherits from voice.name if not specified
+    voice_name: en-US-Harper:MAI-Voice-2.1-Flash  # Inherits from voice.name if not specified
     # output_format: audio-16khz-32kbitrate-mono-mp3  # Audio format
     # speaking_rate: 1.0                  # Speech rate multiplier
     

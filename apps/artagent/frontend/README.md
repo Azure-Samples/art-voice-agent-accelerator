@@ -174,11 +174,19 @@ BYOM profile, and known realtime/text profile mismatches cannot be applied.
 
 ### Choose a regional Speech voice
 
-**Voice & model** uses the full voice catalog returned by the connected Speech
-resource, rather than intersecting it with starter presets. Search **Voice** by
-display name, service identifier, locale/language (for example, `French` or
-`ja-JP`), gender, or an advertised style. Options include locale and voice metadata,
-and the selector identifies the catalog's region and voice count.
+**Voice & model**, the Agent Builder, and the Scenario Builder agent editor share
+one voice picker that works from the full catalog returned by the connected Speech
+resource:
+
+1. **Voice language** — pick a locale such as *English (United States)*. Two
+   entries are pinned at the top: **Multilingual** (MAI, Dragon HD Omni, and
+   `*Multilingual*` voices) and **All languages**. Each entry shows its voice count.
+   The picker starts on the current voice's locale.
+2. **Family** — **All**, **MAI**, **HD**, or **Standard**, with counts for the
+   chosen language.
+3. **Voice** — the filtered list. Typing searches every language by display name,
+   service identifier, locale, gender, or style, so you can jump to a voice without
+   changing the language first.
 
 **Refresh regional voice catalog** requests fresh discovery instead of using the
 ten-minute cache. Discovery does not block the rest of the agent editor. The
@@ -194,11 +202,20 @@ personal, and native-model voices can require separate configuration.
 
 ### MAI voice and transcription options
 
-MAI voices appear first, with **MAI-Voice-2-Flash** ahead of **MAI-Voice-2**.
-Supported regional entries remain selectable; clearly marked setup presets stay
-disabled when the configured resource has not returned those voices. Prioritizing
-MAI does not change the selected voice or claim availability in an unsupported
-region. Choosing a discovered MAI voice uses the `azure-standard` voice type.
+MAI voices appear first, newest model first with Flash ahead of the full model:
+**MAI-Voice-2.1-Flash**, **MAI-Voice-2.1**, then legacy **MAI-Voice-2-Flash** and
+**MAI-Voice-2** names if the resource still returns them. Select the **MAI** family
+to see them all. Documented MAI voices are listed even when the resource's catalog
+omits them, and are labelled as such.
+
+MAI voices synthesize only in
+[supported regions](https://learn.microsoft.com/azure/ai-services/speech-service/mai-voices#availability-and-regions).
+When MAI is selected, the picker states whether the relevant resource supports it:
+the Speech resource for **Custom Speech**, the VoiceLive resource for **VoiceLive**,
+and either resource in the builders (agent definitions serve both modes). If the
+region is unsupported, the picker names it, explains the fix, links the region list,
+and disables MAI options until you turn on **Select MAI voices anyway**. Choosing an
+MAI voice uses the `azure-standard` voice type.
 
 **Input transcription** is a primary control in both **Custom Speech** and
 **VoiceLive**, with **MAI Transcribe 2.0** listed first. This choice preserves the

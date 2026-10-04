@@ -139,6 +139,37 @@ run "private_origins_and_corporate_policy" {
   }
   assert {
     condition = alltrue([
+      for policy in azapi_resource.waf : (
+        length(policy.body.properties.managedRules.managedRuleSets[0].ruleGroupOverrides) == 1 &&
+        policy.body.properties.managedRules.managedRuleSets[0].ruleGroupOverrides[0].ruleGroupName == "FIX" &&
+        alltrue([
+          for rule in policy.body.properties.managedRules.managedRuleSets[0].ruleGroupOverrides[0].rules :
+          contains(["943110", "943120"], rule.ruleId) &&
+          lookup(rule, "enabledState", "Enabled") == "Enabled" &&
+          length(rule.exclusions) == 1 &&
+          rule.exclusions[0].matchVariable == "QueryStringArgNames" &&
+          rule.exclusions[0].selectorMatchOperator == "Equals" &&
+          rule.exclusions[0].selector == "session_id"
+        ])
+      )
+    ])
+    error_message = "Session-fixation exclusions must stay scoped to the session_id query arg on 943110/943120."
+  }
+  assert {
+    condition = alltrue([
+      for policy in azapi_resource.waf : (
+        toset([
+          for exclusion in policy.body.properties.managedRules.managedRuleSets[0].exclusions :
+          exclusion.selector
+          if exclusion.matchVariable == "RequestBodyJsonArgNames" && exclusion.selectorMatchOperator == "Equals"
+        ]) == toset(["prompt", "greeting", "return_greeting", "description"]) &&
+        length(policy.body.properties.managedRules.managedRuleSets[0].exclusions) == 4
+      )
+    ])
+    error_message = "Rule-set exclusions must stay limited to exact agent template JSON fields."
+  }
+  assert {
+    condition = alltrue([
       for policy in azurerm_cdn_frontdoor_security_policy.app :
       contains(tolist(policy.security_policies[0].firewall[0].association[0].patterns_to_match), "/*")
     ])

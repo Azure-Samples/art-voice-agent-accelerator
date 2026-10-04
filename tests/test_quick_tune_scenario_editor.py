@@ -124,6 +124,60 @@ async def test_update_returns_every_persisted_editable_field(monkeypatch, scenar
         assert result.config[field] == original[field]
 
 
+@pytest.mark.asyncio
+async def test_start_agent_activation_updates_session_scenario_and_adds_missing_agent(
+    monkeypatch, scenario
+):
+    persist = AsyncMock()
+    monkeypatch.setattr(api, "get_session_scenario", Mock(return_value=scenario))
+    monkeypatch.setattr(api, "get_session_agent", Mock(return_value=None))
+    monkeypatch.setattr(api, "discover_agents", lambda: {"FraudAgent": SimpleNamespace(name="FraudAgent")})
+    monkeypatch.setattr(api, "set_session_scenario_async", persist)
+    result = await api.set_session_start_agent(
+        "session-a", " fraudagent ", Request({"type": "http"}), scenario_name="Banking"
+    )
+    persisted = persist.await_args.args[1]
+    assert persisted.start_agent == "FraudAgent"
+    assert persisted.agents == ["Concierge", "FraudAgent"]
+    assert scenario.start_agent == "Concierge"
+    assert result.config["start_agent"] == "FraudAgent"
+
+
+@pytest.mark.asyncio
+async def test_start_agent_activation_seeds_builtin_template_when_session_has_none(
+    monkeypatch, scenario
+):
+    persist = AsyncMock()
+    load = Mock(return_value=scenario)
+    monkeypatch.setattr(api, "get_session_scenario", Mock(return_value=None))
+    monkeypatch.setattr(api, "load_scenario", load)
+    monkeypatch.setattr(api, "get_session_agent", Mock(return_value=SimpleNamespace(name="Concierge")))
+    monkeypatch.setattr(api, "set_session_scenario_async", persist)
+    await api.set_session_start_agent(
+        "session-a", "Concierge", Request({"type": "http"}), scenario_name="Banking"
+    )
+    load.assert_called_once_with("banking")
+    assert persist.await_args.args[1].agents == ["Concierge"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("agent", "scenario_found", "status"),
+    [("Missing", True, 404), ("Concierge", False, 404), ("  ", True, 422)],
+)
+async def test_start_agent_activation_rejects_unknown_targets(
+    monkeypatch, scenario, agent, scenario_found, status
+):
+    persist = AsyncMock()
+    monkeypatch.setattr(api, "get_session_scenario", Mock(return_value=scenario if scenario_found else None))
+    monkeypatch.setattr(api, "get_session_agent", Mock(return_value=None))
+    monkeypatch.setattr(api, "discover_agents", lambda: {"Concierge": SimpleNamespace(name="Concierge")})
+    monkeypatch.setattr(api, "set_session_scenario_async", persist)
+    with pytest.raises(HTTPException) as error:
+        await api.set_session_start_agent("session-a", agent, Request({"type": "http"}))
+    assert error.value.status_code == status
+    persist.assert_not_awaited()
+
 def _generic_draft():
     return ScenarioDraft(
         summary="Use the configured generic handoff policy.",

@@ -41,7 +41,6 @@ import {
   LinearProgress,
   List,
   ListItem,
-  ListItemAvatar,
   ListItemIcon,
   ListItemText,
   MenuItem,
@@ -86,6 +85,8 @@ import { API_BASE_URL } from '../config/constants.js';
 import VoiceLiveGenerationControls from './VoiceLiveGenerationControls.jsx';
 import logger from '../utils/logger.js';
 import { fetchFoundryModels, fetchVoiceLiveModels, deriveModelOptions, MANAGED_VOICELIVE_MODELS, isManagedVoiceLiveModel } from '../utils/foundryModels.js';
+import { pickVoiceMetadata } from '../utils/voiceCatalog.js';
+import VoiceSelector from './VoiceSelector.jsx';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TEMPLATE VARIABLE REFERENCE
@@ -592,15 +593,6 @@ const BYOM_MODES = [
   { id: 'byom-foundry-anthropic-messages', label: 'Foundry Anthropic messages — preview (claude-sonnet/haiku)' },
 ];
 
-// Display labels for the TTS voice categories returned by
-// GET /api/v1/agent-builder/voices. The backend sorts voices by category (HD
-// first), which MUI's Autocomplete groupBy relies on.
-const VOICE_CATEGORY_LABELS = {
-  hd: 'HD (high definition)',
-  turbo: 'Turbo (lowest latency)',
-  standard: 'Standard neural',
-  mai: 'MAI-Voice-2 (preview)',
-};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STYLES
@@ -1352,6 +1344,7 @@ export default function AgentBuilder({
       // Whether the catalog was cross-checked against the live region (vs the
       // static fallback when Azure couldn't be reached).
       setVoicesRegionVerified({
+        ...pickVoiceMetadata(data),
         verified: Boolean(data.verified_against_region),
         source: data.source || 'static-catalog',
       });
@@ -1850,19 +1843,7 @@ export default function AgentBuilder({
   // RENDER
   // ─────────────────────────────────────────────────────────────────────────
 
-  const _voicesByCategory = useMemo(() => {
-    const categories = {};
-    for (const voice of availableVoices) {
-      if (!categories[voice.category]) categories[voice.category] = [];
-      categories[voice.category].push(voice);
-    }
-    return categories;
-  }, [availableVoices]);
 
-  const hdVoiceCount = useMemo(
-    () => availableVoices.filter((v) => v.is_hd).length,
-    [availableVoices],
-  );
 
   const templateVarKeys = useMemo(() => {
     const keys = new Set(Object.keys(config.template_vars || {}));
@@ -2969,84 +2950,13 @@ export default function AgentBuilder({
                       <Typography variant="subtitle2" color="primary" sx={{ fontWeight: 600 }}>
                         🎙️ Voice (TTS) — shared by Cascade & VoiceLive
                       </Typography>
-                      {voicesRegionVerified && (
-                        <Chip
-                          size="small"
-                          variant="outlined"
-                          color={voicesRegionVerified.verified ? 'success' : 'default'}
-                          label={
-                            voicesRegionVerified.verified
-                              ? `Region-verified (${availableVoices.length})`
-                              : `Catalog (${availableVoices.length}, region not verified)`
-                          }
-                          sx={{ height: 20, fontSize: '11px' }}
-                        />
-                      )}
-                      {hdVoiceCount > 0 && (
-                        <Chip
-                          size="small"
-                          variant="outlined"
-                          color="secondary"
-                          label={`${hdVoiceCount} HD`}
-                          sx={{ height: 20, fontSize: '11px' }}
-                        />
-                      )}
                     </Stack>
-                    <Autocomplete
-                      value={availableVoices.find(v => v.name === config.voice.name) || null}
-                      onChange={(_e, newValue) => {
-                        if (newValue) {
-                          handleNestedConfigChange('voice', 'name', newValue.name);
-                        }
-                      }}
-                      options={availableVoices}
-                      groupBy={(option) => VOICE_CATEGORY_LABELS[option.category] || option.category}
-                      getOptionLabel={(option) => option.display_name || option.name}
-                      renderInput={(params) => (
-                        <TextField
-                          {...params}
-                          label="Voice"
-                          placeholder="Search voices..."
-                        />
-                      )}
-                      renderOption={(props, option) => {
-                        const { key, ...restProps } = props;
-                        return (
-                          <ListItem {...restProps} key={key}>
-                            <ListItemAvatar>
-                              <Avatar sx={{ width: 32, height: 32, bgcolor: '#e0e7ff' }}>
-                                <RecordVoiceOverIcon fontSize="small" color="primary" />
-                              </Avatar>
-                            </ListItemAvatar>
-                            <ListItemText
-                              primary={
-                                <Stack direction="row" spacing={0.75} alignItems="center">
-                                  <span>{option.display_name || option.name}</span>
-                                  {option.is_hd && (
-                                    <Chip
-                                      size="small"
-                                      label="HD"
-                                      color="secondary"
-                                      sx={{ height: 16, fontSize: '10px' }}
-                                    />
-                                  )}
-                                  {option.region_verified === false && (
-                                    <Chip
-                                      size="small"
-                                      variant="outlined"
-                                      label="unverified"
-                                      sx={{ height: 16, fontSize: '10px' }}
-                                    />
-                                  )}
-                                </Stack>
-                              }
-                              secondary={option.name}
-                              primaryTypographyProps={{ variant: 'body2', component: 'div' }}
-                              secondaryTypographyProps={{ variant: 'caption' }}
-                            />
-                          </ListItem>
-                        );
-                      }}
+                    <VoiceSelector
+                      voices={availableVoices}
+                      value={config.voice.name}
+                      metadata={voicesRegionVerified}
+                      voiceLiveRegion={voiceLiveModelInfo?.region || ''}
+                      onChange={(name) => handleNestedConfigChange('voice', 'name', name)}
                     />
                   </CardContent>
                 </Card>

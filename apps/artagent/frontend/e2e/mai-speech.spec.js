@@ -1,7 +1,11 @@
 import { test, expect } from '@playwright/test';
 import { installQuickTuneMocks } from './helpers/quick-tune-mocks.js';
 
-async function prepare(page, { configure = () => {}, maiVoices = true, supported = true } = {}) {
+const MAI_REGIONS = ['eastus', 'swedencentral', 'westus2'];
+
+async function prepare(page, {
+  configure = () => {}, maiVoices = true, supported = true, extra = {}, extraVoices = [],
+} = {}) {
   const state = await installQuickTuneMocks(page);
   configure(state.agents.BankingConcierge);
   await page.route('**/api/v1/agent-builder/voices{,?*}', (route) => route.fulfill({
@@ -17,8 +21,12 @@ async function prepare(page, { configure = () => {}, maiVoices = true, supported
         ...(maiVoices ? [
           { name: 'en-US-Harper:MAI-Voice-2', display_name: 'Harper', language: 'en-US', category: 'mai' },
           { name: 'en-US-Ethan:MAI-Voice-2-Flash', display_name: 'Ethan', language: 'en-US', category: 'mai' },
+          { name: 'en-US-Harper:MAI-Voice-2.1', display_name: 'Harper', language: 'en-US', category: 'mai' },
+          { name: 'en-US-Ethan:MAI-Voice-2.1-Flash', display_name: 'Ethan', language: 'en-US', category: 'mai' },
         ] : []),
+        ...extraVoices,
       ],
+      ...extra,
     },
   }));
   await page.goto('/');
@@ -43,7 +51,7 @@ test('MAI 2.0 is first and is the omitted Cascade default without changing nativ
     await voice.fill('');
     await voice.press('ArrowDown');
     const voices = page.getByRole('listbox');
-    await expect(voices.getByRole('option').first()).toHaveAttribute('aria-label', /MAI-Voice-2-Flash/);
+    await expect(voices.getByRole('option').first()).toHaveAttribute('aria-label', /MAI-Voice-2\.1-Flash/);
     await voice.press('Escape');
     const input = panel.getByRole('combobox', { name: /^Input transcription/ });
     await expect(input).toHaveText(mode === 'VoiceLive' ? 'Azure Speech' : 'MAI Transcribe 2.0');
@@ -140,18 +148,80 @@ test('MAI voice uses Azure output without unnecessarily changing the LLM pipelin
   expect(saved.voicelive_model.deployment_id).toBe('gpt-realtime');
 });
 
-test('missing regional voices and older backends show MAI options as unavailable', async ({ page }) => {
+test('older backends keep MAI input unavailable and MAI voices selectable as documented presets', async ({ page }) => {
   const { panel, state } = await prepare(page, { maiVoices: false, supported: false });
   await panel.getByRole('combobox', { name: 'Voice', exact: true }).fill('MAI');
   const choices = page.getByRole('listbox').getByRole('option');
   await expect(choices).toHaveCount(4);
-  for (const choice of await choices.all()) await expect(choice).toHaveAttribute('aria-disabled', 'true');
+  for (const choice of await choices.all()) await expect(choice).not.toHaveAttribute('aria-disabled', 'true');
+  await expect(choices.first()).toContainText("not listed by this resource's catalog");
   await panel.getByRole('combobox', { name: 'Voice', exact: true }).press('Escape');
   await panel.getByRole('combobox', { name: /^Input transcription/ }).click();
   const inputs = page.getByRole('option', { name: /MAI Transcribe.*backend update required/ });
   await expect(inputs).toHaveCount(2);
   for (const choice of await inputs.all()) await expect(choice).toHaveAttribute('aria-disabled', 'true');
   expect(state.calls).toEqual([]);
+});
+
+test('unsupported Speech region explains MAI availability, links region docs, and gates selection', async ({ page }) => {
+  const { panel, state } = await prepare(page, {
+    maiVoices: false, extra: { mai_voice_regions: MAI_REGIONS },
+  });
+  await panel.getByRole('button', { name: 'Custom Speech', exact: true }).click();
+  await panel.getByRole('button', { name: 'MAI voices', exact: true }).click();
+  const status = panel.getByTestId('mai-region-status');
+  await expect(status).toContainText('northcentralus');
+  await expect(status).toContainText('Switch to VoiceLive');
+  await expect(status.getByRole('link', { name: 'See supported regions' }))
+    .toHaveAttribute('href', /mai-voices#availability-and-regions/);
+  const voice = panel.getByRole('combobox', { name: 'Voice', exact: true });
+  await voice.click();
+  const choices = page.getByRole('listbox').getByRole('option');
+  await expect(choices).toHaveCount(4);
+  for (const choice of await choices.all()) await expect(choice).toHaveAttribute('aria-disabled', 'true');
+  await voice.press('Escape');
+  await status.getByLabel('Select MAI voices anyway').check();
+  await voice.click();
+  await page.getByRole('option', { name: /Ethan.*MAI-Voice-2\.1-Flash/ }).click();
+  await panel.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect(panel.getByText(/Saved for the next connection/)).toBeVisible();
+  expect(state.calls.find((call) => call.type === 'save-agent').body.voice.name)
+    .toBe('en-US-Ethan:MAI-Voice-2.1-Flash');
+});
+
+test('supported Speech region allows MAI voices without an override', async ({ page }) => {
+  const { panel } = await prepare(page, { extra: { mai_voice_regions: MAI_REGIONS } });
+  await panel.getByRole('button', { name: 'Custom Speech', exact: true }).click();
+  await panel.getByRole('button', { name: 'MAI voices', exact: true }).click();
+  await expect(panel.getByTestId('mai-region-status')).toContainText('MAI voices synthesize on');
+  await expect(panel.getByLabel('Select MAI voices anyway')).toHaveCount(0);
+  await panel.getByRole('combobox', { name: 'Voice', exact: true }).click();
+  for (const choice of await page.getByRole('listbox').getByRole('option').all()) {
+    await expect(choice).not.toHaveAttribute('aria-disabled', 'true');
+  }
+});
+
+test('voice language narrows the list, pins Multilingual, and search spans every language', async ({ page }) => {
+  const { panel } = await prepare(page, { extraVoices: [
+    { name: 'fr-FR-DeniseNeural', display_name: 'Denise', language: 'fr-FR', category: 'standard' },
+    { name: 'fr-FR-VivienneMultilingualNeural', display_name: 'Vivienne', language: 'fr-FR', category: 'standard' },
+  ] });
+  const language = panel.getByRole('combobox', { name: 'Voice language', exact: true });
+  await expect(language).toHaveValue('English (United States)');
+  await language.click();
+  const languages = page.getByRole('listbox').getByRole('option');
+  await expect(languages.nth(0)).toHaveAttribute('aria-label', /^Multilingual, \d+ voices$/);
+  await expect(languages.nth(1)).toHaveAttribute('aria-label', /^All languages, \d+ voices$/);
+  await page.getByRole('option', { name: 'French (France), 2 voices', exact: true }).click();
+  const voice = panel.getByRole('combobox', { name: 'Voice', exact: true });
+  await voice.fill('');
+  await voice.press('ArrowDown');
+  const choices = page.getByRole('listbox').getByRole('option');
+  await expect(choices).toHaveCount(2);
+  await expect(choices.first()).toContainText('French (France)');
+  await voice.fill('Ava');
+  await expect(page.getByRole('listbox').getByRole('option')).toHaveCount(1);
+  await expect(page.getByRole('listbox').getByRole('option').first()).toContainText('English (United States)');
 });
 
 for (const profile of ['byom-azure-openai-chat-completion', 'byom-foundry-anthropic-messages']) {

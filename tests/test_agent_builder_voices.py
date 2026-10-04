@@ -26,6 +26,7 @@ import pytest
 from apps.artagent.backend.api.v1.endpoints import agent_builder
 from apps.artagent.backend.api.v1.endpoints.agent_builder import (
     _HD_CATALOG,
+    _MAI_CATALOG,
     AVAILABLE_VOICES,
     _classify_voice_name,
     _locale_from_short_name,
@@ -142,6 +143,8 @@ def offline(monkeypatch):
         ("zh-CN-Xiaoxiao:DragonHDFlashLatestNeural", "hd", "neural-hd-flash", True),
         ("en-US-AlloyTurboMultilingualNeural", "turbo", "neural-turbo", False),
         ("en-US-Ethan:MAI-Voice-2", "mai", "mai", False),
+        ("en-US-Harper:MAI-Voice-2.1", "mai", "mai", False),
+        ("en-US-Harper:MAI-Voice-2.1-Flash", "mai", "mai", False),
         ("fr-FR-DeniseNeural", "standard", "neural", False),
     ],
 )
@@ -194,6 +197,25 @@ def test_catalog_covers_documented_hd_voices():
         "zh-CN",
     }
     assert all(v.is_hd and v.category == "hd" for v in _HD_CATALOG)
+
+
+def test_mai_catalog_offers_both_2_1_models_for_every_documented_persona():
+    """MAI-Voice-2.1 presets replace the 2.0 presets; Flash is listed first."""
+    names = {v.name for v in _MAI_CATALOG}
+    for persona in ("en-US-Harper", "en-US-Sage", "es-MX-Valeria", "zh-CN-Wei", "vi-VN-Harper"):
+        assert f"{persona}:MAI-Voice-2.1-Flash" in names
+        assert f"{persona}:MAI-Voice-2.1" in names
+    assert len(names) == len(_MAI_CATALOG) and len(_MAI_CATALOG) % 2 == 0
+    assert _MAI_CATALOG[0].name.endswith(":MAI-Voice-2.1-Flash")
+    assert not any(v.name.endswith((":MAI-Voice-2", ":MAI-Voice-2-Flash")) for v in _MAI_CATALOG)
+    assert all(v.category == "mai" and v.voice_type == "mai" for v in _MAI_CATALOG)
+    assert names <= {v.name for v in AVAILABLE_VOICES}
+    harry = next(v for v in _MAI_CATALOG if v.name == "en-GB-Harry:MAI-Voice-2.1")
+    assert (harry.language, harry.gender, harry.display_name) == (
+        "en-GB",
+        "Male",
+        "Harry · en-GB (MAI-Voice-2.1)",
+    )
 
 
 def test_catalog_entries_are_self_consistent():
@@ -429,6 +451,37 @@ def test_include_unverified_supplements_region_list(region):
     assert verified_names <= names
     assert supplemented["total"] > len(verified_names)
     assert supplemented["category_counts"]["mai"] > 0
+
+
+def test_discovered_mai_voices_are_badged_with_their_own_model(region):
+    """Uncurated MAI voices keep their actual model in the label, including legacy 2.0."""
+    region(
+        [
+            sdk_voice("en-US-Nova:MAI-Voice-2.1-Flash", "en-US", "Nova"),
+            sdk_voice("en-US-Nova:MAI-Voice-2", "en-US", "Nova"),
+        ]
+    )
+    labels = {v["name"]: v["display_name"] for v in call()["voices"]}
+    assert labels["en-US-Nova:MAI-Voice-2.1-Flash"] == "Nova (MAI-Voice-2.1-Flash)"
+    assert labels["en-US-Nova:MAI-Voice-2"] == "Nova (MAI-Voice-2)"
+
+
+def test_mai_voice_catalog_and_regions_are_advertised_separately(region):
+    """The picker can always offer MAI voices and judge region support without
+    MAI leaking into the region-verified ``voices`` list."""
+    discovered = "en-US-Harper:MAI-Voice-2.1-Flash"
+    region([sdk_voice(discovered, "en-US", "Harper"), *REGION_SAMPLE])
+    payload = call()
+
+    assert payload["mai_voice_regions"] == list(agent_builder.MAI_VOICE_REGIONS)
+    assert len(payload["mai_voice_regions"]) == 14
+    assert {"swedencentral", "eastus2"} <= set(payload["mai_voice_regions"])
+    assert "northcentralus" not in payload["mai_voice_regions"]
+
+    catalog = {v["name"] for v in payload["mai_voice_catalog"]}
+    assert catalog == {v.name for v in _MAI_CATALOG} - {discovered}
+    assert all(v["region_verified"] is False for v in payload["mai_voice_catalog"])
+    assert [v["name"] for v in payload["voices"] if v["category"] == "mai"] == [discovered]
 
 
 def test_response_shape_is_backward_compatible(region):

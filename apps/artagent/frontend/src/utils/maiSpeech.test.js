@@ -29,6 +29,22 @@ const configFor = (profile, model) => ({
   session: { input_audio_transcription_settings: { model } },
 });
 
+test('MAI voices rank newest model first with Flash ahead of the full model', () => {
+  const names = [
+    'en-US-AvaMultilingualNeural', 'en-US-Harper:MAI-Voice-2', 'en-US-Harper:MAI-Voice-2.1',
+    'en-US-Harper:MAI-Voice-2-Flash', 'en-US-Harper:MAI-Voice-2.1-Flash', 'en-US-Harper:MAI-Voice-Next',
+  ];
+  assert.deepEqual([...names].sort((a, b) => speech.maiVoiceRank(a) - speech.maiVoiceRank(b)), [
+    'en-US-Harper:MAI-Voice-2.1-Flash', 'en-US-Harper:MAI-Voice-2.1', 'en-US-Harper:MAI-Voice-2-Flash',
+    'en-US-Harper:MAI-Voice-2', 'en-US-Harper:MAI-Voice-Next', 'en-US-AvaMultilingualNeural',
+  ]);
+  assert.equal(speech.isMaiVoice('en-us-harper:mai-voice-2.1-flash'), true);
+  assert.equal(speech.isMaiVoice('en-US-Ava:DragonHDLatestNeural'), false);
+  assert.equal(speech.MAI_VOICE_PRESETS[0].name, 'en-US-Harper:MAI-Voice-2.1-Flash');
+  assert.equal(speech.voiceDisplayLabel({ name: 'en-US-Ethan:MAI-Voice-2.1', display_name: 'Ethan' }),
+    'Ethan (MAI-Voice-2.1)');
+});
+
 test('explicit MAI 2.0 stays versioned; only legacy 1.5 normalizes to the generic alias', () => {
   assert.equal(speech.DEFAULT_TRANSCRIPTION_MODEL, 'mai-transcribe-2');
   assert.equal(speech.normalizeTranscriptionModel(' MAI-Transcribe-2 '), 'mai-transcribe-2');

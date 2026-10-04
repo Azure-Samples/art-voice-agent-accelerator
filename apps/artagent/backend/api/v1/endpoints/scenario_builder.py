@@ -22,11 +22,13 @@ Endpoints:
     GET  /api/v1/scenario-builder/session/{session_id} - Get session scenario config
     PUT  /api/v1/scenario-builder/session/{session_id} - Update session scenario config
     DELETE /api/v1/scenario-builder/session/{session_id} - Reset to default scenario
+    POST /api/v1/scenario-builder/session/{session_id}/start-agent - Set the session start agent
     GET  /api/v1/scenario-builder/sessions      - List all sessions with custom scenarios
 """
 
 from __future__ import annotations
 
+import copy
 import re
 import time
 from typing import Any
@@ -77,9 +79,13 @@ from apps.artagent.backend.src.orchestration.naming import (
     normalize_agent_names as _normalize_agent_names,
 )
 from apps.artagent.backend.src.orchestration.naming import (
+    find_agent_by_name,
+)
+from apps.artagent.backend.src.orchestration.naming import (
     normalize_scenario_name as _normalize_scenario_name,
 )
 from apps.artagent.backend.src.orchestration.session_agents import (
+    get_session_agent,
     list_session_agents,
     list_session_agents_by_session,
 )
@@ -963,6 +969,82 @@ async def set_active_scenario_endpoint(
             "agents": scenario.agents if scenario else [],
         },
     }
+
+
+@router.post(
+    "/session/{session_id}/start-agent",
+    response_model=SessionScenarioResponse,
+    summary="Set Session Start Agent",
+    description=(
+        "Make an agent the start agent of the session's active scenario (or the named "
+        "scenario/template). The agent joins the scenario if it lists explicit agents. "
+        "Takes effect on the next connection."
+    ),
+    tags=["Scenario Builder"],
+)
+async def set_session_start_agent(
+    session_id: str,
+    agent_name: str,
+    request: Request,
+    scenario_name: str | None = None,
+) -> SessionScenarioResponse:
+    """Activate an agent for the session by making it the scenario start agent."""
+    from apps.artagent.backend.src.orchestration.session_memory import prime_session_definitions
+
+    await prime_session_definitions(session_id)
+    name = _normalize_agent_name(agent_name)
+    if not name:
+        raise HTTPException(status_code=422, detail="agent_name must not be blank")
+    requested = _normalize_scenario_name(scenario_name) if scenario_name is not None else None
+    if scenario_name is not None and not requested:
+        raise HTTPException(status_code=422, detail="scenario_name must not be blank")
+
+    agent = get_session_agent(session_id, name) or find_agent_by_name(discover_agents(), name)[1]
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{name}' was not found.")
+
+    scenario = get_session_scenario(session_id, requested)
+    if scenario is None and requested:
+        scenario = load_scenario(requested.lower().replace(" ", "_"))
+    if scenario is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No active scenario found for session '{session_id}'. Select a scenario first.",
+        )
+
+    updated = copy.deepcopy(scenario)
+    updated.start_agent = agent.name
+    if updated.agents and not any(agent_key(item) == agent_key(agent.name) for item in updated.agents):
+        updated.agents = [*updated.agents, agent.name]
+
+    try:
+        await set_session_scenario_async(session_id, updated)
+    except Exception as exc:
+        logger.error(
+            "Start agent update could not be persisted | session=%s scenario=%s agent=%s error=%s",
+            session_id,
+            updated.name,
+            agent.name,
+            exc,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to persist the start agent. Check Redis connectivity and retry.",
+        ) from exc
+
+    logger.info(
+        "Session start agent set | session=%s scenario=%s agent=%s",
+        session_id,
+        updated.name,
+        agent.name,
+    )
+    return SessionScenarioResponse(
+        session_id=session_id,
+        scenario_name=updated.name,
+        status="updated",
+        config=_scenario_response_config(updated),
+        modified_at=time.time(),
+    )
 
 
 @router.post(

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { deriveModelOptions, fetchFoundryModels } from '../utils/foundryModels.js';
 import { pickAttribution } from '../utils/foundryRegions.js';
+import { pickVoiceMetadata } from '../utils/voiceCatalog.js';
 import {
   agentKey, copyAgentConfig, loadEditableAgent, mergeAgentAssignments, quickTuneRequest, sameConfig,
 } from '../utils/quickTune.js';
@@ -42,13 +43,7 @@ export default function useQuickTune({ open, sessionId, activeAgentName }) {
       const data = await quickTuneRequest(`agent-builder/voices${force ? '?use_cache=false' : ''}`, { signal });
       if (!Array.isArray(data.voices)) throw new Error('The voice catalog returned an invalid response.');
       if (!current()) return;
-      const metadata = Object.fromEntries([
-        'source', 'region', 'resource_host', 'total', 'total_available', 'catalog_complete',
-        'verified_against_region', 'cached', 'stale', 'retrieved_at', 'warnings',
-        'runtime_transcription_models',
-        'resource_name', 'endpoint_host', 'app_region', 'region_source', 'resource_fallback',
-        'hd_from_catalog',
-      ].filter((key) => key in data).map((key) => [key, data[key]]));
+      const metadata = pickVoiceMetadata(data);
       setCatalog((previous) => ({ ...previous, voices: data.voices, voiceMetadata: metadata }));
     } catch (cause) {
       if (!current()) return;

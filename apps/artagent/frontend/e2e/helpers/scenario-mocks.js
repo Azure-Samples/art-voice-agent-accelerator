@@ -251,6 +251,38 @@ export async function installApiMocks(page, initialResponse = null) {
     });
   });
 
+  // Mock: POST /api/v1/scenario-builder/session/*/start-agent*
+  await page.route('**/api/v1/scenario-builder/session/*/start-agent*', async (route) => {
+    const url = new URL(route.request().url());
+    state.calls.push({ method: 'POST', url: url.href, type: 'start-agent' });
+    const agentName = url.searchParams.get('agent_name');
+    const requested = (url.searchParams.get('scenario_name')
+      || state.scenariosResponse.active_scenario || 'banking').toLowerCase();
+    const update = (s) => (s.name.toLowerCase() === requested
+      ? {
+        ...s, is_active: true, start_agent: agentName,
+        agents: s.agents?.length && !s.agents.includes(agentName) ? [...s.agents, agentName] : s.agents,
+      }
+      : { ...s, is_active: false });
+    const response = state.scenariosResponse;
+    response.builtin_scenarios = response.builtin_scenarios.map(update);
+    response.custom_scenarios = response.custom_scenarios.map(update);
+    response.scenarios = [...response.builtin_scenarios, ...response.custom_scenarios];
+    const matched = response.scenarios.find((s) => s.is_active);
+    if (!matched) {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: '{"detail":"Scenario not found"}' });
+      return;
+    }
+    response.active_scenario = matched.name;
+    response.active_start_agent = agentName;
+    response.active_scenario_icon = matched.icon;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ session_id: 'test-session', config: matched, is_active: true }),
+    });
+  });
+
   // Mock: POST /api/v1/scenario-builder/session/*/active*
   await page.route('**/api/v1/scenario-builder/session/*/active*', async (route) => {
     const url = route.request().url();

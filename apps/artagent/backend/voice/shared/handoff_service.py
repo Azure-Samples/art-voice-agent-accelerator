@@ -67,7 +67,7 @@ from apps.artagent.backend.registries.toolstore.registry import (
     is_handoff_tool as registry_is_handoff_tool,
 )
 from apps.artagent.backend.voice.handoffs.context import build_handoff_system_vars
-from jinja2 import Template
+from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 if TYPE_CHECKING:
     from apps.artagent.backend.registries.agentstore.base import UnifiedAgent
@@ -576,7 +576,7 @@ class HandoffService:
         if "{{" not in value:
             return value
         try:
-            template = Template(value)
+            template = ImmutableSandboxedEnvironment(autoescape=False).from_string(value)
             return template.render(**render_context)
         except Exception:
             return value

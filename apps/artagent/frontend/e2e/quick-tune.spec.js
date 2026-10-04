@@ -110,7 +110,7 @@ test.describe('Quick Tune authoring workspace', () => {
     expect(state.calls.filter((call) => call.type === 'save-agent')).toHaveLength(0);
   });
 
-  test('duplicates agents without overwriting existing names or switching the active agent', async ({ page }) => {
+  test('duplicates agents without overwriting existing names and activates the saved copy', async ({ page }) => {
     const state = await installQuickTuneMocks(page);
     await page.goto('/');
     const panel = await openTune(page);
@@ -121,10 +121,45 @@ test.describe('Quick Tune authoring workspace', () => {
     await expect(panel.getByRole('button', { name: 'Save new agent', exact: true })).toBeDisabled();
     await name.fill('MyBankingAgent');
     await panel.getByRole('button', { name: 'Save new agent', exact: true }).click();
-    await expect(panel.getByRole('status')).toContainText('Agent saved');
+    await expect(panel.getByRole('status')).toContainText('MyBankingAgent is now the active agent');
     expect(state.calls.find((call) => call.type === 'save-agent').url).toContain('create_only=true');
-    expect(state.scenarios.scenariosResponse.active_start_agent).toBe('BankingConcierge');
+    expect(state.scenarios.scenariosResponse.active_start_agent).toBe('MyBankingAgent');
     expect(state.agents.BankingConcierge.prompt).toBe(AGENT_CONFIG.prompt);
+  });
+
+  test('defaults a fresh session to the banking scenario start agent', async ({ page }) => {
+    const state = await installQuickTuneMocks(page);
+    const response = state.scenarios.scenariosResponse;
+    for (const key of ['scenarios', 'builtin_scenarios']) {
+      response[key] = response[key].map((item) => ({ ...item, is_active: false }));
+    }
+    Object.assign(response, { active_scenario: null, active_start_agent: null, active_scenario_icon: null });
+    await page.route('**/api/v1/agents{,?*}', (route) => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ agents: [{ name: 'FraudAgent' }, { name: 'BankingConcierge' }], start_agent: 'FraudAgent' }),
+    }));
+    await page.goto('/');
+    await openTune(page);
+  });
+
+  test('makes a saved agent the active agent for the session', async ({ page }) => {
+    const state = await installQuickTuneMocks(page);
+    await page.goto('/');
+    const panel = await openTune(page);
+    await panel.getByRole('combobox', { name: 'Agent to tune' }).fill('Fraud');
+    await page.getByRole('option', { name: 'FraudAgent', exact: true }).click();
+    await panel.getByRole('button', { name: /^Behavior/ }).click();
+    const instructions = panel.getByRole('textbox', { name: 'Instructions', exact: true });
+    await expect(instructions).toHaveValue('Investigate fraud, not everyday balances.');
+    await instructions.fill('Investigate fraud and confirm the caller before acting.');
+    await panel.getByRole('button', { name: 'Save & activate', exact: true }).click();
+    await expect(panel.getByRole('status')).toContainText('FraudAgent is now the active agent');
+    const activation = state.scenarios.calls.find((call) => call.type === 'start-agent');
+    const params = new URL(activation.url).searchParams;
+    expect(params.get('agent_name')).toBe('FraudAgent');
+    expect(params.get('scenario_name')).toBe('Banking');
+    expect(state.scenarios.scenariosResponse.active_start_agent).toBe('FraudAgent');
+    await expect(panel.getByRole('button', { name: 'Save changes', exact: true })).toBeVisible();
   });
 
   test('shows only relevant voice controls and never drops non-live edits from a patch', async ({ page }) => {

@@ -78,6 +78,10 @@ const REALTIME_STREAM_MODE_STORAGE_KEY = 'artagent.realtimeStreamingMode';
 const REALTIME_STREAM_MODE_FALLBACK = 'realtime';
 
 const PANEL_MARGIN = 16;
+// Scenario the backend uses when a session has not selected one yet.
+const DEFAULT_SCENARIO_KEY = 'banking';
+const isDefaultScenario = (scenario) => [scenario?.id, scenario?.name]
+  .some((value) => value?.toLowerCase() === DEFAULT_SCENARIO_KEY);
 // Avoid noisy logging in hot-path streaming handlers unless explicitly enabled
 const ENABLE_VERBOSE_STREAM_LOGS = false;
 
@@ -322,11 +326,14 @@ function RealTimeVoiceApp() {
   // Active scenario key (lowercase, e.g., "banking")
   const activeScenarioKey = sessionScenarioConfig?.active_scenario?.toLowerCase() || null;
 
-  // Active scenario data (the entry with is_active=true)
+  // Active scenario data (the entry with is_active=true). A fresh session has
+  // no active scenario but connects with the default one, so mirror that here.
   const activeScenarioData = useMemo(() => {
     if (!sessionScenarioConfig?.scenarios) return null;
-    return sessionScenarioConfig.scenarios.find(s => s.is_active) || null;
-  }, [sessionScenarioConfig]);
+    return sessionScenarioConfig.scenarios.find(s => s.is_active)
+      || (!activeScenarioKey ? sessionScenarioConfig.scenarios.find(isDefaultScenario) : null)
+      || null;
+  }, [sessionScenarioConfig, activeScenarioKey]);
 
   // Icon from the active scenario
   const activeScenarioIcon = activeScenarioData?.icon
@@ -484,7 +491,8 @@ function RealTimeVoiceApp() {
       // from the sidebar menu, builder, or initial page load all behave
       // consistently — no guard that only fires once on first load.
       const startAgent = data.active_start_agent
-        || (data.scenarios || []).find(s => s.is_active)?.start_agent;
+        || (data.scenarios || []).find(s => s.is_active)?.start_agent
+        || (!data.active_scenario ? (data.scenarios || []).find(isDefaultScenario)?.start_agent : null);
       if (startAgent) {
         currentAgentRef.current = startAgent;
         setSelectedAgentName(startAgent);
@@ -2069,10 +2077,15 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
     setShowPhoneInput((prev) => !prev);
   }, [callActive, currentCallId, setShowPhoneInput, terminateACSCall]);
 
-  const handleQuickTuneAgentSaved = useCallback(async (config, { isNew, reconnect, live, mode }) => {
+  const handleQuickTuneAgentSaved = useCallback(async (config, { isNew, reconnect, live, mode, scenarioName }) => {
     notifyAgentUpdate(config, isNew ? 'created' : 'updated', { mode, confirmed: true });
-    appendLog(`Quick Tune saved "${config.name}"${live ? ' and applied live' : ''}.`);
-    await fetchAgentInventory();
+    appendLog(`Quick Tune saved "${config.name}"${live ? ' and applied live' : ''}${scenarioName ? ' and set it as the starting agent' : ''}.`);
+    if (scenarioName) {
+      applyScenarioOptimistically(scenarioName, config.name);
+      await Promise.all([fetchAgentInventory(), pollUntilScenarioPropagated(scenarioName)]);
+    } else {
+      await fetchAgentInventory();
+    }
     if (reconnect && recording) {
       const previousSocket = socketRef.current;
       if (previousSocket && previousSocket.readyState !== WebSocket.CLOSED) {
@@ -2092,7 +2105,7 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
         await startRecognitionRef.current?.(selectedRealtimeStreamingMode);
       }
     }
-  }, [notifyAgentUpdate, appendLog, fetchAgentInventory, recording, sessionId, selectedRealtimeStreamingMode]);
+  }, [notifyAgentUpdate, appendLog, applyScenarioOptimistically, pollUntilScenarioPropagated, fetchAgentInventory, recording, sessionId, selectedRealtimeStreamingMode]);
 
   const handleQuickTuneScenarioApplied = useCallback(async (config) => {
     applyScenarioOptimistically(config, config.start_agent);
@@ -2401,7 +2414,7 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
                        activeSessionProfile?.profile?.contact_info?.email || null;
       const emailParam = userEmail ? `&user_email=${encodeURIComponent(userEmail)}` : '';
       
-      const currentScenario = activeScenarioKey || 'banking';
+      const currentScenario = activeScenarioKey || DEFAULT_SCENARIO_KEY;
       const activeScenarioNameForStart =
         activeScenarioData?.name ||
         (currentScenario ? currentScenario.replace(/_/g, ' ') : null);
@@ -5176,6 +5189,7 @@ showScenarioConfirmation(scenarioName, currentAgentRef.current);
       onViewChange={setQuickTuneView}
       sessionId={sessionId}
       activeAgentName={resolvedAgentName}
+      startAgentName={sessionScenarioConfig?.active_start_agent || activeScenarioData?.start_agent || agentInventory?.startAgent}
       scenario={activeScenarioData}
       scenarios={sessionScenarioConfig?.scenarios || []}
       activeMode={(recording ? selectedRealtimeStreamingMode : selectedStreamingMode) === 'voice_live' ? 'voicelive' : 'cascade'}

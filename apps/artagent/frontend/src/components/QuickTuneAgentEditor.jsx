@@ -19,7 +19,7 @@ import PromptEditorDialog from './PromptEditorDialog.jsx';
 import VoiceSelector from './VoiceSelector.jsx';
 import {
   DEFAULT_TRANSCRIPTION_MODEL, MAI_TRANSCRIPTION_MODEL, effectiveTranscriptionModel,
-  isMaiTranscriptionModel, maiConfigurationError, maiVoiceRank, normalizeTranscriptionModel,
+  isMaiTranscriptionModel, isMaiVoice, maiConfigurationError, normalizeTranscriptionModel,
   transcriptionHelp, transcriptionModelLabel, useManagedMaiPipeline, voiceLivePipeline,
 } from '../utils/maiSpeech.js';
 
@@ -211,8 +211,9 @@ const QuickTuneAgentEditor = memo(function QuickTuneAgentEditor({
                 {allModels.map((model) => <MenuItem key={model.id} value={model.id}>{model.label}</MenuItem>)}
               </TextField>
               <VoiceSelector voices={voices} value={voiceName} metadata={voiceMetadata}
+                mode={mode} voiceLiveRegion={modelMetadata?.voicelive?.region || ''}
                 loading={voicesLoading} onRefresh={onRefreshVoices} disabled={disabled}
-                onChange={(name) => maiVoiceRank(name) < 2
+                onChange={(name) => isMaiVoice(name)
                   ? set('voice', { ...config.voice, name, type: 'azure-standard', endpoint_id: null })
                   : nested('voice', 'name', name)} />
               <TextField select size="small" label="Input transcription" value={transcription}

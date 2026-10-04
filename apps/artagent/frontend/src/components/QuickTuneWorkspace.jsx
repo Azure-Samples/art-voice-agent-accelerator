@@ -29,7 +29,7 @@ import { voiceLiveModelError } from '../utils/foundryModels.js';
 
 const QuickTuneWorkspace = memo(function QuickTuneWorkspace({
   open, onClose, expanded, onExpandedChange, view, onViewChange,
-  sessionId, activeAgentName, scenario, scenarios = [], activeMode, recording, callActive,
+  sessionId, activeAgentName, startAgentName, scenario, scenarios = [], activeMode, recording, callActive,
   onAgentSaved, onScenarioApplied, onAdvanced,
 }) {
   const parentTheme = useTheme();
@@ -61,8 +61,11 @@ const QuickTuneWorkspace = memo(function QuickTuneWorkspace({
   const targetIsActive = agentKey(entry?.config.name) === agentKey(activeAgentName) && !entry?.isNew;
   const patch = targetIsActive && connected && activeMode === 'voicelive' && mode === 'voicelive'
     ? liveSettingsPatch(entry?.base, entry?.config) : null;
-  const reconnect = targetIsActive && recording && !patch
-    && affectsActiveMode(entry?.base, entry?.config, activeMode);
+  // Saving an agent also makes it the session's starting agent.
+  const activates = Boolean(entry?.config.name?.trim())
+    && agentKey(entry?.config.name) !== agentKey(startAgentName || activeAgentName);
+  const reconnect = recording && !patch && (targetIsActive
+    ? affectsActiveMode(entry?.base, entry?.config, activeMode) : activates);
   const flowDirty = scenarioEditor.dirty;
   const scenarioAgentNames = tune.catalog.agents.map((agent) => agent.name);
   const flowGraphConfig = flow && !flow.agents?.length ? { ...flow, agents: scenarioAgentNames } : flow;
@@ -120,11 +123,23 @@ const QuickTuneWorkspace = memo(function QuickTuneWorkspace({
       if (signal.aborted) return;
       saved = true;
       tune.markSaved(tune.selectedName, submitted);
-      await onAgentSaved(submitted, { isNew: entry.isNew, reconnect, live: Boolean(patch && data.live), mode });
+      let scenarioName = null;
+      if (activates) {
+        const query = new URLSearchParams({ agent_name: submitted.name });
+        if (scenario?.name) query.set('scenario_name', scenario.name);
+        const activated = await quickTuneRequest(`${path.replace('agent-builder', 'scenario-builder')}/start-agent?${query}`, {
+          method: 'POST', signal,
+        });
+        if (signal.aborted) return;
+        scenarioName = activated.config?.name || scenario?.name || null;
+      }
+      await onAgentSaved(submitted, {
+        isNew: entry.isNew, reconnect, live: Boolean(patch && data.live), mode, scenarioName,
+      });
       if (signal.aborted) return;
       setNotice(patch && data.live ? 'Applied to the running agent.'
-        : reconnect ? 'Saved. The conversation is reconnecting with your changes.'
-          : entry.isNew ? 'Agent saved. Add it to a scenario when you are ready.'
+        : reconnect ? `Saved. The conversation is reconnecting${activates ? ` with ${submitted.name} as the active agent` : ' with your changes'}.`
+          : activates ? `Saved. ${submitted.name} is now the active agent for this session.`
             : 'Saved for the next connection. Other agents and modes keep their settings.');
     } catch (cause) {
       if (signal.aborted) return;
@@ -190,7 +205,7 @@ const QuickTuneWorkspace = memo(function QuickTuneWorkspace({
     agentOptions.unshift({ name: tune.selectedName, label: tune.selectedName });
   }
   const applyLabel = entry?.isNew ? 'Save new agent' : patch ? 'Apply live'
-    : reconnect ? 'Apply & reconnect' : 'Save changes';
+    : reconnect ? 'Apply & reconnect' : activates ? 'Save & activate' : 'Save changes';
   const agentSaveDisabled = !tune.dirty || busy || tune.loadingAgent || duplicateName || !entry?.config.name?.trim()
     || (entry?.config.prompt?.trim().length || 0) < 10
     || (mode === 'voicelive' && Boolean(voiceLiveModelError(entry?.config, tune.catalog.models?.voicelive)))

@@ -4,14 +4,17 @@ export const MAI_TRANSCRIPTION_MODEL = 'mai-transcribe';
 export const DEFAULT_TRANSCRIPTION_MODEL = 'mai-transcribe-2';
 const CHAT_PROFILES = new Set(['byom-azure-openai-chat-completion', 'byom-foundry-anthropic-messages']);
 
+export const MAI_VOICE_DOCS_URL = 'https://learn.microsoft.com/azure/ai-services/speech-service/mai-voices#availability-and-regions';
+
+// Fallback for backends that don't send `mai_voice_catalog`.
 export const MAI_VOICE_PRESETS = [
-  ['en-US-Harper:MAI-Voice-2-Flash', 'Harper', 'Female'],
-  ['en-US-Ethan:MAI-Voice-2-Flash', 'Ethan', 'Male'],
-  ['en-US-Harper:MAI-Voice-2', 'Harper', 'Female'],
-  ['en-US-Ethan:MAI-Voice-2', 'Ethan', 'Male'],
+  ['en-US-Harper:MAI-Voice-2.1-Flash', 'Harper', 'Female'],
+  ['en-US-Ethan:MAI-Voice-2.1-Flash', 'Ethan', 'Male'],
+  ['en-US-Harper:MAI-Voice-2.1', 'Harper', 'Female'],
+  ['en-US-Ethan:MAI-Voice-2.1', 'Ethan', 'Male'],
 ].map(([name, display_name, gender]) => ({
   name, display_name, gender, language: 'en-US', category: 'mai', status: 'Preview',
-  unavailablePreset: true,
+  region_verified: false,
 }));
 
 export function normalizeTranscriptionModel(model) {
@@ -57,15 +60,22 @@ export function transcriptionHelp(config, mode) {
   return effective + availability + pipeline;
 }
 
+export function isMaiVoice(name) {
+  return String(name || '').toLowerCase().includes(':mai-voice');
+}
+
+// Newest MAI model first, Flash ahead of the full model within a version
+// (2.1-Flash, 2.1, 2-Flash, 2), then unrecognized MAI names, then other voices.
 export function maiVoiceRank(name) {
-  const value = String(name || '').toLowerCase();
-  if (value.includes(':mai-voice-2-flash')) return 0;
-  return value.includes(':mai-voice') ? 1 : 2;
+  if (!isMaiVoice(name)) return 1;
+  const match = /:mai-voice-(\d+(?:\.\d+)?)(-flash)?$/i.exec(String(name));
+  if (!match) return 0;
+  return -Math.round(Number(match[1]) * 100) * 2 + (match[2] ? 0 : 1);
 }
 
 export function voiceDisplayLabel(voice) {
   const label = voice.display_name || voice.name;
-  if (maiVoiceRank(voice.name) > 1 || /mai/i.test(label)) return label;
+  if (!isMaiVoice(voice.name) || /mai/i.test(label)) return label;
   return `${label} (${voice.name.split(':').at(-1)})`;
 }
 

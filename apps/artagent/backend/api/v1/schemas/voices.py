@@ -50,6 +50,17 @@ class VoiceCatalogResponse(BaseModel):
     verified_against_region: bool
     catalog_complete: bool
     hd_from_catalog: bool = False
+    mai_voice_regions: list[str] = Field(
+        default_factory=list,
+        description="Documented Azure regions (slug form) that serve MAI-Voice models.",
+    )
+    mai_voice_catalog: list[VoiceInfo] = Field(
+        default_factory=list,
+        description=(
+            "Documented MAI voices the regional catalog did not return, marked "
+            "region_verified=false. Kept out of `voices` so MAI stays opt-in there."
+        ),
+    )
     source: str
     region: str | None = None
     resource_host: str | None = None

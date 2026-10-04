@@ -343,6 +343,152 @@ _HD_CATALOG = [
     _hd_voice("zh-CN-Yunfan:DragonHDLatestNeural", "Yunfan", "Male"),
 ]
 
+
+# Flash first: it's the low-latency model documented for real-time voice agents.
+_MAI_VOICE_MODELS = ("MAI-Voice-2.1-Flash", "MAI-Voice-2.1")
+
+# https://learn.microsoft.com/azure/ai-services/speech-service/mai-voices#availability-and-regions
+MAI_VOICE_REGIONS = (
+    "canadacentral",
+    "centralindia",
+    "eastasia",
+    "eastus",
+    "eastus2",
+    "francecentral",
+    "japaneast",
+    "northeurope",
+    "southeastasia",
+    "swedencentral",
+    "westeurope",
+    "westus",
+    "westus2",
+    "westus3",
+)
+
+# Documented MAI-Voice-2.1 prebuilt voices; each supports every model above.
+# https://learn.microsoft.com/azure/ai-services/speech-service/mai-voices#prebuilt-voices
+_MAI_VOICE_PERSONAS = [
+    ("cs-CZ-Grant", "Male"),
+    ("cs-CZ-Harper", "Female"),
+    ("da-DK-Grant", "Male"),
+    ("da-DK-Harper", "Female"),
+    ("de-DE-Grant", "Male"),
+    ("de-DE-Harper", "Female"),
+    ("de-DE-Klaus", "Male"),
+    ("de-DE-Mia", "Female"),
+    ("en-AU-Isla", "Female"),
+    ("en-GB-Emily", "Female"),
+    ("en-GB-Harry", "Male"),
+    ("en-IN-Dhruv", "Male"),
+    ("en-IN-Priya", "Female"),
+    ("en-US-Ethan", "Male"),
+    ("en-US-Grant", "Male"),
+    ("en-US-Harper", "Female"),
+    ("en-US-Iris", "Female"),
+    ("en-US-Jasper", "Male"),
+    ("en-US-Olivia", "Female"),
+    ("en-US-Sage", "Male"),
+    ("es-ES-Marta", "Female"),
+    ("es-MX-Alejo", "Male"),
+    ("es-MX-Grant", "Male"),
+    ("es-MX-Harper", "Female"),
+    ("es-MX-Valeria", "Female"),
+    ("fi-FI-Grant", "Male"),
+    ("fi-FI-Harper", "Female"),
+    ("fr-FR-Grant", "Male"),
+    ("fr-FR-Harper", "Female"),
+    ("fr-FR-Marc", "Male"),
+    ("fr-FR-Soleil", "Female"),
+    ("hi-IN-Arjun", "Male"),
+    ("hi-IN-Dhruv", "Male"),
+    ("hi-IN-Grant", "Male"),
+    ("hi-IN-Harper", "Female"),
+    ("hi-IN-Kavya", "Female"),
+    ("hi-IN-Priya", "Female"),
+    ("hu-HU-Bence", "Male"),
+    ("hu-HU-Grant", "Male"),
+    ("hu-HU-Harper", "Female"),
+    ("hu-HU-Levente", "Male"),
+    ("hu-HU-Lilla", "Female"),
+    ("hu-HU-Reka", "Female"),
+    ("id-ID-Grant", "Male"),
+    ("id-ID-Harper", "Female"),
+    ("it-IT-Grant", "Male"),
+    ("it-IT-Harper", "Female"),
+    ("it-IT-Luca", "Male"),
+    ("it-IT-Rosa", "Female"),
+    ("ko-KR-Grant", "Male"),
+    ("ko-KR-Haena", "Female"),
+    ("ko-KR-Harper", "Female"),
+    ("ko-KR-Junho", "Male"),
+    ("nb-NO-Grant", "Male"),
+    ("nb-NO-Harper", "Female"),
+    ("nl-NL-Grant", "Male"),
+    ("nl-NL-Harper", "Female"),
+    ("nl-NL-Sander", "Male"),
+    ("pl-PL-Grant", "Male"),
+    ("pl-PL-Harper", "Female"),
+    ("pt-BR-Caio", "Male"),
+    ("pt-BR-Grant", "Male"),
+    ("pt-BR-Harper", "Female"),
+    ("pt-BR-Luana", "Female"),
+    ("pt-BR-Pedro", "Male"),
+    ("pt-BR-Rafael", "Male"),
+    ("pt-PT-Grant", "Male"),
+    ("pt-PT-Harper", "Female"),
+    ("pt-PT-Rui", "Male"),
+    ("ro-RO-Andrei", "Male"),
+    ("ro-RO-Elena", "Female"),
+    ("ro-RO-Grant", "Male"),
+    ("ro-RO-Harper", "Female"),
+    ("ro-RO-Ioana", "Female"),
+    ("ro-RO-Radu", "Male"),
+    ("ru-RU-Grant", "Male"),
+    ("ru-RU-Harper", "Female"),
+    ("ru-RU-Lev", "Male"),
+    ("ru-RU-Masha", "Female"),
+    ("sv-SE-Grant", "Male"),
+    ("sv-SE-Harper", "Female"),
+    ("th-TH-Grant", "Male"),
+    ("th-TH-Harper", "Female"),
+    ("th-TH-Krit", "Female"),
+    ("th-TH-Nattapong", "Male"),
+    ("tr-TR-Aydin", "Male"),
+    ("tr-TR-Elif", "Female"),
+    ("tr-TR-Grant", "Male"),
+    ("tr-TR-Harper", "Female"),
+    ("vi-VN-Grant", "Male"),
+    ("vi-VN-Harper", "Female"),
+    ("zh-CN-Bo", "Male"),
+    ("zh-CN-Grant", "Male"),
+    ("zh-CN-Harper", "Female"),
+    ("zh-CN-Lan", "Female"),
+    ("zh-CN-Mei", "Female"),
+    ("zh-CN-Wei", "Male"),
+]
+
+
+def _mai_voice(voice_id: str, model: str, gender: str | None = None) -> VoiceInfo:
+    """Build a catalog entry for a documented MAI prebuilt voice and model."""
+    locale = _locale_from_short_name(voice_id)
+    persona = voice_id[len(locale) + 1 :]
+    suffix = "" if locale == "en-US" else f" · {locale}"
+    return VoiceInfo(
+        name=f"{voice_id}:{model}",
+        display_name=f"{persona}{suffix} ({model})",
+        category="mai",
+        language=locale,
+        gender=gender,
+    )
+
+
+_MAI_CATALOG = [
+    _mai_voice(voice_id, model, gender)
+    for model in _MAI_VOICE_MODELS
+    for voice_id, gender in _MAI_VOICE_PERSONAS
+]
+
+
 AVAILABLE_VOICES = [
     # Turbo voices - lowest latency
     VoiceInfo(
@@ -388,300 +534,8 @@ AVAILABLE_VOICES = [
     VoiceInfo(name="en-US-BrianMultilingualNeural", display_name="Brian", category="standard"),
     # HD voices - highest quality (full documented DragonHD catalog)
     *_HD_CATALOG,
-    # MAI-Voice-2 (preview) - multilingual, high-fidelity expressive synthesis.
-    # https://learn.microsoft.com/azure/ai-services/speech-service/mai-voices
-    # English (US)
-    VoiceInfo(
-        name="en-US-Ethan:MAI-Voice-2",
-        display_name="Ethan (MAI-Voice-2)",
-        category="mai",
-        language="en-US",
-    ),
-    VoiceInfo(
-        name="en-US-Grant:MAI-Voice-2",
-        display_name="Grant (MAI-Voice-2)",
-        category="mai",
-        language="en-US",
-    ),
-    VoiceInfo(
-        name="en-US-Harper:MAI-Voice-2",
-        display_name="Harper (MAI-Voice-2)",
-        category="mai",
-        language="en-US",
-    ),
-    VoiceInfo(
-        name="en-US-Iris:MAI-Voice-2",
-        display_name="Iris (MAI-Voice-2)",
-        category="mai",
-        language="en-US",
-    ),
-    VoiceInfo(
-        name="en-US-Jasper:MAI-Voice-2",
-        display_name="Jasper (MAI-Voice-2)",
-        category="mai",
-        language="en-US",
-    ),
-    VoiceInfo(
-        name="en-US-Olivia:MAI-Voice-2",
-        display_name="Olivia (MAI-Voice-2)",
-        category="mai",
-        language="en-US",
-    ),
-    # English (Australia)
-    VoiceInfo(
-        name="en-AU-Lisa:MAI-Voice-2",
-        display_name="Lisa · en-AU (MAI-Voice-2)",
-        category="mai",
-        language="en-AU",
-    ),
-    # German (Germany)
-    VoiceInfo(
-        name="de-DE-Klaus:MAI-Voice-2",
-        display_name="Klaus · de-DE (MAI-Voice-2)",
-        category="mai",
-        language="de-DE",
-    ),
-    VoiceInfo(
-        name="de-DE-Mia:MAI-Voice-2",
-        display_name="Mia · de-DE (MAI-Voice-2)",
-        category="mai",
-        language="de-DE",
-    ),
-    # Spanish (Spain / Mexico)
-    VoiceInfo(
-        name="es-ES-Marta:MAI-Voice-2",
-        display_name="Marta · es-ES (MAI-Voice-2)",
-        category="mai",
-        language="es-ES",
-    ),
-    VoiceInfo(
-        name="es-MX-Alejo:MAI-Voice-2",
-        display_name="Alejo · es-MX (MAI-Voice-2)",
-        category="mai",
-        language="es-MX",
-    ),
-    VoiceInfo(
-        name="es-MX-Valeria:MAI-Voice-2",
-        display_name="Valeria · es-MX (MAI-Voice-2)",
-        category="mai",
-        language="es-MX",
-    ),
-    # French (France)
-    VoiceInfo(
-        name="fr-FR-Marc:MAI-Voice-2",
-        display_name="Marc · fr-FR (MAI-Voice-2)",
-        category="mai",
-        language="fr-FR",
-    ),
-    VoiceInfo(
-        name="fr-FR-Soleil:MAI-Voice-2",
-        display_name="Soleil · fr-FR (MAI-Voice-2)",
-        category="mai",
-        language="fr-FR",
-    ),
-    # Hindi (India)
-    VoiceInfo(
-        name="hi-IN-Arjun:MAI-Voice-2",
-        display_name="Arjun · hi-IN (MAI-Voice-2)",
-        category="mai",
-        language="hi-IN",
-    ),
-    VoiceInfo(
-        name="hi-IN-Dhruv:MAI-Voice-2",
-        display_name="Dhruv · hi-IN (MAI-Voice-2)",
-        category="mai",
-        language="hi-IN",
-    ),
-    VoiceInfo(
-        name="hi-IN-Kavya:MAI-Voice-2",
-        display_name="Kavya · hi-IN (MAI-Voice-2)",
-        category="mai",
-        language="hi-IN",
-    ),
-    VoiceInfo(
-        name="hi-IN-Priya:MAI-Voice-2",
-        display_name="Priya · hi-IN (MAI-Voice-2)",
-        category="mai",
-        language="hi-IN",
-    ),
-    # Hungarian (Hungary)
-    VoiceInfo(
-        name="hu-HU-Bence:MAI-Voice-2",
-        display_name="Bence · hu-HU (MAI-Voice-2)",
-        category="mai",
-        language="hu-HU",
-    ),
-    VoiceInfo(
-        name="hu-HU-Levente:MAI-Voice-2",
-        display_name="Levente · hu-HU (MAI-Voice-2)",
-        category="mai",
-        language="hu-HU",
-    ),
-    VoiceInfo(
-        name="hu-HU-Lilla:MAI-Voice-2",
-        display_name="Lilla · hu-HU (MAI-Voice-2)",
-        category="mai",
-        language="hu-HU",
-    ),
-    VoiceInfo(
-        name="hu-HU-Réka:MAI-Voice-2",
-        display_name="Réka · hu-HU (MAI-Voice-2)",
-        category="mai",
-        language="hu-HU",
-    ),
-    # Italian (Italy)
-    VoiceInfo(
-        name="it-IT-Luca:MAI-Voice-2",
-        display_name="Luca · it-IT (MAI-Voice-2)",
-        category="mai",
-        language="it-IT",
-    ),
-    VoiceInfo(
-        name="it-IT-Rosa:MAI-Voice-2",
-        display_name="Rosa · it-IT (MAI-Voice-2)",
-        category="mai",
-        language="it-IT",
-    ),
-    # Korean (Korea)
-    VoiceInfo(
-        name="ko-KR-Hana:MAI-Voice-2",
-        display_name="Hana · ko-KR (MAI-Voice-2)",
-        category="mai",
-        language="ko-KR",
-    ),
-    VoiceInfo(
-        name="ko-KR-Junho:MAI-Voice-2",
-        display_name="Junho · ko-KR (MAI-Voice-2)",
-        category="mai",
-        language="ko-KR",
-    ),
-    # Dutch (Netherlands)
-    VoiceInfo(
-        name="nl-NL-Fleur:MAI-Voice-2",
-        display_name="Fleur · nl-NL (MAI-Voice-2)",
-        category="mai",
-        language="nl-NL",
-    ),
-    VoiceInfo(
-        name="nl-NL-Sander:MAI-Voice-2",
-        display_name="Sander · nl-NL (MAI-Voice-2)",
-        category="mai",
-        language="nl-NL",
-    ),
-    # Portuguese (Brazil / Portugal)
-    VoiceInfo(
-        name="pt-BR-Caio:MAI-Voice-2",
-        display_name="Caio · pt-BR (MAI-Voice-2)",
-        category="mai",
-        language="pt-BR",
-    ),
-    VoiceInfo(
-        name="pt-BR-Luana:MAI-Voice-2",
-        display_name="Luana · pt-BR (MAI-Voice-2)",
-        category="mai",
-        language="pt-BR",
-    ),
-    VoiceInfo(
-        name="pt-BR-Pedro:MAI-Voice-2",
-        display_name="Pedro · pt-BR (MAI-Voice-2)",
-        category="mai",
-        language="pt-BR",
-    ),
-    VoiceInfo(
-        name="pt-BR-Rafael:MAI-Voice-2",
-        display_name="Rafael · pt-BR (MAI-Voice-2)",
-        category="mai",
-        language="pt-BR",
-    ),
-    VoiceInfo(
-        name="pt-PT-Rui:MAI-Voice-2",
-        display_name="Rui · pt-PT (MAI-Voice-2)",
-        category="mai",
-        language="pt-PT",
-    ),
-    # Romanian (Romania)
-    VoiceInfo(
-        name="ro-RO-Andrei:MAI-Voice-2",
-        display_name="Andrei · ro-RO (MAI-Voice-2)",
-        category="mai",
-        language="ro-RO",
-    ),
-    VoiceInfo(
-        name="ro-RO-Elena:MAI-Voice-2",
-        display_name="Elena · ro-RO (MAI-Voice-2)",
-        category="mai",
-        language="ro-RO",
-    ),
-    VoiceInfo(
-        name="ro-RO-Ioana:MAI-Voice-2",
-        display_name="Ioana · ro-RO (MAI-Voice-2)",
-        category="mai",
-        language="ro-RO",
-    ),
-    VoiceInfo(
-        name="ro-RO-Radu:MAI-Voice-2",
-        display_name="Radu · ro-RO (MAI-Voice-2)",
-        category="mai",
-        language="ro-RO",
-    ),
-    # Russian (Russia)
-    VoiceInfo(
-        name="ru-RU-Lev:MAI-Voice-2",
-        display_name="Lev · ru-RU (MAI-Voice-2)",
-        category="mai",
-        language="ru-RU",
-    ),
-    VoiceInfo(
-        name="ru-RU-Masha:MAI-Voice-2",
-        display_name="Masha · ru-RU (MAI-Voice-2)",
-        category="mai",
-        language="ru-RU",
-    ),
-    # Thai (Thailand)
-    VoiceInfo(
-        name="th-TH-Krit:MAI-Voice-2",
-        display_name="Krit · th-TH (MAI-Voice-2)",
-        category="mai",
-        language="th-TH",
-    ),
-    VoiceInfo(
-        name="th-TH-Nattapong:MAI-Voice-2",
-        display_name="Nattapong · th-TH (MAI-Voice-2)",
-        category="mai",
-        language="th-TH",
-    ),
-    # Turkish (Turkey)
-    VoiceInfo(
-        name="tr-TR-Aydin:MAI-Voice-2",
-        display_name="Aydın · tr-TR (MAI-Voice-2)",
-        category="mai",
-        language="tr-TR",
-    ),
-    VoiceInfo(
-        name="tr-TR-Elif:MAI-Voice-2",
-        display_name="Elif · tr-TR (MAI-Voice-2)",
-        category="mai",
-        language="tr-TR",
-    ),
-    # Chinese (Mandarin, Simplified)
-    VoiceInfo(
-        name="zh-CN-Bo:MAI-Voice-2",
-        display_name="Bo · zh-CN (MAI-Voice-2)",
-        category="mai",
-        language="zh-CN",
-    ),
-    VoiceInfo(
-        name="zh-CN-Lan:MAI-Voice-2",
-        display_name="Lan · zh-CN (MAI-Voice-2)",
-        category="mai",
-        language="zh-CN",
-    ),
-    VoiceInfo(
-        name="zh-CN-Mei:MAI-Voice-2",
-        display_name="Mei · zh-CN (MAI-Voice-2)",
-        category="mai",
-        language="zh-CN",
-    ),
+    # MAI-Voice-2.1 family (preview) - multilingual, expressive synthesis.
+    *_MAI_CATALOG,
 ]
 
 # Keep category / voice_type / is_hd consistent with the short name so a typo in
@@ -850,7 +704,7 @@ async def list_available_voices(
                     "neural-hd-omni": " (HD Omni)",
                     "neural-hd-flash": " (HD Flash)",
                     "neural-turbo": " (Turbo)",
-                    "mai": " (MAI-Voice-2)",
+                    "mai": f" ({voice.name.split(':', 1)[-1]})",
                 }.get(voice_type, "")
                 display_name = f"{persona}{suffix}{badge}"
             by_name[voice.name.lower()] = voice.model_copy(
@@ -938,6 +792,8 @@ async def list_available_voices(
             and not any((category, locale, language, hd_only, hd_from_catalog, include_unverified))
         ),
         hd_from_catalog=hd_from_catalog,
+        mai_voice_regions=list(MAI_VOICE_REGIONS),
+        mai_voice_catalog=[voice for voice in _MAI_CATALOG if voice.name.lower() not in by_name],
         source=(
             "regional-cache"
             if stale

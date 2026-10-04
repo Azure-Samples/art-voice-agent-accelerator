@@ -149,6 +149,28 @@ resource "azapi_resource" "waf" {
           ruleSetType    = "Microsoft_DefaultRuleSet"
           ruleSetVersion = "2.1"
           ruleSetAction  = "Block"
+          # Agent templates are Jinja text rendered in a sandbox; their `{{ }}`
+          # and `{% %}` syntax otherwise trips SQLi/XSS/RCE signatures.
+          exclusions = [for field in ["prompt", "greeting", "return_greeting", "description"] : {
+            matchVariable         = "RequestBodyJsonArgNames"
+            selectorMatchOperator = "Equals"
+            selector              = field
+          }]
+          # The SPA and API sit on different AFD hosts and pass the app's own
+          # `session_id` query arg, which 943110/943120 treat as session fixation.
+          ruleGroupOverrides = [{
+            ruleGroupName = "FIX"
+            rules = [for rule_id in ["943110", "943120"] : {
+              ruleId       = rule_id
+              enabledState = "Enabled"
+              action       = "AnomalyScoring"
+              exclusions = [{
+                matchVariable         = "QueryStringArgNames"
+                selectorMatchOperator = "Equals"
+                selector              = "session_id"
+              }]
+            }]
+          }]
         }]
       }
     }

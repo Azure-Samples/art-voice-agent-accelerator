@@ -85,7 +85,7 @@ from config import (
 )
 from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
-from jinja2 import Template
+from jinja2.sandbox import ImmutableSandboxedEnvironment
 from opentelemetry import trace
 from src.enums.stream_modes import StreamMode
 
@@ -2033,7 +2033,9 @@ class VoiceHandler:
                 render_context = agent._get_greeting_context(context or {})
             elif context:
                 render_context = {k: v for k, v in context.items() if v is not None}
-            rendered = Template(greeting).render(**render_context)
+            rendered = ImmutableSandboxedEnvironment(autoescape=False).from_string(greeting).render(
+                **render_context
+            )
             return rendered.strip() or greeting
         except Exception:
             logger.debug("Failed to render greeting template", exc_info=True)
