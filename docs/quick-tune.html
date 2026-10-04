@@ -65,10 +65,10 @@
       <p class="subtitle">A live, in-call authoring workspace for tuning agents and scenarios — without redeploying, and without leaving the conversation you're testing.</p>
 
       <div class="callout tip">
-        <p><strong>What's new:</strong> Quick Tune now shows which Foundry resource/region backs each model list, blocks BYOM/model mismatches before Apply, preserves the active scenario across an apply, and — most recently — lets you preview a whole scenario's agents, tools, and handoffs before jumping into the full graphical editor.</p>
+        <p><strong>What's new:</strong> Quick Tune now shows which Foundry resource/region backs each model list, blocks BYOM/model mismatches before Apply, preserves the active scenario across an apply, lets you preview a whole scenario's agents, tools, and handoffs before jumping into the full graphical editor, and — most recently — makes a saved agent the session's active agent, replaces the voice dropdowns with a language-first picker that includes the MAI-Voice-2.1 family, and opens a fresh session on the Banking scenario's start agent.</p>
       </div>
 
-      <p>Quick Tune is the panel behind the <strong>tune icon</strong> in the call console. It edits a <em>session-scoped</em> copy of an agent or scenario — changes are draft-only until you press <strong>Save changes</strong>, and they never mutate the shared YAML catalog in <code>registries/agentstore/</code> or <code>registries/scenariostore/</code>.</p>
+      <p>Quick Tune is the panel behind the <strong>tune icon</strong> in the call console. It edits a <em>session-scoped</em> copy of an agent or scenario — changes are draft-only until you save them, and they never mutate the shared YAML catalog in <code>registries/agentstore/</code> or <code>registries/scenariostore/</code>.</p>
 
       <hr>
 
@@ -102,7 +102,7 @@
           <tr><td>Model source / Model</td><td><code>cascade_model</code> (Cascade) or <code>voicelive_model</code> (VoiceLive)</td><td>Both orchestrators</td></tr>
           <tr><td>BYOM selector</td><td><code>byom.mode</code></td><td>VoiceLive only</td></tr>
           <tr><td>Input transcription</td><td><code>session.input_audio_transcription_settings.model</code></td><td>VoiceLive only</td></tr>
-          <tr><td>Voice / Voice style</td><td><code>voice.name</code>, <code>voice.style</code></td><td>Both</td></tr>
+          <tr><td>Voice picker (language, family, voice) / Voice style</td><td><code>voice.name</code>, <code>voice.style</code></td><td>Both</td></tr>
           <tr><td>Speaking rate / Pitch</td><td><code>voice.rate</code>, <code>voice.pitch</code></td><td>Both</td></tr>
           <tr><td>Pause before reply / VAD sliders (Fine controls)</td><td><code>session.turn_detection.*</code> (VoiceLive) or <code>speech.vad_silence_timeout_ms</code> / <code>speech.use_semantic_segmentation</code> (Cascade)</td><td>Mode-specific</td></tr>
           <tr><td>Tools</td><td><code>tools[]</code></td><td>Both</td></tr>
@@ -116,6 +116,21 @@
         <li><strong>Full persist path</strong> — any model, BYOM, transcription, tool, or prompt change goes through the full <code>PUT /api/v1/agent-builder/session/{session_id}</code>, which forces a reconnect so the new model/BYOM binding takes effect at connect time.</li>
       </ul>
 
+      <h3 id="activation">Saving makes the agent active</h3>
+      <p>When the agent you save is not already the session's start agent, Quick Tune also calls <code>POST /api/v1/scenario-builder/session/{session_id}/start-agent?agent_name=…&amp;scenario_name=…</code>. That sets the agent as the <code>start_agent</code> of the session's copy of the active scenario (adding it to the scenario's agent list if needed), so the next connection — and a reconnect of a running call — greets with the agent you just tuned. The shared scenario YAML is never modified.</p>
+      <p>The save button tells you which path it will take:</p>
+      <table>
+        <thead><tr><th>Button</th><th>When</th><th>Effect</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Save changes</strong></td><td>Editing the current start agent, no call running</td><td>Persists for the next connection.</td></tr>
+          <tr><td><strong>Save &amp; activate</strong></td><td>Editing a different agent, no call running</td><td>Persists, then makes it the session's start agent.</td></tr>
+          <tr><td><strong>Apply &amp; reconnect</strong></td><td>A call is running and the change needs a new connection (including activating a different agent)</td><td>Persists, activates if needed, and reconnects the call.</td></tr>
+          <tr><td><strong>Apply live</strong></td><td>VoiceLive call running, only voice/VAD changed on the active agent</td><td>Live-settings fast path, no reconnect.</td></tr>
+          <tr><td><strong>Save new agent</strong></td><td>A duplicated agent</td><td>Creates it (<code>create_only=true</code>) and makes it the start agent.</td></tr>
+        </tbody>
+      </table>
+      <p><strong>Default agent:</strong> a brand-new session has no active scenario yet but connects with the <strong>Banking</strong> scenario, so Quick Tune opens on Banking's start agent (<code>BankingConcierge</code>) instead of the catalog's generic <code>Concierge</code>.</p>
+
       <hr>
 
       <h2 id="voice-model">Voice &amp; Model Catalog</h2>
@@ -125,6 +140,15 @@
         <img src="images/quick-tune/voice-catalog-search.png" alt="Voice picker searching the live regional voice catalog, filtered to French, showing 568 voices cached from northcentralus">
         <figcaption>Searching the live voice catalog. The helper text under the field states the source region and voice count — <em>“568 voices from northcentralus (cached)”</em> — so a latency-sensitive mismatch between the app, Cascade Foundry, and Voice Live regions is visible instead of silent.</figcaption>
       </figure>
+
+      <h3 id="voice-picker">Finding a voice</h3>
+      <p>Quick Tune, the Agent Builder, and the Advanced Builder share one voice picker with three steps:</p>
+      <ol>
+        <li><strong>Language</strong> — a searchable list of locales with voice counts, plus pinned <strong>Multilingual</strong> and <strong>All languages</strong> entries.</li>
+        <li><strong>Family</strong> — <strong>All</strong>, <strong>MAI</strong>, <strong>HD</strong>, or <strong>Standard</strong> chips narrow the list.</li>
+        <li><strong>Voice</strong> — pick from the filtered list; the regional catalog can be refreshed in place.</li>
+      </ol>
+      <p>The <strong>MAI</strong> family includes the MAI-Voice-2 and MAI-Voice-2.1 voices (for example <code>en-US-Harper:MAI-Voice-2.1-Flash</code>). The voices endpoint returns <code>mai_voice_regions</code> and a <code>mai_voice_catalog</code>, so the picker can tell you whether your Speech region serves MAI voices. If it doesn't, the picker links to <a href="https://learn.microsoft.com/azure/ai-services/speech-service/mai-voices#availability-and-regions">MAI voice availability and regions</a> instead of offering voices that would fail at synthesis time.</p>
 
       <div class="callout warn">
         <p><strong>Why this matters:</strong> before this attribution was added, the panel only showed a bare deployment count. In one deployment the backend ran in <code>westus2</code>, Cascade's Foundry account in <code>northcentralus</code>, and Voice Live in <code>swedencentral</code> — a trans-Atlantic hop on the realtime audio path that fully explained observed 1100&ndash;1300ms VoiceLive time-to-first-token, with nothing in the UI to explain why.</p>
@@ -183,13 +207,13 @@
         <tbody>
           <tr>
             <td>Frontend Apply</td>
-            <td>Validates the payload (see <a href="#guardrails">guardrails</a>), then <code>PUT /api/v1/agent-builder/session/{session_id}</code> or the live-settings fast path.</td>
+            <td>Validates the payload (see <a href="#guardrails">guardrails</a>), then <code>PUT /api/v1/agent-builder/session/{session_id}</code> or the live-settings fast path, followed by <code>POST …/scenario-builder/session/{session_id}/start-agent</code> when the agent should <a href="#activation">become active</a>.</td>
             <td><code>utils/quickTune.js</code> (<code>quickTuneRequest</code>), <code>components/QuickTuneWorkspace.jsx</code></td>
           </tr>
           <tr>
             <td>Endpoint</td>
             <td><code>_upsert_session_agent(...)</code> validates the merged agent, then stores it.</td>
-            <td><code>api/v1/endpoints/agent_builder.py</code></td>
+            <td><code>api/v1/endpoints/agent_builder.py</code>, <code>api/v1/endpoints/scenario_builder.py</code> (<code>set_session_start_agent</code>)</td>
           </tr>
           <tr>
             <td>Session store</td>
@@ -252,6 +276,10 @@
           <tr><td>VoiceLive, BYOM</td><td>A deployment that exists on the BYOM-connected Foundry resource</td><td>On, matching the model's API family (realtime vs. chat completion)</td></tr>
         </tbody>
       </table>
+
+      <div class="callout warn">
+        <p><strong>"The request did not reach the server":</strong> behind Azure Front Door, a WAF block returns a 403 without CORS headers, so the browser can only report a network failure. Quick Tune shows this clearer message instead of a bare <code>Failed to fetch</code>. The Front Door module excludes the prompt-template JSON fields (<code>prompt</code>, <code>greeting</code>, <code>return_greeting</code>, <code>description</code>) and the <code>session_id</code> query argument from the managed rules that flag them (the query argument only from session-fixation rules 943110/943120), because Jinja templates and natural-language greetings trip those rules. If you add your own WAF policy, mirror these exclusions — see <a href="https://github.com/AIappsGBBFactory/art-voice-agent-accelerator/blob/main/infra/README.md">infra/README.md</a>. WAF policy changes take roughly ten minutes to propagate.</p>
+      </div>
 
     </div>
   </main>

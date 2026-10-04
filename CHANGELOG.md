@@ -8,7 +8,23 @@ All notable changes to the **Azure Real-Time (ART) Agent Accelerator** are docum
 
 ## [Unreleased]
 
+### MAI-Voice-2.1 and Voice Picker
+
+- Added the MAI-Voice-2.1 voice family (for example `en-US-Harper:MAI-Voice-2.1-Flash`) alongside MAI-Voice-2. The voices endpoint now returns `mai_voice_regions` and a `mai_voice_catalog` so clients know whether the configured Speech region serves MAI voices.
+- `BankingConcierge` and `Concierge` now default to `en-US-Harper:MAI-Voice-2.1-Flash`.
+- Quick Tune, the Agent Builder, and the Advanced Builder share a new `VoiceSelector`: a searchable language list (with pinned **Multilingual** and **All languages** entries), **All / MAI / HD / Standard** family chips, and a filtered voice list. When the region doesn't serve MAI voices, the picker links to the MAI voice availability docs instead of offering voices that would fail at synthesis time.
+
+### Quick Tune Save & Activate
+
+- Added `POST /api/v1/scenario-builder/session/{session_id}/start-agent` (`agent_name`, optional `scenario_name`), which sets the start agent on the session's copy of the scenario without modifying the shared scenario YAML.
+- Saving an agent in Quick Tune now makes it the session's active agent. The button reads **Save & activate** or, during a call, **Apply & reconnect**; the app updates the active agent optimistically and confirms it from the server.
+- A fresh session now opens Quick Tune on the Banking scenario's start agent (`BankingConcierge`), matching the scenario the session actually connects with, instead of the generic `Concierge`.
+
 ### Fixed
+
+- Quick Tune saves behind Azure Front Door no longer fail with "Failed to fetch". The Front Door WAF policy now excludes the JSON template fields `prompt`, `greeting`, `return_greeting`, and `description` from managed-rule inspection, and excludes the `session_id` query argument from session-fixation rules 943110/943120 (which also fixes the agent catalog failing to load).
+- Network-level save failures, such as a WAF 403 without CORS headers, now show "The request did not reach the server…" instead of a bare `Failed to fetch`.
+- Greeting and handoff-context Jinja templates are now rendered with `ImmutableSandboxedEnvironment`, matching prompt rendering, so user-editable templates cannot reach unsafe Python attributes.
 
 - Container Apps region attribution now matches the complete DNS-label suffix,
   rejecting look-alike domains and preserving the configured region fallback.

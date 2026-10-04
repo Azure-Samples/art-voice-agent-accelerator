@@ -197,6 +197,7 @@ curl https://your-backend.azurecontainerapps.io/api/v1/ready
           <tr><td><code>/scenarios</code></td><td>GET</td><td>List available scenarios (built-in + session-created).</td></tr>
           <tr><td><code>/scenarios</code></td><td>POST</td><td>Create a session-scoped scenario from the Scenario Builder.</td></tr>
           <tr><td><code>/scenarios/{name}</code></td><td>GET</td><td>Get scenario details (agents, handoffs, start agent).</td></tr>
+          <tr><td><code>/scenario-builder/session/{id}/start-agent?agent_name=…&amp;scenario_name=…</code></td><td>POST</td><td>Make an agent the session's start agent (used by Quick Tune <strong>Save &amp; activate</strong>). Updates only the session copy of the scenario; <code>scenario_name</code> is optional and defaults to the session's active scenario.</td></tr>
         </tbody>
       </table>
 

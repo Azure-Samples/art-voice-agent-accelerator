@@ -191,6 +191,28 @@ activate Front Door only with the authenticated-ingress backend image deployed.
   corporate-only. External noncorporate tool callers, Genesys, and other
   providers are not implicitly exempted by the ACS policy.
 
+**Managed-rule exclusions:** the `Microsoft_DefaultRuleSet` 2.1 managed rules
+stay in Prevention mode with two narrow exclusions for fields that legitimately
+contain text the rules score as attacks:
+
+- The `session_id` query argument is excluded from session-fixation rules
+  943110 and 943120 only. The SPA and API sit on different Front Door hosts and
+  the agent catalog and Quick Tune APIs pass the app's own session ID.
+- The JSON body fields `prompt`, `greeting`, `return_greeting`, and
+  `description` are excluded from the whole rule set. They carry Jinja prompt
+  templates and natural-language greetings saved by Quick Tune and the Agent
+  Builder; `{{ }}` / `{% %}` syntax and even plain greetings trip the
+  SQLi/XSS/RCE signatures (for example 942200).
+
+The backend renders those templates with Jinja's `ImmutableSandboxedEnvironment`,
+so excluding them from WAF inspection does not open a template-injection path.
+Everything else in those requests is still inspected. A WAF block returns 403
+without CORS headers, so browsers report only `Failed to fetch`; if a save
+fails that way, query `AzureDiagnostics` for
+`Category == "FrontDoorWebApplicationFirewallLog"` and `action_s == "Block"`
+to find the matched rule and field. Policy changes take about ten minutes to
+propagate through Front Door.
+
 **Latency and long calls:** do not stack Application Gateway behind Front Door.
 Front Door is still an extra network hop; no fixed latency improvement or
 penalty is promised. WAF examines the WebSocket handshake, not each audio frame.

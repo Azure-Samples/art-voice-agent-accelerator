@@ -146,6 +146,12 @@ configuration options.
 | **Edit scenario** | Choose any existing template or session scenario, including single-agent scenarios. Update its purpose, icon, context, defaults, agents, and handoffs, or open the graphical editor. |
 | **Create scenario** | Describe an outcome, optionally restrict the tool catalog, and generate an editable draft. |
 
+Saving an agent that is not the session's start agent also activates it: the
+button reads **Save & activate** (or **Apply & reconnect** during a call) and
+calls `POST /api/v1/scenario-builder/session/{id}/start-agent`, which updates only
+the session copy of the scenario. A fresh session opens on the Banking
+scenario's start agent (`BankingConcierge`), the scenario it connects with.
+
 **Tune agent** and **Edit scenario** include a clickable graph preview of the
 scenario selected for editing (initially the active scenario). It shows up to
 three real agents, their configured tool counts when available, and actual
